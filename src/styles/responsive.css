@@ -1,0 +1,10 @@
+/* Responsive styles for mobile devices */
+@media (max-width: 768px) {
+    #song-title {
+        font-size: 18px;
+    }
+    
+    #song-artist {
+        font-size: 12px;
+    }
+}
