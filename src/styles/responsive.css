@@ -3,8 +3,25 @@
     #song-title {
         font-size: 18px;
     }
-    
+
     #song-artist {
         font-size: 12px;
+    }
+
+    .song-label {
+        max-width: calc(44vw - 8px);
+    }
+
+    .song-title {
+        font-size: 18px;
+        letter-spacing: 1px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+    }
+
+    .song-artist {
+        font-size: 10px;
     }
 }

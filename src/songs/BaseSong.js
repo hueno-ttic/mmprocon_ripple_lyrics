@@ -1,6 +1,8 @@
 import { eventBus } from '../core/eventBus.js';
 import { LyricRenderer } from '../ui/LyricRenderer.js';
 import { SONGS } from '../config/songs.js';
+import { appState } from '../core/appState.js';
+import { playerManager } from '../core/player.js';
 
 export class BaseSong {
     constructor(container, songId) {
@@ -32,6 +34,7 @@ export class BaseSong {
         this.boundOnMouseMove = this.onMouseMove.bind(this);
         
         this.currentTime = 0;
+        this.lastTimeUpdateRealTime = 0; // 実時間記録用のプロパティを初期化
         this.mouseX = 0;
         this.mouseY = 0;
         this.targetCameraRotX = 0;
@@ -47,10 +50,160 @@ export class BaseSong {
         eventBus.on('timeUpdate', this.boundOnTimeUpdate);
         this.animationId = requestAnimationFrame(this.boundAnimate);
         console.log(`Initialized song scene: ${this.songId}`);
+
+        const showTutorialOrHint = () => {
+            const songConfig = SONGS.find(s => s.id === this.songId);
+            if (songConfig && songConfig.tutorial) {
+                this.showTutorial(songConfig);
+            } else if (songConfig && songConfig.hint) {
+                this.showHintUI(songConfig.hint, songConfig.color);
+            }
+        };
+
+        // Delay tutorial and hint displays until the loading screen is fully hidden and player is ready
+        if (playerManager.isTimerReady) {
+            showTutorialOrHint();
+        } else {
+            this.boundOnTimerReady = () => {
+                showTutorialOrHint();
+                eventBus.off('timerReady', this.boundOnTimerReady);
+            };
+            eventBus.on('timerReady', this.boundOnTimerReady);
+        }
+    }
+
+    showTutorial(songConfig) {
+        const { tutorial, themeQuestion = '', color = '#7F77DD' } = songConfig;
+
+        // チュートリアル表示フラグを有効化
+        this.isTutorialActive = true;
+
+        // 意図しない自動再生を防ぐため、ロード直後の場合は即座に一時停止を要求
+        if (playerManager.player && playerManager.player.isPlaying) {
+            playerManager.pause();
+        }
+
+        const overlay = document.createElement('div');
+        overlay.className = 'song-tutorial-overlay';
+        overlay.style.setProperty('--tutorial-color', color);
+
+        const stepsHtml = tutorial.steps.map(s => `
+            <div class="song-tutorial-step">
+                <span class="step-icon">${s.icon}</span>
+                <span>${s.text}</span>
+            </div>
+        `).join('');
+
+        overlay.innerHTML = `
+            <div class="song-tutorial-content">
+                <div class="song-tutorial-label">問い</div>
+                <p class="song-tutorial-question">「${themeQuestion}」</p>
+                <div class="song-tutorial-divider"></div>
+                <div class="song-tutorial-steps">${stepsHtml}</div>
+                <button class="song-tutorial-btn">スタート</button>
+            </div>
+        `;
+
+        this.songWrapper.appendChild(overlay);
+        setTimeout(() => overlay.classList.add('visible'), 100);
+
+        const dismiss = () => {
+            this.isTutorialActive = false; // フラグを解除
+            clearTimeout(this._tutorialDismissTimer);
+            overlay.classList.remove('visible');
+            overlay.classList.add('fade-out');
+            setTimeout(() => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            }, 700);
+        };
+
+        overlay.querySelector('.song-tutorial-btn').addEventListener('click', () => {
+            dismiss();
+            // Start song playback immediately upon tutorial dismiss (with Web Audio unlock)
+            if (playerManager.isTimerReady) {
+                try {
+                    const audioCtx = window.AudioContext || window.webkitAudioContext;
+                    if (audioCtx) {
+                        const dummyCtx = new audioCtx();
+                        if (dummyCtx.state === 'suspended') {
+                            dummyCtx.resume();
+                        }
+                    }
+                    if (playerManager.player && playerManager.player.audioContext) {
+                        const ctx = playerManager.player.audioContext;
+                        if (ctx.state === 'suspended') {
+                            ctx.resume();
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[Lake Sonare] Web Audio unlock failed safely: ', err);
+                }
+                playerManager.seek(0);
+                playerManager.play();
+            }
+        });
+        if (playerManager.managed) {
+            this._tutorialDismissTimer = setTimeout(dismiss, 15000);
+        }
+    }
+
+    showHintUI(hintText, themeColor) {
+        const hintOverlay = document.createElement('div');
+        hintOverlay.className = 'song-hint-overlay';
+        hintOverlay.innerHTML = `
+            <div class="song-hint-icon">💡</div>
+            <div class="song-hint-text">${hintText}</div>
+        `;
+        
+        if (themeColor) {
+            hintOverlay.style.setProperty('--theme-color', themeColor);
+            hintOverlay.style.borderColor = themeColor;
+            hintOverlay.style.boxShadow = `0 8px 32px 0 rgba(0, 0, 0, 0.3), 0 0 15px ${themeColor}`;
+        }
+        
+        this.songWrapper.appendChild(hintOverlay);
+
+        // Fade in smoothly
+        setTimeout(() => {
+            hintOverlay.classList.add('visible');
+        }, 100);
+
+        // Fade out and remove
+        setTimeout(() => {
+            hintOverlay.classList.remove('visible');
+            hintOverlay.classList.add('fade-out');
+            setTimeout(() => {
+                if (hintOverlay.parentNode) {
+                    hintOverlay.parentNode.removeChild(hintOverlay);
+                }
+            }, 800);
+        }, 5000);
     }
 
     onTimeUpdate(position) {
         this.currentTime = position;
+        this.lastTimeUpdateRealTime = performance.now(); // タイマー位置更新時の実時間を高精度に記録
+
+        // チュートリアル表示中に勝手に自動再生が開始された場合の強制停止＆巻き戻しガード
+        // 不要なAPIコールによる洪水（ポストメッセージ詰まり）を防ぐため、
+        // プレイヤー側（player.js）の throttled guard に任せ、ここでは currentTime の同期のみ行う
+        if (this.isTutorialActive) {
+            this.currentTime = 0;
+        }
+    }
+
+    /**
+     * TextAlive の粗いタイマー更新（100ms〜1000msごと）を rAF 解像度に補間する。
+     * 重要: elapsed が 350ms を超えても currentTime に戻さない。
+     * 戻すと age = position - birth が負になり opacity=0（消える）バグが発生する。
+     * 最大 2000ms まで補間を継続し、次の onTimeUpdate で自動リセットされる。
+     */
+    getSmoothedTime() {
+        if (!this.lastTimeUpdateRealTime || !appState.isPlaying) {
+            return this.currentTime;
+        }
+        const elapsed = Math.min(performance.now() - this.lastTimeUpdateRealTime, 2000);
+        return elapsed > 0 ? this.currentTime + elapsed : this.currentTime;
     }
 
     onMouseMove(event) {
@@ -112,17 +265,34 @@ export class BaseSong {
         this.render();
     }
 
-    // To be overridden by subclasses
     update(time) {
+        // チュートリアル表示中に勝手に自動再生が開始された場合の強制停止＆巻き戻しガード
+        // 不要なAPIコールによる洪水（ポストメッセージ詰まり）を防ぐため、
+        // プレイヤー側（player.js）の throttled guard に任せ、ここでは currentTime の同期のみ行う
+        if (this.isTutorialActive) {
+            this.currentTime = 0;
+        }
+
         if (!this.lyricRenderer) return;
-        
-        // Dynamic import to avoid circular dependency
-        import('../core/player.js').then(({ playerManager }) => {
-            if (playerManager.player && playerManager.player.video) {
-                const phrase = playerManager.player.video.findPhrase(this.currentTime);
-                this.lyricRenderer.update(phrase);
+
+        if (playerManager.player && playerManager.player.video) {
+            // TextAlive公式タイマー(player.timer.position)に完全同期（先行調整を排除）
+            const position = (playerManager.player && playerManager.player.timer)
+                             ? playerManager.player.timer.position
+                             : this.currentTime;
+
+            const word = playerManager.player.video.findWord(position)
+                      || playerManager.player.video.findChar(position);
+            
+            // 語句の合間（数十msのギャップ）での不必要なちらつき・フェードアウト消去を防ぐため、
+            // 同一フレーズ再生時間内であれば、wordがnullになっても直前の歌詞を保持し続ける
+            const phrase = playerManager.player.video.findPhrase(position);
+            if (word) {
+                this.lyricRenderer.update(word);
+            } else if (!phrase) {
+                this.lyricRenderer.update(null);
             }
-        });
+        }
     }
 
     // To be overridden by subclasses
@@ -136,6 +306,9 @@ export class BaseSong {
             cancelAnimationFrame(this.animationId);
         }
         eventBus.off('timeUpdate', this.boundOnTimeUpdate);
+        if (this.boundOnTimerReady) {
+            eventBus.off('timerReady', this.boundOnTimerReady);
+        }
         
         if (this.lyricRenderer) {
             this.lyricRenderer.destroy();

@@ -1,3 +1,5 @@
+import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
+
 export class LyricRenderer {
     constructor(container) {
         this.container = container;
@@ -7,21 +9,21 @@ export class LyricRenderer {
         this.lyricContainer.style.left = '0';
         this.lyricContainer.style.width = '100%';
         this.lyricContainer.style.height = '100%';
-        this.lyricContainer.style.pointerEvents = 'none'; // click through
+        this.lyricContainer.style.pointerEvents = 'none';
         this.lyricContainer.style.zIndex = '5';
         this.lyricContainer.style.display = 'flex';
         this.lyricContainer.style.justifyContent = 'center';
         this.lyricContainer.style.alignItems = 'center';
         this.lyricContainer.style.overflow = 'hidden';
-        
+
         this.container.appendChild(this.lyricContainer);
-        
+
         this.currentPhraseText = '';
         this.currentElement = null;
     }
 
-    update(phrase) {
-        if (!phrase) {
+    update(unit) {
+        if (!unit) {
             if (this.currentElement) {
                 this.currentElement.style.opacity = '0';
                 this.currentElement.style.filter = 'blur(10px)';
@@ -32,10 +34,20 @@ export class LyricRenderer {
             return;
         }
 
-        if (phrase.text !== this.currentPhraseText) {
-            this.currentPhraseText = phrase.text;
-            
-            // Fade out old element
+        let displayText;
+
+        // Word objects from findWord() have a parent IPhrase with a firstWord chain.
+        if (unit.parent && unit.parent.firstWord) {
+            const groups = groupPhraseWords(unit.parent);
+            const group = findGroupForWord(groups, unit);
+            displayText = group ? group.text : unit.text;
+        } else {
+            displayText = unit.text;
+        }
+
+        if (displayText !== this.currentPhraseText) {
+            this.currentPhraseText = displayText;
+
             if (this.currentElement) {
                 const oldEl = this.currentElement;
                 oldEl.style.opacity = '0';
@@ -46,9 +58,8 @@ export class LyricRenderer {
                 }, 1000);
             }
 
-            // Create new element
             const el = document.createElement('div');
-            el.innerText = phrase.text;
+            el.innerText = displayText;
             el.style.position = 'absolute';
             el.style.fontSize = 'min(5vw, 64px)';
             el.style.fontWeight = 'bold';
@@ -59,18 +70,15 @@ export class LyricRenderer {
             el.style.opacity = '0';
             el.style.filter = 'blur(10px)';
             el.style.transform = 'scale(0.9)';
-            el.style.transition = 'all 0.8s cubic-bezier(0.2, 0.8, 0.2, 1)';
-            
+            el.style.transition = 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)';
+
             this.lyricContainer.appendChild(el);
-            
-            // Force reflow
             void el.offsetWidth;
-            
-            // Fade in with ripple-like unblur
+
             el.style.opacity = '1';
             el.style.filter = 'blur(0px)';
             el.style.transform = 'scale(1)';
-            
+
             this.currentElement = el;
         }
     }

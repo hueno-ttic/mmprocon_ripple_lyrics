@@ -5,11 +5,6 @@ import { playerManager } from '../core/player.js';
 export class SongKotaete extends BaseSong {
     constructor(container, songId) {
         super(container, songId);
-        
-        // Hide the generic DOM lyric renderer since we use 3D
-        if (this.lyricRenderer && this.lyricRenderer.lyricContainer) {
-            this.lyricRenderer.lyricContainer.style.display = 'none';
-        }
 
         this.scene = null;
         this.camera = null;
@@ -34,13 +29,6 @@ export class SongKotaete extends BaseSong {
         this.initThree();
         this.initPaths();
         window.addEventListener('resize', this.boundOnResize);
-        
-        // Skip calling super.init() directly because it starts the loop,
-        // we can just call it, BaseSong.init() calls this.loop() (or animate())
-        this.isActive = true;
-        // In BaseSong it sets isActive = true, registers eventBus, and calls requestAnimationFrame
-        // Wait, BaseSong.init() is not exported as super.init() if we override it?
-        // Actually, we don't need to override init() if we can just call super.init() at the end.
         super.init();
     }
 
@@ -72,16 +60,21 @@ export class SongKotaete extends BaseSong {
             this.paths.push(line);
         }
 
-        // Horizontal lines
-        for (let i = -25; i <= 25; i++) {
-            const points = [];
-            points.push(new THREE.Vector3(-20, -2, i * 2));
-            points.push(new THREE.Vector3(20, -2, i * 2));
+        // Horizontal lines with perspective — denser near camera, sparser toward horizon
+        const zPositions = [];
+        for (let i = 0; i <= 30; i++) {
+            zPositions.push(-50 + i * i * 0.055);
+        }
+        zPositions.forEach(z => {
+            const points = [
+                new THREE.Vector3(-20, -2, z),
+                new THREE.Vector3(20, -2, z)
+            ];
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
             const line = new THREE.Line(geometry, material);
             this.scene.add(line);
             this.paths.push(line);
-        }
+        });
     }
 
     onResize() {
@@ -98,7 +91,7 @@ export class SongKotaete extends BaseSong {
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = 'rgba(0,0,0,0)';
         ctx.fillRect(0,0,1024,128);
-        ctx.font = 'bold 80px "Inter", sans-serif';
+        ctx.font = 'bold 80px "Inter", "Noto Sans JP", "Hiragino Kaku Gothic Pro", sans-serif';
         ctx.fillStyle = '#ffffff';
         ctx.shadowColor = colorStr;
         ctx.shadowBlur = 20;
@@ -108,7 +101,7 @@ export class SongKotaete extends BaseSong {
         return new THREE.CanvasTexture(canvas);
     }
 
-    spawnText(phrase) {
+    spawnText(phrase, spawnTime) {
         let color = this.themeColor;
         if (this.userChoice === 'left') color = this.leftColor;
         if (this.userChoice === 'right') color = this.rightColor;
@@ -123,10 +116,16 @@ export class SongKotaete extends BaseSong {
         
         // Spawn slightly ahead of camera
         sprite.position.set((Math.random() - 0.5) * 6, Math.random() * 4, this.camera.position.z - 15 - Math.random() * 5); // Spawn closer
-        sprite.userData = { birth: this.currentTime, life: 5000 };
         
         const aspect = 1024 / 128;
         const scale = 2 + Math.random();
+        sprite.userData = { 
+            birth: spawnTime, 
+            life: 5000,
+            text: phrase.text,
+            baseScale: scale,
+            aspect: aspect
+        };
         sprite.scale.set(scale * aspect, scale, 1);
         
         this.scene.add(sprite);
@@ -135,17 +134,19 @@ export class SongKotaete extends BaseSong {
 
     update(time) {
         // Do not call super.update(time) to skip Generic LyricRenderer
-
         if (!playerManager.player || !playerManager.player.video) return;
 
-        const position = this.currentTime;
+        // TextAlive公式タイマー(player.timer.position)に完全同期（先行調整を排除）
+        const position = (playerManager.player && playerManager.player.timer)
+                         ? playerManager.player.timer.position
+                         : this.getSmoothedTime();
         
         // Move camera forward continuously
         let speed = 0.05;
         
         let chorus = null;
-        if (typeof playerManager.player.video.findChorus === 'function') {
-            chorus = playerManager.player.video.findChorus(position);
+        if (playerManager.player && typeof playerManager.player.findChorus === 'function') {
+            chorus = playerManager.player.findChorus(position);
         }
         this.isClimax = !!chorus;
         
@@ -166,25 +167,52 @@ export class SongKotaete extends BaseSong {
             }
         });
 
-        // Spawn lyrics
+        // Background theatrical text — phrase level so 3D sprites aren't too busy
         const phrase = playerManager.player.video.findPhrase(position);
+
+        // Word-level lyric display (finer granularity)
+        const word = playerManager.player.video.findWord(position)
+                  || playerManager.player.video.findChar(position);
+        if (this.lyricRenderer) {
+            if (word) {
+                this.lyricRenderer.update(word);
+            } else if (!phrase) {
+                this.lyricRenderer.update(null);
+            }
+        }
         if (phrase && phrase !== this.lastPhrase) {
             this.lastPhrase = phrase;
-            this.spawnText(phrase);
+            this.spawnText(phrase, position);
         }
 
         // Update sprites
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const s = this.activeSprites[i];
-            const age = position - s.userData.birth;
+            // 現在歌唱中の単語とスプライトの文字が一致するかチェックし、歌唱パルス（バウンド拡大＆発光）をトリガー
+            const isWordActive = word && s.userData.text && s.userData.text.includes(word.text) 
+                              && position >= word.startTime && position <= word.endTime;
+            if (!s.userData.pulseProgress) s.userData.pulseProgress = 0;
+            const targetPulse = isWordActive ? 1.0 : 0.0;
+            s.userData.pulseProgress += (targetPulse - s.userData.pulseProgress) * 0.2;
+            const pulse = s.userData.pulseProgress;
+            const pulseScaleFactor = 1.0 + pulse * 0.25; // 1.25倍バウンド
+
+            const baseScale = s.userData.baseScale || 2.5;
+            const aspect = s.userData.aspect || 8.0;
+            s.scale.set(baseScale * aspect * pulseScaleFactor, baseScale * pulseScaleFactor, 1);
             
-            // Drift slightly
-            s.position.y += Math.sin(age * 0.002) * 0.01;
+            // 色変化グロウ効果
+            s.material.color.setRGB(1.0, 1.0 - pulse * 0.4, 1.0 - pulse * 0.2);
+
+            const age = Math.max(0, position - s.userData.birth);
             
-            if (age < 1000) {
-                s.material.opacity = age / 1000;
-            } else if (age > s.userData.life - 1000) {
-                s.material.opacity = (s.userData.life - age) / 1000;
+            // Drift slightly. Oscillation is synchronized to song position
+            s.position.y += Math.sin(position * 0.002) * 0.01;
+            
+            if (age < 150) {
+                s.material.opacity = age / 150;
+            } else if (age > s.userData.life - 200) {
+                s.material.opacity = Math.max(0, (s.userData.life - age) / 200);
             } else {
                 s.material.opacity = 1;
             }
@@ -206,42 +234,52 @@ export class SongKotaete extends BaseSong {
     }
 
     showChoiceUI() {
-        this.choiceContainer = document.createElement('div');
-        this.choiceContainer.style.position = 'absolute';
-        this.choiceContainer.style.top = '50%';
-        this.choiceContainer.style.left = '50%';
-        this.choiceContainer.style.transform = 'translate(-50%, -50%)';
-        this.choiceContainer.style.display = 'flex';
-        this.choiceContainer.style.gap = '40px';
-        this.choiceContainer.style.zIndex = '50';
+        // Step 1: brief announcement
+        const announcement = document.createElement('div');
+        announcement.className = 'kotaete-choice-announcement';
+        announcement.textContent = '— 問いが届きます —';
+        this.songWrapper.appendChild(announcement);
+        setTimeout(() => { announcement.style.opacity = '1'; }, 80);
+        setTimeout(() => { announcement.style.opacity = '0'; }, 1600);
+        setTimeout(() => {
+            if (announcement.parentNode) announcement.parentNode.removeChild(announcement);
+            this._showChoiceButtons();
+        }, 2300);
+    }
 
-        const createBtn = (text, color, choice) => {
+    _showChoiceButtons() {
+        this.choiceContainer = document.createElement('div');
+        this.choiceContainer.className = 'kotaete-choice-container';
+
+        const hexToRgba = (hex, alpha) => {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r},${g},${b},${alpha})`;
+        };
+
+        const createBtn = (mainText, subText, color, choice) => {
             const btn = document.createElement('button');
-            btn.innerText = text;
-            btn.style.padding = '20px 40px';
-            btn.style.fontSize = '24px';
-            btn.style.fontWeight = 'bold';
-            btn.style.color = '#fff';
-            btn.style.background = 'rgba(0,0,0,0.5)';
+            btn.className = 'kotaete-choice-btn';
             btn.style.border = `2px solid ${color}`;
-            btn.style.borderRadius = '8px';
-            btn.style.cursor = 'pointer';
-            btn.style.backdropFilter = 'blur(10px)';
-            btn.style.transition = 'all 0.3s ease';
-            
+            btn.innerHTML = `
+                <span class="choice-main">${mainText}</span>
+                <span class="choice-sub">${subText}</span>
+            `;
             btn.addEventListener('mouseenter', () => {
-                btn.style.background = color;
+                btn.style.background = hexToRgba(color, 0.35);
+                btn.style.boxShadow = `0 0 20px ${color}`;
             });
             btn.addEventListener('mouseleave', () => {
                 btn.style.background = 'rgba(0,0,0,0.5)';
+                btn.style.boxShadow = 'none';
             });
-            
             btn.addEventListener('click', () => {
                 this.userChoice = choice;
                 this.applyChoice(color);
                 this.choiceContainer.style.opacity = '0';
                 setTimeout(() => {
-                    if (this.choiceContainer.parentNode) {
+                    if (this.choiceContainer && this.choiceContainer.parentNode) {
                         this.choiceContainer.parentNode.removeChild(this.choiceContainer);
                     }
                 }, 500);
@@ -249,10 +287,45 @@ export class SongKotaete extends BaseSong {
             return btn;
         };
 
-        this.choiceContainer.appendChild(createBtn('あなたの答え', this.leftColor, 'left'));
-        this.choiceContainer.appendChild(createBtn('僕の答え', this.rightColor, 'right'));
+        this.choiceContainer.appendChild(
+            createBtn('あなたの答え', 'もし僕だったら、あなたは？', this.leftColor, 'left')
+        );
+        this.choiceContainer.appendChild(
+            createBtn('僕の答え', '歌の主人公と同じ道へ', this.rightColor, 'right')
+        );
 
         this.songWrapper.appendChild(this.choiceContainer);
+        setTimeout(() => this.choiceContainer.classList.add('visible'), 50);
+
+        const btns = Array.from(this.choiceContainer.querySelectorAll('.kotaete-choice-btn'));
+        let focusIdx = -1;
+
+        const choiceKeyHandler = (e) => {
+            if (!this.choiceContainer || !this.choiceContainer.parentNode) return;
+            if (e.code === 'ArrowLeft') {
+                e.preventDefault();
+                focusIdx = 0;
+                btns[0].focus();
+            } else if (e.code === 'ArrowRight') {
+                e.preventDefault();
+                focusIdx = 1;
+                btns[1].focus();
+            } else if ((e.code === 'Space' || e.code === 'Enter') && focusIdx >= 0) {
+                e.preventDefault();
+                btns[focusIdx].click();
+            }
+        };
+
+        document.addEventListener('keydown', choiceKeyHandler);
+
+        // Clean up listener when the container is removed
+        const observer = new MutationObserver(() => {
+            if (!this.choiceContainer || !this.choiceContainer.parentNode) {
+                document.removeEventListener('keydown', choiceKeyHandler);
+                observer.disconnect();
+            }
+        });
+        observer.observe(this.songWrapper, { childList: true });
     }
 
     applyChoice(color) {
@@ -285,6 +358,7 @@ export class SongKotaete extends BaseSong {
     }
 
     destroy() {
+        if (this._tutorialDismissTimer) clearTimeout(this._tutorialDismissTimer);
         window.removeEventListener('resize', this.boundOnResize);
         
         this.activeSprites.forEach(s => {

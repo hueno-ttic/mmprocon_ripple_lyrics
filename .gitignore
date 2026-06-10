@@ -1,4 +1,4 @@
-# Logs
+# Logs and Debug
 logs
 *.log
 npm-debug.log*
@@ -7,16 +7,16 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Node
-node_modules
-dist
-dist-ssr
+# Node Dependency & Static Build output
+node_modules/
+dist/
+dist-ssr/
 *.local
 
-# Editor directories and files
+# Editor / System Files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
@@ -24,19 +24,35 @@ dist-ssr
 *.sln
 *.sw?
 
-# Test reports and coverage
-coverage
-playwright-report/
-test-results/
-evidence/
-
-# Environment variables
+# Environment Variables
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Temp scripts / AI scratchpad
+# IDE and AI Tool Metadata
+.claude/
+
+# Temporary Scripts & Local Scratchpad
 check_labels.cjs
 check_console.cjs
+verify_fixes.cjs
+scratch/
+
+# Drafts and Backup Source Files
+src/**/*_*.js
+
+# Local Tests, Playwright Config & E2E Run Artifacts
+coverage/
+playwright-report/
+test-results/
+evidence/
+reports/
+playwright.config.js
+tests/
+
+# Local Agent Evaluation Outputs and Run Scripts
+eval_output*/
+eval_*.cjs
+eval_*.js

@@ -2,27 +2,43 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests',
-  timeout: 90000,
-  expect: {
-    timeout: 10000
-  },
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: 'html',
   use: {
-    actionTimeout: 0,
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
-    video: 'on',
-    screenshot: 'on',
+    video: 'on', // Always record video!
+    launchOptions: {
+      args: ['--autoplay-policy=no-user-gesture-required']
+    }
   },
   projects: [
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'chrome',
+      use: { 
+        ...devices['Desktop Chrome'],
+        channel: 'chrome' // Launch local installed Google Chrome instead of Chromium
+      },
+    },
+    {
+      name: 'Mobile Chrome',
+      use: { ...devices['Pixel 5'] },
+    },
+    {
+      name: 'Mobile Safari',
+      use: { ...devices['iPhone 12'] },
+    },
   ],
-  outputDir: 'evidence/screenshots/',
+  webServer: {
+    command: 'npm run dev',
+    url: 'http://localhost:5173',
+    reuseExistingServer: !process.env.CI,
+  },
 });

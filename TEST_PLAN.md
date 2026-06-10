@@ -20,3 +20,8 @@
 - [ ] PC（Chrome）で60fpsを維持できるか
 - [ ] iOS Safari / Android Chrome で画面が崩れず動作するか
 - [ ] スマホ等のタッチデバイスでも波紋のタップが正常に反応するか
+
+## 歌詞完全同期の自動実測検証 (Vocal Sync Profiler)
+- [ ] `npx playwright test tests/visual/profile_sync.spec.js --project=chromium` を実行し、ブラウザの音声実時間（`AudioContext.currentTime`）と同期タイマー（`player.timer.position`）が完全に 0ms 差で一致することを確認
+- [ ] 最初のフレーズ「いつだって」の単語出現タイミングが、Piapro音源ボーカルの発声開始タイミングに対してミリ秒単位で完全に同期（450msの先行出現）していることをログと動画で検証する
+

@@ -23,6 +23,11 @@ export class LakeUI {
         this.raycaster = new THREE.Raycaster();
         this.mouse = new THREE.Vector2();
         this.lastRippleTime = 0;
+        this.selectedIndex = 0;          // index of the song currently at the front
+        this.currentRotation = Math.PI / 2; // song 0 starts at front (z+)
+        this.targetRotation  = Math.PI / 2;
+        this.currentBrightness = 0;
+        this.targetBrightness = 0;
         
         // Container for DOM labels
         this.labelsContainer = document.createElement('div');
@@ -33,6 +38,19 @@ export class LakeUI {
         
         this.initLake();
         this.initRipples();
+
+        // Progress counter
+        this.progressCounter = document.createElement('div');
+        this.progressCounter.className = 'lake-progress-counter';
+        this.labelsContainer.appendChild(this.progressCounter);
+
+        // Apply initial brightness based on already-completed songs
+        const completedCount = SONGS.filter(s => appState.isSongComplete(s.id)).length;
+        this.targetBrightness = completedCount / SONGS.length;
+        this.currentBrightness = this.targetBrightness;
+        this._updateProgressCounter();
+        this._applyBrightness(this.currentBrightness);
+
         this.bindEvents();
         
         this.animate = this.animate.bind(this);
@@ -40,13 +58,17 @@ export class LakeUI {
     }
 
     initLake() {
-        // Add Lighting
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        this.scene.add(ambientLight);
-        
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(10, 20, 10);
-        this.scene.add(directionalLight);
+        // Background and fog — start very dark; brightened via _applyBrightness()
+        this.scene.background = new THREE.Color(0x030508);
+        this.scene.fog = new THREE.FogExp2(0x030508, 0.018);
+
+        // Add Lighting — intensity starts low; _applyBrightness() raises it as songs complete
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+        this.scene.add(this.ambientLight);
+
+        this.dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        this.dirLight.position.set(10, 20, 10);
+        this.scene.add(this.dirLight);
 
         // Dynamic Lake Shader
         const lakeVertexShader = `
@@ -102,11 +124,11 @@ export class LakeUI {
         `;
 
         const geometry = new THREE.PlaneGeometry(200, 200, 64, 64);
-        this.lakeMaterial = new THREE.ShaderMaterial({ 
+        this.lakeMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 time: { value: 0 },
-                baseColor: { value: new THREE.Color(0x0a1e3f) }, // Dark deep water
-                highlightColor: { value: new THREE.Color(0x1E5B94) } // Bright blue highlights
+                baseColor: { value: new THREE.Color(0x041030) },    // t=0: very dark
+                highlightColor: { value: new THREE.Color(0x0e3d6e) } // t=0: dark highlight
             },
             vertexShader: lakeVertexShader,
             fragmentShader: lakeFragmentShader,
@@ -175,8 +197,8 @@ export class LakeUI {
     }
 
     initRipples() {
-        const radius = 3.5; // Slightly larger spread
-        
+        const radius = 3.5;
+
         const rippleVertexShader = `
             varying vec2 vUv;
             void main() {
@@ -184,24 +206,37 @@ export class LakeUI {
                 gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
             }
         `;
-        
+
+        // Three expanding concentric rings — each offset by 1/3 period
         const rippleFragmentShader = `
             uniform vec3 color;
             uniform float time;
             varying vec2 vUv;
-            
+
             void main() {
-                float dist = distance(vUv, vec2(0.5));
-                // Creates expanding rings
-                float wave = sin((dist - time * 0.2) * 30.0);
-                float alpha = smoothstep(0.5, 0.0, dist) * (wave * 0.5 + 0.5);
-                alpha *= smoothstep(0.5, 0.45, dist); // crisp edge
-                
-                // Add a glowing core
+                vec2 center = vUv - 0.5;
+                float dist = length(center);
+
+                float edge = smoothstep(0.5, 0.42, dist);
+
+                float alpha = 0.0;
+
+                float r1 = fract(dist * 5.0 - time * 0.22);
+                alpha += (smoothstep(0.12, 0.0, r1) + smoothstep(0.88, 1.0, r1) * 0.25) * 0.9;
+
+                float r2 = fract(dist * 5.0 - time * 0.22 + 0.333);
+                alpha += (smoothstep(0.12, 0.0, r2) + smoothstep(0.88, 1.0, r2) * 0.25) * 0.6;
+
+                float r3 = fract(dist * 5.0 - time * 0.22 + 0.666);
+                alpha += (smoothstep(0.12, 0.0, r3) + smoothstep(0.88, 1.0, r3) * 0.25) * 0.4;
+
+                alpha *= smoothstep(0.5, 0.04, dist);
+                alpha = clamp(alpha, 0.0, 1.0);
+
                 float core = smoothstep(0.1, 0.0, dist);
-                alpha = max(alpha, core * 0.8);
-                
-                gl_FragColor = vec4(color, alpha * 0.9);
+                alpha = max(alpha, core * 0.9);
+
+                gl_FragColor = vec4(color, alpha * edge * 0.9);
             }
         `;
 
@@ -209,14 +244,14 @@ export class LakeUI {
             const angle = (i / SONGS.length) * Math.PI * 2;
             const x = Math.cos(angle) * radius;
             const z = Math.sin(angle) * radius;
-            
-            const geometry = new THREE.PlaneGeometry(2, 2);
+
+            const geometry = new THREE.PlaneGeometry(3, 3);
             const isCompleted = appState.isSongComplete(song.id);
-            const baseColor = isCompleted ? new THREE.Color(0x888888) : new THREE.Color(song.color);
-            
+            const initialColor = isCompleted ? new THREE.Color(0xD4AF37) : new THREE.Color(song.color);
+
             const material = new THREE.ShaderMaterial({
                 uniforms: {
-                    color: { value: baseColor },
+                    color: { value: initialColor.clone() },
                     time: { value: 0 }
                 },
                 vertexShader: rippleVertexShader,
@@ -225,82 +260,120 @@ export class LakeUI {
                 depthWrite: false,
                 side: THREE.DoubleSide
             });
-            
+
             const ripple = new THREE.Mesh(geometry, material);
             ripple.rotation.x = -Math.PI / 2;
             ripple.position.set(x, 0.05, z);
             ripple.userData = { songId: song.id, songUrl: song.songUrl };
-            
+
             this.scene.add(ripple);
             this.ripples.push(ripple);
 
-            // Create beautiful DOM label
+            // Create DOM label
+            const completeMark = isCompleted
+                ? `<span class="complete-mark" style="color:#D4AF37;margin-left:5px;filter:drop-shadow(0 0 4px #D4AF37)">✓</span>`
+                : '';
             const label = document.createElement('div');
             label.className = 'song-label';
             label.innerHTML = `
-                <div class="song-title" style="text-shadow: 0 0 15px ${song.color}, 0 2px 4px rgba(0,0,0,0.8);">${song.title}</div>
+                <div class="song-title" style="text-shadow: 0 0 15px ${song.color}, 0 2px 4px rgba(0,0,0,0.8);">
+                    ${song.title}${completeMark}
+                </div>
                 <div class="song-artist">${song.artist}</div>
             `;
             this.labelsContainer.appendChild(label);
-            
-            this.labels.push({
-                element: label,
-                worldPos: new THREE.Vector3(x, 0.5, z)
-            });
 
-            // Make DOM label interactive!
+            // Ripple anchor sits at the water surface (y=0) — independent of the floating label
+            const rippleAnchor = document.createElement('div');
+            rippleAnchor.className = 'song-ripple-anchor';
+            rippleAnchor.innerHTML = `
+                <div class="song-ripple-indicator" style="color:${isCompleted ? '#D4AF37' : song.color}">
+                    <span></span><span></span><span></span>
+                </div>`;
+            if (isCompleted) {
+                rippleAnchor.style.display = 'none';
+            }
+            this.labelsContainer.appendChild(rippleAnchor);
+
+            const rippleIndicator = rippleAnchor.querySelector('.song-ripple-indicator');
+
+            // labelData holds mutable baseColor so hover/complete updates stay in sync
+            const labelData = {
+                element: label,
+                rippleAnchor,
+                rippleIndicator,
+                rippleSpans: Array.from(rippleIndicator.querySelectorAll('span')),
+                baseAngle: (i / SONGS.length) * Math.PI * 2,
+                worldPos: new THREE.Vector3(x, 0.5, z),
+                surfacePos: new THREE.Vector3(x, 0, z),
+                baseColor: initialColor.clone(),
+                _hovered: false,
+            };
+            this.labels.push(labelData);
+
             label.style.pointerEvents = 'auto';
             label.style.cursor = 'pointer';
-            
+
             label.addEventListener('mouseenter', () => {
-                label.style.transform = label.style.transform.replace('scale(1)', '') + ' scale(1.1)';
-                ripple.material.uniforms.color.value = new THREE.Color(0xffffff);
+                label.classList.add('song-label--hovered');
+                labelData._hovered = true;
             });
-            
+
             label.addEventListener('mouseleave', () => {
-                label.style.transform = label.style.transform.replace(' scale(1.1)', '');
-                ripple.material.uniforms.color.value = baseColor;
+                label.classList.remove('song-label--hovered');
+                labelData._hovered = false;
             });
 
             label.addEventListener('click', (e) => {
-                e.stopPropagation(); // prevent double trigger if it bubbles to container
-                this.selectSong(song, ripple);
+                e.stopPropagation();
+                if (i === this.selectedIndex) {
+                    this.selectSong(song, ripple);
+                } else {
+                    this._rotateToSong(i);
+                }
             });
         });
+
+        // Keyboard navigation guide is removed as requested by the user
+
+        this._createSoftButtons();
     }
 
     selectSong(song, ripple) {
         console.log(`Selected song: ${song.id}`);
-        
-        // Visual feedback
-        if (ripple) {
-            ripple.scale.set(1.5, 1.5, 1.5);
-        }
-        
+
+        if (ripple) ripple.scale.set(1.5, 1.5, 1.5);
+
         appState.setCurrentSong(song.id);
         this.renderer.domElement.style.display = 'none';
         this.labelsContainer.style.display = 'none';
-        eventBus.emit('loadSong', song.songUrl);
+        if (this.softBtnContainer) this.softBtnContainer.style.display = 'none';
+        eventBus.emit('loadSong', song);
     }
 
     bindEvents() {
         this.boundOnWindowResize = this.onWindowResize.bind(this);
         this.boundOnClick = this.onClick.bind(this);
         this.boundOnMouseMove = this.onMouseMove.bind(this);
+        this.boundOnKeyDown = this.onKeyDown.bind(this);
+        this.boundOnSongComplete = this.onSongComplete.bind(this);
 
         window.addEventListener('resize', this.boundOnWindowResize);
+        window.addEventListener('keydown', this.boundOnKeyDown);
         this.container.addEventListener('click', this.boundOnClick);
         this.container.addEventListener('mousemove', this.boundOnMouseMove);
+        eventBus.on('songComplete', this.boundOnSongComplete);
     }
 
     onWindowResize() {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
+        // ripple angles are recomputed every frame in animate()
     }
     
     onMouseMove(event) {
-        if (this.renderer.domElement.style.display === 'none') return;
+        if (appState.currentSongId !== null || this.renderer.domElement.style.display === 'none') return;
         
         this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -329,7 +402,9 @@ export class LakeUI {
     }
 
     onClick(event) {
-        if (this.renderer.domElement.style.display === 'none') return;
+        if (appState.currentSongId !== null || this.renderer.domElement.style.display === 'none') return;
+        // Ignore clicks that originate from the soft nav buttons
+        if (event.target.closest('.lake-soft-btn')) return;
 
         this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
         this.mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -338,10 +413,11 @@ export class LakeUI {
         const intersects = this.raycaster.intersectObjects(this.ripples);
 
         if (intersects.length > 0) {
-            const songData = intersects[0].object.userData;
-            const song = SONGS.find(s => s.id === songData.songId);
-            if (song) {
-                this.selectSong(song, intersects[0].object);
+            const idx = this.ripples.indexOf(intersects[0].object);
+            if (idx === this.selectedIndex) {
+                this.selectSong(SONGS[idx], intersects[0].object);
+            } else {
+                this._rotateToSong(idx);
             }
         }
     }
@@ -349,6 +425,120 @@ export class LakeUI {
     show() {
         this.renderer.domElement.style.display = 'block';
         this.labelsContainer.style.display = 'block';
+        if (this.softBtnContainer) this.softBtnContainer.style.display = 'flex';
+    }
+
+    onKeyDown(e) {
+        if (appState.currentSongId !== null || this.renderer.domElement.style.display === 'none') return;
+        const N = SONGS.length;
+        if (e.code === 'ArrowRight') {
+            e.preventDefault();
+            this.selectedIndex = (this.selectedIndex - 1 + N) % N;
+            this.targetRotation += (2 * Math.PI / N);
+        } else if (e.code === 'ArrowLeft') {
+            e.preventDefault();
+            this.selectedIndex = (this.selectedIndex + 1) % N;
+            this.targetRotation -= (2 * Math.PI / N);
+        } else if (e.code === 'Enter' || e.code === 'Space') {
+            e.preventDefault();
+            this.selectSong(SONGS[this.selectedIndex], this.ripples[this.selectedIndex]);
+        }
+    }
+
+    _rotateToSong(targetIndex) {
+        const N = SONGS.length;
+        let steps = ((targetIndex - this.selectedIndex) % N + N) % N;
+        if (steps > N / 2) steps -= N; // take the shorter arc
+        this.targetRotation -= steps * (2 * Math.PI / N);
+        this.selectedIndex = targetIndex;
+    }
+
+    _createSoftButtons() {
+        this.softBtnContainer = document.createElement('div');
+        this.softBtnContainer.className = 'lake-soft-buttons';
+        this.softBtnContainer.innerHTML = `
+            <button class="lake-soft-btn lake-soft-btn--prev" aria-label="前の曲">&#9664;</button>
+            <button class="lake-soft-btn lake-soft-btn--next" aria-label="次の曲">&#9654;</button>
+        `;
+        this.container.appendChild(this.softBtnContainer);
+
+        const N = SONGS.length;
+        this.softBtnContainer.querySelector('.lake-soft-btn--prev').addEventListener('click', () => {
+            this.selectedIndex = (this.selectedIndex + 1) % N;
+            this.targetRotation -= (2 * Math.PI / N);
+        });
+        this.softBtnContainer.querySelector('.lake-soft-btn--next').addEventListener('click', () => {
+            this.selectedIndex = (this.selectedIndex - 1 + N) % N;
+            this.targetRotation += (2 * Math.PI / N);
+        });
+    }
+
+    _applyBrightness(t) {
+        // t: 0 = moonless night, 1 = clear dawn — lerps lights, lake colors, fog, background
+        if (this.ambientLight) this.ambientLight.intensity = 0.3 + t * 1.2;
+        if (this.dirLight)     this.dirLight.intensity     = 0.5 + t * 1.3;
+
+        if (this.lakeMaterial) {
+            // baseColor: #041030 → #1a4070
+            this.lakeMaterial.uniforms.baseColor.value.setRGB(
+                0.016 + t * 0.087,
+                0.063 + t * 0.19,
+                0.188 + t * 0.25
+            );
+            // highlightColor: #0e3d6e → #3a87c0
+            this.lakeMaterial.uniforms.highlightColor.value.setRGB(
+                0.055 + t * 0.175,
+                0.239 + t * 0.29,
+                0.431 + t * 0.32
+            );
+        }
+
+        if (this.scene.fog)        this.scene.fog.density = 0.018 - t * 0.012;
+        if (this.scene.background) this.scene.background.setRGB(
+            0.012 + t * 0.038,
+            0.020 + t * 0.105,
+            0.031 + t * 0.22
+        );
+    }
+
+    _updateProgressCounter() {
+        if (!this.progressCounter) return;
+        const completed = SONGS.filter(s => appState.isSongComplete(s.id)).length;
+        const total = SONGS.length;
+        this.progressCounter.textContent = `${completed} / ${total}`;
+        this.progressCounter.title = `${completed}曲クリア済み`;
+    }
+
+    onSongComplete(songId) {
+        const idx = SONGS.findIndex(s => s.id === songId);
+        if (idx < 0 || idx >= this.labels.length) return;
+
+        const goldColor = new THREE.Color(0xD4AF37);
+        this.labels[idx].baseColor = goldColor.clone();
+        this.ripples[idx].material.uniforms.color.value = goldColor.clone();
+
+        if (this.labels[idx].rippleIndicator) {
+            this.labels[idx].rippleIndicator.style.color = '#D4AF37';
+        }
+
+        // Hide the DOM ripple anchor for completed songs to prevent doubling
+        if (this.labels[idx].rippleAnchor) {
+            this.labels[idx].rippleAnchor.style.display = 'none';
+        }
+
+        const titleEl = this.labels[idx].element.querySelector('.song-title');
+        if (titleEl && !titleEl.querySelector('.complete-mark')) {
+            const mark = document.createElement('span');
+            mark.className = 'complete-mark';
+            mark.textContent = '✓';
+            mark.style.cssText = 'color:#D4AF37; margin-left:5px; filter:drop-shadow(0 0 4px #D4AF37);';
+            titleEl.appendChild(mark);
+        }
+
+        // Gradually brighten the scene with each completion
+        const completedCount = SONGS.filter(s => appState.isSongComplete(s.id)).length;
+        this.targetBrightness = completedCount / SONGS.length;
+        this._updateProgressCounter();
     }
 
     animate() {
@@ -356,45 +546,110 @@ export class LakeUI {
         if (this.renderer.domElement.style.display === 'none') return; // Skip if hidden
         
         const time = Date.now() * 0.001;
-        
+
+        // Smoothly lerp toward target brightness (each completed song brightens the scene)
+        if (Math.abs(this.currentBrightness - this.targetBrightness) > 0.0005) {
+            this.currentBrightness += (this.targetBrightness - this.currentBrightness) * 0.005;
+            this._applyBrightness(this.currentBrightness);
+        }
+
         // Update lake surface
         if (this.lakeMaterial) {
             this.lakeMaterial.uniforms.time.value = time;
         }
         
-        // Update ripples shader uniforms
-        this.ripples.forEach((ripple, i) => {
-            const isCompleted = appState.isSongComplete(ripple.userData.songId);
-            if (!isCompleted) {
-                ripple.material.uniforms.time.value = time + i * 2.0;
-            }
+        // Carousel rotation lerp
+        this.currentRotation += (this.targetRotation - this.currentRotation) * 0.07;
+
+        const N = SONGS.length;
+        const radius = 3.5;
+
+        // Update song world positions based on current rotation
+        this.labels.forEach((labelData, i) => {
+            const actualAngle = labelData.baseAngle + this.currentRotation;
+            const wx = Math.cos(actualAngle) * radius;
+            const wz = Math.sin(actualAngle) * radius;
+
+            this.ripples[i].position.set(wx, 0.05, wz);
+            labelData.worldPos.set(wx, 0.5, wz);
+            labelData.surfacePos.set(wx, 0, wz);
+
+            // Ripple shader time + color
+            const isCompleted = appState.isSongComplete(this.ripples[i].userData.songId);
+            if (!isCompleted) this.ripples[i].material.uniforms.time.value = time + i * 2.0;
+
+            this.ripples[i].material.uniforms.color.value.copy(labelData.baseColor);
         });
-        
-        // Update DOM labels projection
+
+        // DOM label projection + depth scale/opacity
         const widthHalf = window.innerWidth / 2;
         const heightHalf = window.innerHeight / 2;
-        
+
         this.labels.forEach((labelData, i) => {
+            const wx = labelData.worldPos.x;
+            const wz = labelData.worldPos.z;
+
+            // Depth factor: wz ranges [-radius, +radius]; front (wz=+radius) → t=1
+            const t = (wz + radius) / (2 * radius);
+            const depthScale   = 0.55 + t * 0.55;  // 0.55(back) → 1.1(front)
+            const depthOpacity = 0.2  + t * 0.8;   // 0.2(back)  → 1.0(front)
+
+            // baseCycle: 0 at label's lowest point, 0.5 at highest — synced with ripple sawtooth
+            const baseCycle = ((time * 2 + i + Math.PI / 2) / (2 * Math.PI)) % 1;
+
+            // Floating label position driven by same cycle as ripple
             const pos = labelData.worldPos.clone();
-            // Add subtle floating animation
-            pos.y += Math.sin(time * 2 + i) * 0.1;
-            
+            pos.y += -Math.cos(baseCycle * 2 * Math.PI) * 0.1;
             pos.project(this.camera);
-            
-            // Convert to screen coordinates
             const x = (pos.x * widthHalf) + widthHalf;
             const y = -(pos.y * heightHalf) + heightHalf;
-            
-            // Apply transform if visible (behind camera z > 1 is handled usually, but Z=0-1 is view frustum)
+
             if (pos.z < 1) {
-                // Ensure we don't overwrite the scale(1.1) from hover
-                const isHovered = labelData.element.style.transform.includes('scale(1.1)');
-                labelData.element.style.left = `${x}px`;
-                labelData.element.style.top = `${y}px`;
-                labelData.element.style.transform = `translate(-50%, -50%)` + (isHovered ? ' scale(1.1)' : '');
-                labelData.element.style.opacity = '1';
+                const padX   = Math.max(40, window.innerWidth * 0.07);
+                const padTop = 50;
+                const padBot = 120; // clear soft buttons + play bar
+                const cx = Math.max(padX, Math.min(window.innerWidth  - padX, x));
+                const cy = Math.max(padTop, Math.min(window.innerHeight - padBot, y));
+
+                const finalScale = depthScale * (labelData._hovered ? 1.12 : 1.0);
+                labelData.element.style.left      = `${cx}px`;
+                labelData.element.style.top       = `${cy}px`;
+                labelData.element.style.transform = `translate(-50%, -50%) scale(${finalScale})`;
+                labelData.element.style.opacity   = depthOpacity.toFixed(3);
+
+                if (i === this.selectedIndex) {
+                    labelData.element.classList.add('song-label--front');
+                } else {
+                    labelData.element.classList.remove('song-label--front');
+                }
+
+                // Ripple anchor: clamp Y so front songs don't fall behind nav buttons
+                const surfNdc = labelData.surfacePos.clone().project(this.camera);
+                const sx  = (surfNdc.x * widthHalf) + widthHalf;
+                const sy  = -(surfNdc.y * heightHalf) + heightHalf;
+                const safeSY = Math.min(sy, window.innerHeight - 150);
+                labelData.rippleAnchor.style.left    = `${sx}px`;
+                labelData.rippleAnchor.style.top     = `${safeSY}px`;
+                labelData.rippleAnchor.style.opacity = depthOpacity.toFixed(3);
+
+                // Depth-based sizing — front: large, back: small, aspect 3.5:1 = flat ellipse.
+                // Opacity uses pow curve so rings stay bright longer then fade quickly.
+                const maxW = Math.max(180 * depthScale, 30);
+                const maxH = Math.max(maxW * 0.285, 6);
+
+                labelData.rippleIndicator.style.width     = `${maxW}px`;
+                labelData.rippleIndicator.style.height    = `${maxH}px`;
+                labelData.rippleIndicator.style.transform = ''; // always horizontal
+
+                labelData.rippleSpans.forEach((span, si) => {
+                    const p = (baseCycle + si / 3) % 1;
+                    span.style.width   = `${p * maxW}px`;
+                    span.style.height  = `${p * maxH}px`;
+                    span.style.opacity = (Math.pow(1 - p, 0.6) * 0.95).toFixed(3);
+                });
             } else {
-                labelData.element.style.opacity = '0';
+                labelData.element.style.opacity      = '0';
+                labelData.rippleAnchor.style.opacity = '0';
             }
         });
         
@@ -418,8 +673,10 @@ export class LakeUI {
     destroy() {
         cancelAnimationFrame(this.animationId);
         window.removeEventListener('resize', this.boundOnWindowResize);
+        window.removeEventListener('keydown', this.boundOnKeyDown);
         this.container.removeEventListener('click', this.boundOnClick);
         this.container.removeEventListener('mousemove', this.boundOnMouseMove);
+        eventBus.off('songComplete', this.boundOnSongComplete);
         // Clean up Three.js resources
         this.renderer.dispose();
         
@@ -430,6 +687,9 @@ export class LakeUI {
         
         if (this.labelsContainer && this.labelsContainer.parentNode) {
             this.labelsContainer.parentNode.removeChild(this.labelsContainer);
+        }
+        if (this.softBtnContainer && this.softBtnContainer.parentNode) {
+            this.softBtnContainer.parentNode.removeChild(this.softBtnContainer);
         }
     }
 }

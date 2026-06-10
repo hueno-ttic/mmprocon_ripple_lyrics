@@ -6,11 +6,6 @@ import { playerManager } from '../core/player.js';
 export class SongTricktology extends BaseSong {
     constructor(container, songId) {
         super(container, songId);
-        
-        // Hide generic DOM renderer
-        if (this.lyricRenderer && this.lyricRenderer.lyricContainer) {
-            this.lyricRenderer.lyricContainer.style.display = 'none';
-        }
 
         this.scene = null;
         this.camera = null;
@@ -67,8 +62,8 @@ export class SongTricktology extends BaseSong {
         const geometry = new THREE.PlaneGeometry(100, 100);
         this.mirror = new Reflector(geometry, {
             clipBias: 0.003,
-            textureWidth: window.innerWidth * window.devicePixelRatio,
-            textureHeight: window.innerHeight * window.devicePixelRatio,
+            textureWidth:  Math.min(window.innerWidth  * window.devicePixelRatio, 1024),
+            textureHeight: Math.min(window.innerHeight * window.devicePixelRatio, 1024),
             color: 0x8899a6
         });
         this.mirror.position.y = 0;
@@ -103,8 +98,8 @@ export class SongTricktology extends BaseSong {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         if (this.mirror) {
             this.mirror.getRenderTarget().setSize(
-                window.innerWidth * window.devicePixelRatio,
-                window.innerHeight * window.devicePixelRatio
+                Math.min(window.innerWidth  * window.devicePixelRatio, 1024),
+                Math.min(window.innerHeight * window.devicePixelRatio, 1024)
             );
         }
     }
@@ -144,7 +139,7 @@ export class SongTricktology extends BaseSong {
         return new THREE.CanvasTexture(canvas);
     }
 
-    spawnText(phrase) {
+    spawnText(phrase, spawnTime) {
         const texture = this.createTextTexture(phrase.text);
         const material = new THREE.SpriteMaterial({ 
             map: texture, 
@@ -160,10 +155,16 @@ export class SongTricktology extends BaseSong {
             Math.random() * 5 + 3, // Keep above the mirror
             this.camera.position.z - 20 - Math.random() * 10
         );
-        sprite.userData = { birth: this.currentTime, life: 6000 };
         
         const aspect = 1024 / 128;
         const scale = 2.5 + Math.random();
+        sprite.userData = { 
+            birth: spawnTime, 
+            life: 6000,
+            text: phrase.text,
+            baseScale: scale,
+            aspect: aspect
+        };
         sprite.scale.set(scale * aspect, scale, 1);
         
         this.scene.add(sprite);
@@ -173,10 +174,13 @@ export class SongTricktology extends BaseSong {
     update(time) {
         if (!playerManager.player || !playerManager.player.video) return;
 
-        const position = this.currentTime;
+        // TextAlive公式タイマー(player.timer.position)に完全同期（先行調整を排除）
+        const position = (playerManager.player && playerManager.player.timer)
+                         ? playerManager.player.timer.position
+                         : this.getSmoothedTime();
         
         // Chorus check for Upside Down climax
-        const chorus = playerManager.player.video.findChorus(position);
+        const chorus = playerManager.player && typeof playerManager.player.findChorus === 'function' ? playerManager.player.findChorus(position) : null;
         this.isClimax = !!chorus;
         
         if (this.isClimax && !this.climaxTriggered) {
@@ -198,15 +202,22 @@ export class SongTricktology extends BaseSong {
         this.dragOffset.y *= 0.95;
         this.songWrapper.style.transform = `rotate(${this.baseRot.z}rad) rotateX(${this.dragOffset.y}rad) rotateY(${this.dragOffset.x}rad)`;
 
+        // カメラが -200 を超えたらシーン全体をシフトして戻す
+        if (this.camera.position.z < -200) {
+            const shift = -this.camera.position.z - 10;
+            this.camera.position.z = -10;
+            this.shapes.forEach(mesh => { mesh.position.z += shift; });
+            if (this.mirror) this.mirror.position.z += shift;
+        }
+
         // Move camera slowly forward
         this.camera.position.z -= 0.05;
 
-        // Animate background shapes
-        const now = Date.now();
+        // Animate background shapes. Oscillation is synchronized to song position
         this.shapes.forEach((mesh, i) => {
             mesh.rotation.x += mesh.userData.rotSpeed.x;
             mesh.rotation.y += mesh.userData.rotSpeed.y;
-            mesh.position.y = mesh.userData.baseY + Math.sin(now * mesh.userData.floatSpeed + i) * 2;
+            mesh.position.y = mesh.userData.baseY + Math.sin(position * mesh.userData.floatSpeed * 0.1 + i) * 2;
             
             // Reposition if behind camera
             if (mesh.position.z > this.camera.position.z + 10) {
@@ -214,24 +225,47 @@ export class SongTricktology extends BaseSong {
             }
         });
 
-        // Spawn lyrics
+        // Phrase-level for 3D background text, word-level for foreground lyric display
         const phrase = playerManager.player.video.findPhrase(position);
         if (phrase && phrase !== this.lastPhrase) {
             this.lastPhrase = phrase;
-            this.spawnText(phrase);
+            this.spawnText(phrase, position);
+        }
+
+        const word = playerManager.player.video.findWord(position)
+                  || playerManager.player.video.findChar(position);
+        if (this.lyricRenderer) {
+            this.lyricRenderer.update(word);
         }
 
         // Update sprites
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const s = this.activeSprites[i];
-            const age = position - s.userData.birth;
+            // 現在歌唱中の単語とスプライトの文字が一致するかチェックし、歌唱パルス（バウンド拡大＆発光）をトリガー
+            const isWordActive = word && s.userData.text && s.userData.text.includes(word.text) 
+                              && position >= word.startTime && position <= word.endTime;
+            if (!s.userData.pulseProgress) s.userData.pulseProgress = 0;
+            const targetPulse = isWordActive ? 1.0 : 0.0;
+            s.userData.pulseProgress += (targetPulse - s.userData.pulseProgress) * 0.2;
+            const pulse = s.userData.pulseProgress;
+            const pulseScaleFactor = 1.0 + pulse * 0.25; // 1.25倍バウンド
+
+            const baseScale = s.userData.baseScale || 2.5;
+            const aspect = s.userData.aspect || 8.0;
+            s.scale.set(baseScale * aspect * pulseScaleFactor, baseScale * pulseScaleFactor, 1);
             
-            s.position.y += Math.sin(age * 0.002) * 0.01;
+            // 歌唱中は純白に近い強発光にする
+            s.material.color.setRGB(1.0, 1.0 - pulse * 0.3, 1.0 - pulse * 0.3);
+
+            const age = Math.max(0, position - s.userData.birth);
+
+            // Oscillation is synchronized to song position
+            s.position.y += Math.sin(position * 0.002) * 0.01;
             
-            if (age < 1000) {
-                s.material.opacity = age / 1000;
-            } else if (age > s.userData.life - 1000) {
-                s.material.opacity = (s.userData.life - age) / 1000;
+            if (age < 150) {
+                s.material.opacity = age / 150;
+            } else if (age > s.userData.life - 200) {
+                s.material.opacity = Math.max(0, (s.userData.life - age) / 200);
             } else {
                 s.material.opacity = 1;
             }
@@ -246,6 +280,7 @@ export class SongTricktology extends BaseSong {
     }
     
     triggerIllusion() {
+        this.songWrapper.style.transformOrigin = 'center center';
         // We use a CSS transition on the wrapper for a smooth effect
         this.songWrapper.style.transition = 'transform 2s cubic-bezier(0.68, -0.55, 0.27, 1.55)';
         setTimeout(() => { this.songWrapper.style.transition = 'none'; }, 2000);
@@ -272,6 +307,7 @@ export class SongTricktology extends BaseSong {
     }
     
     resetIllusion() {
+        this.songWrapper.style.transformOrigin = 'center center';
         this.songWrapper.style.transition = 'transform 2s cubic-bezier(0.68, -0.55, 0.27, 1.55)';
         setTimeout(() => { this.songWrapper.style.transition = 'none'; }, 2000);
     }
@@ -305,7 +341,8 @@ export class SongTricktology extends BaseSong {
         }
         
         if (this.renderer) this.renderer.dispose();
-        this.songWrapper.style.transform = ''; // reset
+        this.songWrapper.style.transform = '';
+        this.songWrapper.style.transformOrigin = '';
 
         super.destroy();
     }

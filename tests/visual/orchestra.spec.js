@@ -2,11 +2,16 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Lake Sonare - Orchestra Scene Visual Test', () => {
   test('Full scene flow with error fallback', async ({ page }) => {
+    test.setTimeout(120000);
     // 1. トップ画面を開く
     await page.goto('/');
     
-    // Canvasが表示されるまで待機
-    await page.waitForSelector('canvas');
+    // Bypass Title Screen & wait for intro transition
+    await page.waitForTimeout(3000);
+    await page.mouse.click(500, 300);
+    
+    // Canvasが表示されるまで待機 (Wait for StoryIntro to finish and LakeUI canvas to mount)
+    await page.waitForSelector('canvas', { timeout: 30000 });
     await page.waitForTimeout(1000); // Wait for ripples to finish intro animation
     
     // スクリーンショット 001

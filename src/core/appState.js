@@ -1,4 +1,5 @@
 import { eventBus } from './eventBus.js';
+import { SONGS } from '../config/songs.js';
 
 class AppState {
     constructor() {
@@ -24,6 +25,9 @@ class AppState {
             this.completedSongs.push(songId);
             localStorage.setItem('completedSongs', JSON.stringify(this.completedSongs));
             eventBus.emit('songComplete', songId);
+            if (this.completedSongs.length >= SONGS.length) {
+                setTimeout(() => eventBus.emit('allSongsComplete'), 1000);
+            }
         }
     }
 
