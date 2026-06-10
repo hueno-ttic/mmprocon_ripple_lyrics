@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 
 export class SongOrchestra extends BaseSong {
     constructor(container, songId) {
@@ -66,6 +68,56 @@ export class SongOrchestra extends BaseSong {
         this.container.addEventListener('click', this.boundOnClick);
         this.container.addEventListener('mousemove', this._boundOnMouseMove);
         
+        // VRM model loading setup
+        this.currentVRM = null;
+        this.relaxedQuaternions = null;
+        this.tapAnimation = null;
+        this.baseMikuY = -3.2; // Adjusted down for Z=-13.0
+        this.baseMikuX = 0;
+        this.baseMikuZ = -13.0; // Placed behind the lyrics (Z=-11.0)
+        this.baseMikuRotY = 0; // Face the camera
+        this.lastRealTime = undefined;
+
+        const loader = new GLTFLoader();
+        loader.register((parser) => new VRMLoaderPlugin(parser));
+        loader.load(
+            '/assets/models/miku.vrm',
+            (gltf) => {
+                if (!this.isActive) {
+                    this.disposeVRM(gltf.userData.vrm);
+                    return;
+                }
+                const vrm = gltf.userData.vrm;
+                this.currentVRM = vrm;
+                this.scene.add(vrm.scene);
+                vrm.scene.position.set(this.baseMikuX, this.baseMikuY, this.baseMikuZ);
+                vrm.scene.rotation.y = this.baseMikuRotY;
+                vrm.scene.scale.set(3.0, 3.0, 3.0); // Scale up to look natural at Z=-13.0
+                
+                // Set initial relaxed pose
+                this.setupRelaxedPose(vrm);
+
+                // Cache relaxed quaternions for active arms
+                const leftUpper = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
+                const rightUpper = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
+                const leftLower = vrm.humanoid.getNormalizedBoneNode('leftLowerArm');
+                const rightLower = vrm.humanoid.getNormalizedBoneNode('rightLowerArm');
+                
+                this.relaxedQuaternions = {
+                    leftUpperArm: leftUpper ? leftUpper.quaternion.clone() : new THREE.Quaternion(),
+                    rightUpperArm: rightUpper ? rightUpper.quaternion.clone() : new THREE.Quaternion(),
+                    leftLowerArm: leftLower ? leftLower.quaternion.clone() : new THREE.Quaternion(),
+                    rightLowerArm: rightLower ? rightLower.quaternion.clone() : new THREE.Quaternion()
+                };
+
+                console.log('[ORCHESTRA] Miku VRM loaded successfully.');
+            },
+            undefined,
+            (error) => {
+                console.error('[ORCHESTRA] Failed to load VRM:', error);
+            }
+        );
+
         super.init();
     }
 
@@ -80,6 +132,15 @@ export class SongOrchestra extends BaseSong {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.songWrapper.appendChild(this.renderer.domElement);
+
+        // Add ambient light for character details
+        const ambientLight = new THREE.AmbientLight(0x404070, 1.8);
+        this.scene.add(ambientLight);
+
+        // Add directional light to bring depth to the 3D model
+        const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
+        dirLight.position.set(2, 4, 10);
+        this.scene.add(dirLight);
     }
 
     initStars() {
@@ -449,21 +510,16 @@ export class SongOrchestra extends BaseSong {
             return false;
         };
         
-        // 画面中央下（Main Lyric要素）と被らないようにセーフエリアを定義
-        const isMainLyricArea = (x, y) => {
-            return y < -1.4 && y > -2.6 && Math.abs(x) < 3.5;
-        };
-
-        // 画面全体を広範囲に活用して、言葉を美しく配置
-        const xCandidates = [-6.0, -4.5, -3.0, -1.5, 0.0, 1.5, 3.0, 4.5, 6.0];
-        const yCandidates = [-3.0, -2.2, -1.4, -0.6, 0.2, 1.0, 1.8, 2.6];
+        // 画面中央（X=0付近）を完全に避けることで、カメラの正面視線を遮らないように配置
+        const xCandidates = [-5.5, -4.0, -2.5, 2.5, 4.0, 5.5];
+        const yCandidates = [-2.8, -2.4, -2.0, -1.6];
         
         let foundX = 0;
         let foundY = -2.4;
         let spawnZ = -11.0; // Zを-11.0に引っ込めてカメラを塞がないように調整
         let found = false;
         
-        // Search passes with decreasing padding strictly to find optimal spots
+        // Search passes with decreasing padding strictly to find optimal non-overlapping spots
         const passes = [
             { padH: 45, padV: 50, below: 240 },
             { padH: 25, padV: 30, below: 140 },
@@ -477,8 +533,6 @@ export class SongOrchestra extends BaseSong {
             
             for (const cy of shuffledY) {
                 for (const cx of shuffledX) {
-                    if (isMainLyricArea(cx, cy)) continue;
-                    
                     if (!checkOverlap(cx, cy, pass.padH, pass.padV, pass.below)) {
                         foundX = cx;
                         foundY = cy;
@@ -506,7 +560,6 @@ export class SongOrchestra extends BaseSong {
         const duration = lyricEntity.endTime !== undefined ? (lyricEntity.endTime - lyricEntity.startTime) : 2500;
         const lifeTime = duration + (category === 'future_memory' ? 2500 : 800);
         const marchDirection = Math.random() < 0.5 ? -1 : 1;
-        const startRotation = (Math.random() - 0.5) * 0.4; // 初期回転を-20度〜+20度の範囲で付与
 
         sprite.userData = { 
             birth: birthTime, 
@@ -517,11 +570,8 @@ export class SongOrchestra extends BaseSong {
             aspect: aspect,
             groupIndex: lyricEntity.index, // Store the index of the word group
             baseY: foundY,
-            baseX: foundX,
-            marchDirection: marchDirection,
-            startRotation: startRotation
+            marchDirection: marchDirection
         };
-        sprite.rotation.z = startRotation;
         sprite.scale.set(scale * aspect, scale, 1);
         
         this.scene.add(sprite);
@@ -529,6 +579,11 @@ export class SongOrchestra extends BaseSong {
     }
 
     onClick(event) {
+        // ミクが現在歌詞へ移動中・タップ動作中の場合はタップ操作をロック
+        if (this.tapAnimation) {
+            return;
+        }
+
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -542,7 +597,18 @@ export class SongOrchestra extends BaseSong {
         if (intersects.length > 0) {
             // 一番手前にある歌詞スプライトを取得
             const hitSprite = intersects[0].object;
-            this.resonateLyricColor(hitSprite, intersects[0].point);
+            
+            // 既にタップ中の場合は二重処理防止
+            if (hitSprite.userData.isBeingTapped) {
+                return;
+            }
+            
+            if (this.currentVRM && this.relaxedQuaternions) {
+                this.triggerMikuTap(hitSprite);
+            } else {
+                // VRM読み込み完了前のフォールバック（直接昇華）
+                this.resonateLyricColor(hitSprite);
+            }
             return; // 歌詞がクリックされた場合は、通常の波紋パーティクル生成は行わない
         }
 
@@ -875,138 +941,83 @@ export class SongOrchestra extends BaseSong {
             const pulse = s.userData.pulseProgress;
             const pulseScaleFactor = 1.0 + pulse * 0.25; // 1.25倍バウンド
 
-            // Elastic Out entrance scale factor calculation
-            const age = Math.max(0, position - s.userData.birth);
-            const t = age / 800; // 0.8s elastic window
-            let elasticFactor = 1.0;
-            if (t < 1.0) {
-                elasticFactor = 1.0 - Math.exp(-t * 8.0) * Math.cos(t * 12.0);
-            }
-
-            const startRot = s.userData.startRotation || 0;
-            const category = s.userData.category || 'default';
-
-            // --- Category-specific Movement and Rotation Animations ---
-            if (category === 'sky_color') {
-                s.position.y += 0.0045; // Slow float up
-                // Balloon drift pendulum wave
-                s.position.x += Math.sin(position * 0.002 + s.userData.birth) * 0.006;
-                s.rotation.z = startRot + age * 0.0002;
-            } else if (category === 'machine') {
-                s.position.y += 0.007;
-                // Digital position and rotation glitching
-                if (Math.random() < 0.12) {
-                    s.position.x += (Math.random() - 0.5) * 0.06;
-                    s.position.y += (Math.random() - 0.5) * 0.04;
-                    s.rotation.z = (Math.random() - 0.5) * 0.5;
-                } else {
-                    s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
-                    s.rotation.z = startRot;
-                }
-            } else if (category === 'music_march') {
-                // Beat-synced sharp footstep marching bounce & horizontal marching slide
-                const beat = playerManager.player ? playerManager.player.findBeat(position) : null;
-                let beatProgress = 0;
-                if (beat && beat.duration > 0) {
-                    beatProgress = Math.min(1.0, Math.max(0.0, (position - beat.startTime) / beat.duration));
-                }
-                const bounceHeight = 0.18;
-                const bounceY = Math.pow(Math.sin(beatProgress * Math.PI), 2.0) * bounceHeight;
-                
-                s.userData.baseY += 0.003; // Slowly advance vertical baseline
-                s.position.y = s.userData.baseY + bounceY;
-                
-                const marchDir = s.userData.marchDirection || 1;
-                s.position.x += marchDir * 0.01;
-                
-                // Walking tilt cycle wobble
-                s.rotation.z = Math.sin(beatProgress * Math.PI * 2) * 0.15 * marchDir;
-            } else if (category === 'sadness') {
-                // Sinks down slowly like falling tears
-                s.userData.baseY -= 0.006;
-                s.position.y = s.userData.baseY;
-                // Jittery shivering in place
-                s.position.x += (Math.random() - 0.5) * 0.012;
-                s.position.y += (Math.random() - 0.5) * 0.012;
-                s.rotation.z = startRot + (Math.random() - 0.5) * 0.04;
-            } else if (category === 'future_memory') {
-                // Drift almost imperceptibly
-                s.position.y += 0.002;
-                s.position.x += Math.sin(position * 0.0003 + s.position.y) * 0.001;
-                s.rotation.z = startRot + age * 0.00008;
-            } else if (category === 'light') {
-                // Hover almost in place with pulsating scale expansion
-                s.position.y += 0.002;
-                s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.002;
-                s.rotation.z = startRot + Math.sin(position * 0.003) * 0.08;
-                elasticFactor *= (1.3 + Math.sin(position * 0.008) * 0.15);
-            } else if (category === 'voice_echo') {
-                s.position.y += 0.007;
-                s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
-                s.rotation.z = startRot + Math.sin(position * 0.002) * 0.05;
-                // Pulsate scale like speaker cone
-                elasticFactor *= (1.0 + Math.sin(position * 0.015) * 0.08);
-            } else if (category === 'music') {
-                // Flowing rhythmic glide
-                const beat = playerManager.player ? playerManager.player.findBeat(position) : null;
-                let beatProgress = 0;
-                if (beat && beat.duration > 0) {
-                    beatProgress = Math.min(1.0, Math.max(0.0, (position - beat.startTime) / beat.duration));
-                }
-                s.position.y += 0.007 + Math.sin(beatProgress * Math.PI) * 0.003;
-                s.position.x += Math.sin(position * 0.001 + s.position.y) * 0.004;
-                s.rotation.z = startRot + Math.sin(position * 0.001) * 0.05;
-            } else {
-                // Default
-                s.position.y += 0.007;
-                s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
-                s.rotation.z = startRot;
-            }
-
             const baseScale = s.userData.baseScale || 2.0;
             const aspect = s.userData.aspect || 8.0;
-            const scaleFactor = pulseScaleFactor * elasticFactor;
-            s.scale.set(baseScale * aspect * scaleFactor, baseScale * scaleFactor, 1);
+            s.scale.set(baseScale * aspect * pulseScaleFactor, baseScale * pulseScaleFactor, 1);
             
             // 歌唱中は純白にフラッシュさせて光らせる
             s.material.color.setRGB(1.0, 1.0 - pulse * 0.3, 1.0 - pulse * 0.3);
 
-            if (this.isClimax) {
-                s.position.x *= 1.003;
-                s.position.y *= 1.003;
-            }
-
-            let opacity = 1.0;
-            if (age < 150) {
-                opacity = age / 150;
-            } else if (age > s.userData.life - 200) {
-                opacity = Math.max(0, (s.userData.life - age) / 200);
-            }
-            
-            // Fading teardrop effect for sadness
-            if (category === 'sadness' && age > s.userData.life - 600) {
-                opacity = Math.max(0, (s.userData.life - age) / 600);
-            }
-
-            // Height-based fade (skip for sadness teardrops, check low Y instead)
-            if (category !== 'sadness' && s.position.y > 1.2) {
-                const heightFade = Math.max(0, 1.0 - (s.position.y - 1.2) / 1.2);
-                opacity *= heightFade;
-            } else if (category === 'sadness' && s.position.y < -2.6) {
-                const lowFade = Math.max(0, 1.0 - (-2.6 - s.position.y) / 0.8);
-                opacity *= lowFade;
-            }
-
-            // Flicker machine category opacity glitch
-            if (category === 'machine') {
-                s.material.opacity = (Math.random() > 0.12) ? opacity : opacity * 0.25;
+            if (s.userData.isBeingTapped) {
+                // タップ中は位置をフリーズし、不透明度を維持する
+                s.material.opacity = 1.0;
             } else {
-                s.material.opacity = opacity;
-            }
+                // --- Category-specific Movement Animations ---
+                const category = s.userData.category || 'default';
+                
+                if (category === 'sky_color') {
+                    s.position.y += 0.0045; // Slow float up
+                    s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
+                } else if (category === 'machine') {
+                    s.position.y += 0.007;
+                    s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
+                    // Occasional horizontal glitch offsets
+                    if (Math.random() < 0.08) {
+                        s.position.x += (Math.random() - 0.5) * 0.05;
+                    }
+                } else if (category === 'music_march') {
+                    // Beat-synced sinusoidal vertical bounce & horizontal slide
+                    const beat = playerManager.player ? playerManager.player.findBeat(position) : null;
+                    let beatProgress = 0;
+                    if (beat && beat.duration > 0) {
+                        beatProgress = Math.min(1.0, Math.max(0.0, (position - beat.startTime) / beat.duration));
+                    }
+                    const bounceHeight = 0.08;
+                    const bounceY = Math.sin(beatProgress * Math.PI) * bounceHeight;
+                    
+                    // Keep updating the vertical baseline
+                    s.userData.baseY += 0.004;
+                    s.position.y = s.userData.baseY + bounceY;
+                    
+                    // March direction sliding
+                    const marchDir = s.userData.marchDirection || 1;
+                    s.position.x += marchDir * 0.008;
+                } else if (category === 'sadness') {
+                    s.position.y += 0.005; // Slow rise
+                    // Shiver (shake) text
+                    s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003 + (Math.random() - 0.5) * 0.015;
+                    s.position.y += (Math.random() - 0.5) * 0.015;
+                } else if (category === 'future_memory') {
+                    s.position.y += 0.003; // Very slow float up
+                    s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
+                } else {
+                    // Default, music, light, voice_echo
+                    s.position.y += 0.007;
+                    s.position.x += Math.sin(position * 0.0006 + s.position.y) * 0.003;
+                }
 
-            if (age > s.userData.life || s.position.y > 2.4 || (category === 'sadness' && s.position.y < -3.2)) {
-                this.disposeSprite(s);
-                this.activeSprites.splice(i, 1);
+                if (this.isClimax) {
+                    s.position.x *= 1.003;
+                    s.position.y *= 1.003;
+                }
+
+                const age = Math.max(0, position - s.userData.birth);
+                let opacity = 1.0;
+                if (age < 150) {
+                    opacity = age / 150;
+                } else if (age > s.userData.life - 200) {
+                    opacity = Math.max(0, (s.userData.life - age) / 200);
+                }
+                if (s.position.y > 1.2) {
+                    const heightFade = Math.max(0, 1.0 - (s.position.y - 1.2) / 1.2);
+                    opacity *= heightFade;
+                }
+                s.material.opacity = opacity;
+
+                if (age > s.userData.life || s.position.y > 2.4) {
+                    this.disposeSprite(s);
+                    this.activeSprites.splice(i, 1);
+                }
             }
         }
 
@@ -1228,6 +1239,204 @@ export class SongOrchestra extends BaseSong {
             }
         }
 
+        // Update VRM Avatar animations & physics
+        if (this.currentVRM) {
+            const floatTime = position * 0.001; // Song time in seconds
+
+            // Gentle floating physics base calculation
+            const floatX = this.baseMikuX + Math.cos(floatTime * 0.8) * 0.15;
+            const floatY = this.baseMikuY + Math.sin(floatTime * 1.2) * 0.25;
+            const floatZ = this.baseMikuZ;
+            const basePos = new THREE.Vector3(floatX, floatY, floatZ);
+
+            // Keep facing front exactly (180 deg around Y)
+            this.currentVRM.scene.rotation.y = this.baseMikuRotY; 
+            this.currentVRM.scene.rotation.z = Math.sin(floatTime * 0.6) * 0.02; // Subtle tilt roll
+
+            // Physics update for hair and costume joints (SpringBone) & Tap Animation elapsed time update
+            const currentRealTime = performance.now();
+            if (this.lastRealTime === undefined) this.lastRealTime = currentRealTime;
+            const deltaTime = Math.min(0.1, (currentRealTime - this.lastRealTime) / 1000);
+            this.lastRealTime = currentRealTime;
+
+            // Tap animation state and interpolation calculations
+            let w = 0;
+            let activeArm = null;
+            let projectedTarget = null;
+
+            if (this.tapAnimation) {
+                this.tapAnimation.elapsed += deltaTime;
+                activeArm = this.tapAnimation.arm;
+                const elapsed = this.tapAnimation.elapsed;
+                const peak = this.tapAnimation.peakTime;
+                const dur = this.tapAnimation.duration;
+                
+                if (elapsed < peak) {
+                    w = Math.sin((elapsed / peak) * Math.PI / 2); // 0 -> 1
+                } else {
+                    w = Math.sin((1.0 - (elapsed - peak) / (dur - peak)) * Math.PI / 2); // 1 -> 0
+                }
+                w = Math.max(0, Math.min(1, w));
+                
+                // Target position is directly the clicked lyric's position (no projection needed at Z=-11)
+                projectedTarget = this.tapAnimation.targetWorldPos;
+
+                // Peak trigger (sublimation into orb)
+                if (elapsed >= peak && !this.tapAnimation.sublimated) {
+                    this.tapAnimation.sublimated = true;
+                    const spriteColor = new THREE.Color(this.getSemanticColor(this.tapAnimation.sprite.userData.text) || '#ffffff');
+                    this.spawnTapSparkles(spriteColor, this.tapAnimation.sprite.position);
+                    this.resonateLyricColor(this.tapAnimation.sprite);
+                }
+                
+                if (elapsed >= dur) {
+                    // Update Miku's base position to the last tapped lyric's position
+                    // so she floats there instead of flying back to the center
+                    this.baseMikuX = projectedTarget.x;
+                    this.baseMikuY = projectedTarget.y - 3.6;
+                    this.baseMikuZ = projectedTarget.z - 3.0;
+                    this.tapAnimation = null;
+                }
+            }
+
+            // Miku body position interpolation (move to tapped lyric position and stay there)
+            if (this.tapAnimation && projectedTarget) {
+                // Since Miku's scale is 3.0, her arm length and shoulder height are scaled.
+                // Target Y offset: -3.6 units below lyric center.
+                // Target Z offset: -3.0 units behind lyric center (in front of her shoulder).
+                const targetMikuPos = new THREE.Vector3(
+                    projectedTarget.x,
+                    projectedTarget.y - 3.6,
+                    projectedTarget.z - 3.0
+                );
+                
+                const elapsed = this.tapAnimation.elapsed;
+                const peak = this.tapAnimation.peakTime;
+                
+                if (elapsed < peak) {
+                    const t_pos = elapsed / peak;
+                    const w_pos = Math.sin(t_pos * Math.PI / 2);
+                    this.currentVRM.scene.position.lerpVectors(basePos, targetMikuPos, w_pos);
+                } else {
+                    this.currentVRM.scene.position.copy(targetMikuPos);
+                }
+            } else {
+                this.currentVRM.scene.position.copy(basePos);
+            }
+
+            // Arm bones animation update
+            const leftUpperArm = this.currentVRM.humanoid.getNormalizedBoneNode('leftUpperArm');
+            const rightUpperArm = this.currentVRM.humanoid.getNormalizedBoneNode('rightUpperArm');
+            const leftLowerArm = this.currentVRM.humanoid.getNormalizedBoneNode('leftLowerArm');
+            const rightLowerArm = this.currentVRM.humanoid.getNormalizedBoneNode('rightLowerArm');
+
+            if (this.relaxedQuaternions) {
+                // Apply relaxed pose + breathing as base for left arm
+                if (leftUpperArm) {
+                    leftUpperArm.quaternion.copy(this.relaxedQuaternions.leftUpperArm);
+                    const euler = new THREE.Euler().setFromQuaternion(leftUpperArm.quaternion);
+                    euler.z += Math.sin(floatTime * 1.5) * 0.05;
+                    leftUpperArm.quaternion.setFromEuler(euler);
+                }
+                if (leftLowerArm) {
+                    leftLowerArm.quaternion.copy(this.relaxedQuaternions.leftLowerArm);
+                }
+
+                // Apply relaxed pose + breathing as base for right arm
+                if (rightUpperArm) {
+                    rightUpperArm.quaternion.copy(this.relaxedQuaternions.rightUpperArm);
+                    const euler = new THREE.Euler().setFromQuaternion(rightUpperArm.quaternion);
+                    euler.z -= Math.sin(floatTime * 1.5) * 0.05;
+                    rightUpperArm.quaternion.setFromEuler(euler);
+                }
+                if (rightLowerArm) {
+                    rightLowerArm.quaternion.copy(this.relaxedQuaternions.rightLowerArm);
+                }
+
+                // Superimpose arm extension animation if active
+                if (this.tapAnimation && w > 0 && projectedTarget) {
+                    const isLeft = activeArm === 'left';
+                    const activeUpper = isLeft ? leftUpperArm : rightUpperArm;
+                    const activeLower = isLeft ? leftLowerArm : rightLowerArm;
+
+                    if (activeUpper) {
+                        const shoulderPos = activeUpper.getWorldPosition(new THREE.Vector3());
+                        const dir = projectedTarget.clone().sub(shoulderPos);
+                        const parentWorldQ = activeUpper.parent.getWorldQuaternion(new THREE.Quaternion());
+                        const localDir = dir.clone().applyQuaternion(parentWorldQ.clone().invert()).normalize();
+                        
+                        // VRM standard arm axis (left: +X, right: -X)
+                        const localAxis = isLeft ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(-1, 0, 0);
+                        const targetUpperQ = new THREE.Quaternion().setFromUnitVectors(localAxis, localDir);
+                        
+                        activeUpper.quaternion.slerp(targetUpperQ, w);
+                    }
+
+                    if (activeLower) {
+                        // Straighten elbow at peak
+                        const straightQ = new THREE.Quaternion();
+                        activeLower.quaternion.slerp(straightQ, w);
+                    }
+                }
+            } else {
+                // Fallback direct rotation update if relaxedQuaternions are not yet cached
+                if (leftUpperArm) leftUpperArm.rotation.z = (Math.PI / 6) + Math.sin(floatTime * 1.5) * 0.05;
+                if (rightUpperArm) rightUpperArm.rotation.z = -(Math.PI / 6) - Math.sin(floatTime * 1.5) * 0.05;
+            }
+
+            // Head/neck lookAt tracking (looking at the lyric during tap, otherwise looking at camera)
+            const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
+            if (neck) {
+                if (this.tapAnimation && projectedTarget && w > 0) {
+                    // Turn head towards target lyric
+                    const lookPos = new THREE.Vector3().lerpVectors(this.camera.position, projectedTarget, w);
+                    this.lookAtTarget(neck, lookPos, 0.7, 0.4);
+                } else {
+                    // Keep eye contact with user/camera
+                    this.lookAtTarget(neck, this.camera.position, 0.5, 0.3);
+                }
+            }
+
+            // Rhythmic beat pulse scale effect
+            const beatPulse = Math.max(0, 1.0 - ((position % 500) / 500));
+            const avatarScale = 3.0 + beatPulse * 0.09; // Scaled base is 3.0
+            this.currentVRM.scene.scale.set(avatarScale, avatarScale, avatarScale);
+
+            // Rhythmic lipsync mouth animation synchronized with current vocal text
+            if (currentWord && currentWord.text) {
+                const char = currentWord.text.charAt(0);
+                let vowel = 'neutral';
+
+                if (/[あかさたなはまやらわアカサタナハマヤラワaA]/.test(char)) vowel = 'aa';
+                else if (/[いきしちにひみりイキシチニヒミリiI]/.test(char)) vowel = 'ih';
+                else if (/[うくすつぬふむゆるウクスツヌフムユルuU]/.test(char)) vowel = 'uu';
+                else if (/[えけせてねへめれエケセテネヘメレeE]/.test(char)) vowel = 'ee';
+                else if (/[おこそとのほもよろオコソトノホモヨロoO]/.test(char)) vowel = 'oo';
+
+                const targetValues = { aa: 0, ih: 0, uu: 0, ee: 0, oo: 0 };
+                if (vowel !== 'neutral') {
+                    targetValues[vowel] = 0.85;
+                }
+
+                for (const key in targetValues) {
+                    const currentVal = this.currentVRM.expressionManager.getValue(key) || 0;
+                    const nextVal = currentVal + (targetValues[key] - currentVal) * 0.3;
+                    this.currentVRM.expressionManager.setValue(key, nextVal);
+                }
+            } else {
+                const keys = ['aa', 'ih', 'uu', 'ee', 'oo'];
+                for (const key of keys) {
+                    const currentVal = this.currentVRM.expressionManager.getValue(key) || 0;
+                    const nextVal = currentVal + (0 - currentVal) * 0.25;
+                    this.currentVRM.expressionManager.setValue(key, nextVal);
+                }
+            }
+            this.currentVRM.expressionManager.update();
+
+            // Run SpringBone physics update
+            this.currentVRM.update(deltaTime);
+        }
+
         // --- Dynamic Color Resonance Hint trigger ---
         const wordText = currentWord ? currentWord.text : '';
         if (!this.hasResonatedColor && !this.colorPickerShown && (wordText.includes('空') || wordText.includes('色') || position > 22000)) {
@@ -1345,6 +1554,13 @@ export class SongOrchestra extends BaseSong {
             this._introOverlay.parentNode.removeChild(this._introOverlay);
         }
 
+        // Cleanup VRM Avatar
+        if (this.currentVRM) {
+            this.scene.remove(this.currentVRM.scene);
+            this.disposeVRM(this.currentVRM);
+            this.currentVRM = null;
+        }
+
         // 色彩交響オーブのクリーンアップ
         this.resonateOrbs.forEach(orb => {
             this.scene.remove(orb);
@@ -1398,5 +1614,144 @@ export class SongOrchestra extends BaseSong {
         }
 
         super.destroy();
+    }
+
+    // VRM humanoid layout configuration for zero-gravity漂いポーズ
+    setupRelaxedPose(vrm) {
+        if (!vrm || !vrm.humanoid) return;
+
+        const leftUpperArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
+        const rightUpperArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
+        const leftLowerArm = vrm.humanoid.getNormalizedBoneNode('leftLowerArm');
+        const rightLowerArm = vrm.humanoid.getNormalizedBoneNode('rightLowerArm');
+
+        if (leftUpperArm) leftUpperArm.rotation.z = -Math.PI / 2.8; // 手を下ろした脱力状態
+        if (rightUpperArm) rightUpperArm.rotation.z = Math.PI / 2.8; // 手を下ろした脱力状態
+        if (leftLowerArm) leftLowerArm.rotation.y = Math.PI / 12; // 肘をわずかに前に曲げる
+        if (rightLowerArm) rightLowerArm.rotation.y = -Math.PI / 12; // 肘をわずかに前に曲げる
+
+        const leftUpperLeg = vrm.humanoid.getNormalizedBoneNode('leftUpperLeg');
+        const rightUpperLeg = vrm.humanoid.getNormalizedBoneNode('rightUpperLeg');
+        const leftLowerLeg = vrm.humanoid.getNormalizedBoneNode('leftLowerLeg');
+        const rightLowerLeg = vrm.humanoid.getNormalizedBoneNode('rightLowerLeg');
+
+        if (leftUpperLeg) leftUpperLeg.rotation.z = Math.PI / 24;
+        if (rightUpperLeg) rightUpperLeg.rotation.z = -Math.PI / 24;
+        if (leftLowerLeg) leftLowerLeg.rotation.x = -Math.PI / 18;
+        if (rightLowerLeg) rightLowerLeg.rotation.x = -Math.PI / 18;
+    }
+
+    // クランプ制限付きのボーン回転 LookAt 制御メソッド
+    lookAtTarget(bone, targetWorldPos, maxYaw = 0.7, maxPitch = 0.4) {
+        if (!bone || !this.currentVRM) return;
+        const boneWorldPos = bone.getWorldPosition(new THREE.Vector3());
+        const diff = targetWorldPos.clone().sub(boneWorldPos);
+        
+        // Mikuのシーン（体全体）の向きに対するローカル座標系での差分ベクトルに変換
+        const localDiff = diff.clone().applyQuaternion(this.currentVRM.scene.quaternion.clone().invert());
+        
+        // baseMikuRotY が Math.PI の場合、顔の正面はローカル -Z
+        // baseMikuRotY が 0 の場合、顔の正面はローカル +Z として追従計算を行う
+        const isRotatedY = Math.abs(this.baseMikuRotY - Math.PI) < 0.1;
+        let yaw, pitch;
+        if (isRotatedY) {
+            yaw = Math.atan2(-localDiff.x, -localDiff.z);
+            pitch = Math.atan2(localDiff.y, Math.sqrt(localDiff.x * localDiff.x + localDiff.z * localDiff.z));
+        } else {
+            yaw = Math.atan2(localDiff.x, localDiff.z);
+            pitch = -Math.atan2(localDiff.y, Math.sqrt(localDiff.x * localDiff.x + localDiff.z * localDiff.z));
+        }
+        
+        // 関節の可動範囲（人間らしい自然な角度）にクランプ
+        yaw = Math.max(-maxYaw, Math.min(maxYaw, yaw));
+        pitch = Math.max(-maxPitch, Math.min(maxPitch, pitch));
+        
+        // 角度を設定
+        bone.rotation.y = yaw;
+        bone.rotation.x = pitch;
+    }
+
+    // 歌詞タップアニメーションのトリガーメソッド
+    triggerMikuTap(sprite) {
+        if (!this.currentVRM || !this.relaxedQuaternions) return;
+        
+        // 既にタップアニメーション進行中の場合は、新たなタップ処理を無視して多重動作を防ぐ
+        if (this.tapAnimation) {
+            return;
+        }
+
+        // 歌詞スプライトの上昇・揺れ動作をフリーズ
+        sprite.userData.isBeingTapped = true;
+        const targetWorldPos = sprite.position.clone();
+        
+        // 歌詞が画面の左右どちらにあるかで、左腕・右腕のどちらを使用するか選択
+        const arm = targetWorldPos.x < 0 ? 'left' : 'right';
+
+        this.tapAnimation = {
+            sprite: sprite,
+            arm: arm,
+            targetWorldPos: targetWorldPos,
+            elapsed: 0,
+            duration: 1.8,   // 全体のアニメーション時間 (秒) - よりゆったりと滑らかな飛行に延長
+            peakTime: 0.9,   // タッチ接点に手が到達する時間 (秒) - 0.9秒かけて滑らかに接近
+            sublimated: false
+        };
+    }
+
+    // 接触接点でのきらめきスパークルエフェクト生成
+    spawnTapSparkles(color, targetPos) {
+        const geo = new THREE.BufferGeometry();
+        const count = 40; // 軽量な40粒子バースト
+        const positions = new Float32Array(count * 3);
+        const velocities = [];
+        for (let i = 0; i < count; i++) {
+            positions[i*3] = targetPos.x;
+            positions[i*3+1] = targetPos.y;
+            positions[i*3+2] = targetPos.z;
+            
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            const speed = 0.2 + Math.random() * 0.35;
+            velocities.push(new THREE.Vector3(
+                Math.sin(phi) * Math.cos(theta) * speed,
+                Math.sin(phi) * Math.sin(theta) * speed,
+                Math.cos(phi) * speed
+            ));
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const mat = new THREE.PointsMaterial({ 
+            color: color, 
+            size: 0.25, 
+            map: this.glowTexture, 
+            blending: THREE.AdditiveBlending, 
+            transparent: true, 
+            opacity: 1.0,
+            depthWrite: false
+        });
+        const particles = new THREE.Points(geo, mat);
+        particles.userData = { velocities, birth: Date.now() };
+        this.scene.add(particles);
+        this.fireworks.push(particles);
+    }
+
+    // Comprehensive hierarchical resource clean-up to prevent memory leaks
+    disposeVRM(vrm) {
+        if (!vrm) return;
+        vrm.scene.traverse((obj) => {
+            if (obj.geometry) {
+                obj.geometry.dispose();
+            }
+            if (obj.material) {
+                if (Array.isArray(obj.material)) {
+                    obj.material.forEach((m) => {
+                        if (m.map) m.map.dispose();
+                        m.dispose();
+                    });
+                } else {
+                    if (obj.material.map) obj.material.map.dispose();
+                    obj.material.dispose();
+                }
+            }
+        });
     }
 }

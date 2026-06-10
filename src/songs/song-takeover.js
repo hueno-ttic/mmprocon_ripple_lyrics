@@ -29,6 +29,9 @@ export class SongTakeover extends BaseSong {
 
         this._debrisEdgesGeo = null;
         this._debrisMat = null;
+        this.cardMargin = 0; // no extra margin for decoded tiles
+        this.allGroups = [];
+        this.bgTiles = {};
 
         this.boundOnResize = this.onResize.bind(this);
     }
@@ -40,6 +43,19 @@ export class SongTakeover extends BaseSong {
         this._initCrypto(); // async, completes well before first phrase
         window.addEventListener('resize', this.boundOnResize);
         this.isActive = true;
+
+        if (playerManager.player && playerManager.player.video) {
+            this.buildLyricCard();
+        } else {
+            this.boundBuildLyricCard = () => {
+                this.buildLyricCard();
+                eventBus.off('videoReady', this.boundBuildLyricCard);
+                eventBus.off('timerReady', this.boundBuildLyricCard);
+            };
+            eventBus.on('videoReady', this.boundBuildLyricCard);
+            eventBus.on('timerReady', this.boundBuildLyricCard);
+        }
+
         super.init();
     }
 
@@ -82,7 +98,7 @@ export class SongTakeover extends BaseSong {
             style.id = 'takeover-style';
             style.textContent = `
                 @keyframes toScramblePulse {
-                    0%,100% { opacity:0.75; }
+                    0%,100% { opacity:0.45; }
                     50%      { opacity:1;    }
                 }
                 @keyframes toDecodeFlash {
@@ -97,32 +113,42 @@ export class SongTakeover extends BaseSong {
                     font-family:"Courier New",monospace;
                     font-weight:bold;
                     text-align:left;
-                    padding:10px 24px;
-                    background:rgba(0,0,0,0.55);
-                    border:1px solid #2a1020;
+                    padding:12px 28px;
+                    background:#05000a; /* Solid black/purple background, no transparency */
+                    border:1px solid rgba(0, 255, 170, 0.3);
                     letter-spacing:2px;
                     pointer-events:auto;
                     user-select:none;
                     white-space:nowrap;
                     z-index:15;
-                    transition:border-color .12s, box-shadow .12s;
+                    transition:all 0.15s cubic-bezier(0.25, 0.8, 0.25, 1);
                     font-size: var(--to-font-size, 14px);
+                    border-radius: 6px;
                 }
                 @media (max-width: 768px) {
                     .to-phrase {
-                        font-size: calc(var(--to-font-size, 14px) * 0.75) !important;
-                        padding: 4px 8px;
+                        font-size: calc(var(--to-font-size, 14px) * 0.9) !important;
+                        padding: 10px 20px; /* Easy-to-tap large padding on mobile */
                     }
                 }
                 .to-phrase.scrambled {
-                    color:#444;
+                    color:#00ffaa;
                     cursor:pointer;
-                    animation:toScramblePulse .55s ease-in-out infinite;
+                    border-color: rgba(0, 255, 170, 0.6);
+                    text-shadow: 0 0 8px rgba(0, 255, 170, 0.6);
+                    box-shadow: 0 0 12px rgba(0, 255, 170, 0.2), inset 0 0 8px rgba(0, 255, 170, 0.1);
+                    animation:toScramblePulse .75s ease-in-out infinite;
                 }
                 .to-phrase.scrambled:hover {
-                    color:#ff8800;
-                    border-color:#ff8800;
-                    box-shadow:0 0 18px rgba(255,136,0,.45);
+                    color:#ffffff;
+                    border-color:#00ffaa;
+                    box-shadow: 0 0 25px rgba(0, 255, 170, 0.8), inset 0 0 12px rgba(0, 255, 170, 0.3);
+                    text-shadow: 0 0 12px #00ffaa;
+                    transform: scale(1.06);
+                }
+                .to-phrase.scrambled:active {
+                    transform: scale(0.95);
+                    box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
                 }
                 .to-phrase.decoded {
                     color:#ff3a3a;
@@ -260,7 +286,13 @@ export class SongTakeover extends BaseSong {
             document.head.appendChild(style);
         }
 
-        // Create Monitor Background Element
+        this.bgContainer = document.createElement('div');
+        this.bgContainer.className = 'to-bg-container';
+        this.songWrapper.appendChild(this.bgContainer);
+
+        // Reset card grid layout variables for fresh start
+        this.allGroups = [];
+        this.bgTiles = {};
         this.monitorEl = document.createElement('div');
         this.monitorEl.className = 'to-monitor';
         this.monitorEl.innerHTML = `
@@ -358,14 +390,13 @@ export class SongTakeover extends BaseSong {
         }
         if (!this.isActive) return; // scene destroyed while awaiting
 
-        this.totalCount++;
         this.updateScore();
 
         const b64 = this._ciphertextToBase64(ciphertext); // authentic encrypted bytes
 
         const baseFontSize = this.isClimax ? 20 : 14;
         const winLen = Math.min(Math.max(b64.length, 12), 18);
-        const hasHint = this.totalCount <= 3;
+        const hasHint = this.takenCount <= 3; // Show click hint only for the first 3 decryptions
 
         // Estimate size for collision checking
         const isMobile = window.innerWidth <= 768;
@@ -388,65 +419,39 @@ export class SongTakeover extends BaseSong {
         const rows = isLandscape ? 4 : 5;
         const cols = isLandscape ? 5 : 3;
         const totalCells = rows * cols;
-
         const cellW = 84 / cols;
         const cellH = 58 / rows;
 
-        // Find occupied cells
-        const occupiedCells = this.phraseTargets
-            .filter(t => t.state !== 'expired' && typeof t.cellIndex === 'number')
-            .map(t => t.cellIndex);
-
-        // Find available cells
-        const availableCells = [];
-        for (let i = 0; i < totalCells; i++) {
-            if (!occupiedCells.includes(i)) {
-                availableCells.push(i);
-            }
+        // Shuffled grid placement with jitter for random distribution
+        const cellIndices = Array.from({ length: totalCells }, (_, i) => i);
+        for (let i = cellIndices.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [cellIndices[i], cellIndices[j]] = [cellIndices[j], cellIndices[i]];
         }
 
-        let cellIndex;
-        if (availableCells.length > 0) {
-            cellIndex = availableCells[Math.floor(Math.random() * availableCells.length)];
-        } else {
-            // Prefer overwriting decoded targets over scrambled ones
-            const scrambledOccupied = this.phraseTargets
-                .filter(t => t.state === 'scrambled' && typeof t.cellIndex === 'number')
-                .map(t => t.cellIndex);
-            const nonScrambledCells = [];
-            for (let i = 0; i < totalCells; i++) {
-                if (!scrambledOccupied.includes(i)) {
-                    nonScrambledCells.push(i);
-                }
-            }
-            if (nonScrambledCells.length > 0) {
-                cellIndex = nonScrambledCells[Math.floor(Math.random() * nonScrambledCells.length)];
-            } else {
-                cellIndex = Math.floor(Math.random() * totalCells);
-            }
+        let leftPct, topPct, cellIndex;
+        let attempts = 0;
+        let placed = false;
+        while (!placed && attempts < totalCells) {
+            cellIndex = cellIndices[attempts];
+            const row = Math.floor(cellIndex / cols);
+            const col = (cols - 1) - (cellIndex % cols); // Reversed column order
+            
+            // Random offset jitter within 55% of cell dimensions to break horizontal alignment
+            const jitterX = (Math.random() - 0.5) * cellW * 0.55;
+            const jitterY = (Math.random() - 0.5) * cellH * 0.55;
+
+            const cellLeft = 8 + col * cellW + jitterX;
+            const cellTop = 17 + row * cellH + jitterY;
+            leftPct = Math.max(6, Math.min(cellLeft, Math.max(6, 94 - widthPct)));
+            topPct = Math.max(16, Math.min(cellTop, Math.max(16, 81 - heightPct)));
+
+            placed = !this.phraseTargets.some(t => {
+                return Math.abs(t.leftPct - leftPct) < widthPct && 
+                       Math.abs(t.topPct - topPct) < heightPct;
+            });
+            attempts++;
         }
-
-        const r = Math.floor(cellIndex / cols);
-        const c = cellIndex % cols;
-
-        const cellLeft = 8 + c * cellW;
-        const cellTop = 17 + r * cellH;
-
-        // Position with jitter inside the cell
-        const maxJitterX = Math.max(0, cellW - widthPct);
-        const maxJitterY = Math.max(0, cellH - heightPct);
-
-        let leftPct = cellLeft + (Math.random() * maxJitterX);
-        let topPct = cellTop + (Math.random() * maxJitterY);
-
-        // Clamp to monitor boundaries to prevent overflow
-        const minL = 6;
-        const maxR = Math.max(minL, 94 - widthPct);
-        leftPct = Math.max(minL, Math.min(leftPct, maxR));
-
-        const minT = 16;
-        const maxB = Math.max(minT, 81 - heightPct);
-        topPct = Math.max(minT, Math.min(topPct, maxB));
 
         const el = document.createElement('div');
         el.className = 'to-phrase scrambled';
@@ -475,7 +480,9 @@ export class SongTakeover extends BaseSong {
             topPct,
             widthPct,
             heightPct,
-            cellIndex
+            cellIndex,
+            baseFontSize,
+            groupIndex: group.index // Store its unique index
         };
 
         // Slide a window through the Base64 string to animate the ciphertext
@@ -491,10 +498,16 @@ export class SongTakeover extends BaseSong {
             if (target.state !== 'scrambled') return;
             target.state = 'decrypting'; // guard against double-click
             clearInterval(target.scrambleTimer);
-
-            // Decrypt with AES-256-GCM using the stored IV + ciphertext
-            const plaintext = await this._decrypt(target.iv, target.ciphertext);
-            this._revealTarget(target, plaintext);
+            try {
+                // Decrypt with AES-256-GCM using the stored IV + ciphertext
+                const plaintext = await this._decrypt(target.iv, target.ciphertext);
+                this._revealTarget(target, plaintext);
+            } catch (e) {
+                // Decryption failed – we do not update background tile, it remains empty
+                if (target.el && target.el.parentNode) {
+                    target.el.parentNode.removeChild(target.el);
+                }
+            }
         });
 
         this.songWrapper.appendChild(el);
@@ -505,20 +518,108 @@ export class SongTakeover extends BaseSong {
     _revealTarget(target, plaintext) {
         if (target.state !== 'decrypting') return; // expired between click and decrypt resolve
         target.state = 'decoded';
+
+        // Remove decryption hint from target element if it exists
+        const hint = target.el.querySelector('.to-hint');
+        if (hint && hint.parentNode) {
+            hint.parentNode.removeChild(hint);
+        }
+
         target.textNode.nodeValue = plaintext;
         target.el.className = 'to-phrase decoded';
 
+        const tile = this.bgTiles[target.groupIndex];
+        if (!tile) {
+            // Fallback if background tile wasn't pre-built
+            if (target.el && target.el.parentNode) {
+                target.el.parentNode.removeChild(target.el);
+            }
+            this.takenCount++;
+            this.updateScore();
+            return;
+        }
+
+        // Animate fly to the background tile
+        const wrapperRect = this.songWrapper.getBoundingClientRect();
+        const tileRect = tile.getBoundingClientRect();
+        const elRect = target.el.getBoundingClientRect();
+
+        // Lock to pixel absolute positioning for seamless transition
+        target.el.style.left = `${elRect.left - wrapperRect.left}px`;
+        target.el.style.top = `${elRect.top - wrapperRect.top}px`;
+        target.el.style.width = `${elRect.width}px`;
+        target.el.style.height = `${elRect.height}px`;
+        target.el.style.margin = '0';
+        target.el.style.transform = 'none';
+
+        // Force a layout reflow
+        target.el.offsetHeight;
+
+        // Apply transition and fly to final background tile dimensions
+        target.el.style.transition = 'all 0.5s cubic-bezier(0.25, 1, 0.5, 1)';
+        target.el.style.left = `${tileRect.left - wrapperRect.left}px`;
+        target.el.style.top = `${tileRect.top - wrapperRect.top}px`;
+        target.el.style.width = `${tileRect.width}px`;
+        target.el.style.height = `${tileRect.height}px`;
+        target.el.style.fontSize = window.innerWidth <= 768 ? '10px' : '14px';
+        target.el.style.padding = window.innerWidth <= 768 ? '2px 4px' : '4px 8px';
+        target.el.style.borderColor = '#ff3a3a';
+        target.el.style.boxShadow = '0 0 10px rgba(255, 58, 58, 0.5)';
+
+        // Once the transition finishes, remove target element and light up the background tile
+        setTimeout(() => {
+            if (target.el && target.el.parentNode) {
+                target.el.parentNode.removeChild(target.el);
+            }
+            tile.textContent = plaintext;
+            tile.classList.add('decoded');
+        }, 500);
+
         this.takenCount++;
         this.updateScore();
+    }
 
-        setTimeout(() => {
-            if (target.el.parentNode) {
-                target.el.className = 'to-phrase expired';
-                setTimeout(() => {
-                    if (target.el.parentNode) target.el.parentNode.removeChild(target.el);
-                }, 400);
+    buildLyricCard() {
+        if (!this.isActive || !playerManager.player || !playerManager.player.video) return;
+
+        const video = playerManager.player.video;
+        this.allGroups = [];
+        this.bgTiles = {};
+
+        if (this.bgContainer) {
+            this.bgContainer.innerHTML = '';
+        }
+
+        let phrase = video.firstPhrase;
+        let index = 0;
+
+        while (phrase) {
+            const groups = groupPhraseWordsByMinLength(phrase, 4);
+            for (const g of groups) {
+                const groupObj = {
+                    index: index,
+                    text: g.text,
+                    startTime: g.startTime,
+                    endTime: g.endTime
+                };
+                this.allGroups.push(groupObj);
+
+                // Create static background tile
+                const tile = document.createElement('div');
+                tile.className = 'to-tile';
+                tile.textContent = g.text;
+                tile.setAttribute('data-index', index);
+
+                this.bgContainer.appendChild(tile);
+                this.bgTiles[index] = tile;
+
+                index++;
             }
-        }, 6400);
+            phrase = phrase.next;
+        }
+
+        this.totalCount = index;
+        this.updateScore();
     }
 
     // Called externally (phrase boundary expire)
@@ -595,7 +696,16 @@ export class SongTakeover extends BaseSong {
             const group = findGroupForWord(groups, word);
             if (group && group.startTime !== this.lastGroupStartTime) {
                 this.lastGroupStartTime = group.startTime;
-                this.spawnGroupTarget(group);
+                
+                // Match with pre-built allGroups to get the indexed group
+                const matchGroup = this.allGroups.find(g => g.startTime === group.startTime && g.text === group.text);
+                if (matchGroup) {
+                    const tile = this.bgTiles[matchGroup.index];
+                    // Only spawn if the background tile is not already decoded
+                    if (tile && !tile.classList.contains('decoded')) {
+                        this.spawnGroupTarget(matchGroup);
+                    }
+                }
             }
         }
     }
@@ -621,9 +731,22 @@ export class SongTakeover extends BaseSong {
         const styleEl = document.getElementById('takeover-style');
         if (styleEl) styleEl.parentNode.removeChild(styleEl);
 
+        if (this.boundBuildLyricCard) {
+            eventBus.off('videoReady', this.boundBuildLyricCard);
+            eventBus.off('timerReady', this.boundBuildLyricCard);
+        }
+
         if (this.monitorEl && this.monitorEl.parentNode) {
             this.monitorEl.parentNode.removeChild(this.monitorEl);
             this.monitorEl = null;
+        }
+
+        this.allGroups = [];
+        this.bgTiles = {};
+
+        if (this.bgContainer && this.bgContainer.parentNode) {
+            this.bgContainer.parentNode.removeChild(this.bgContainer);
+            this.bgContainer = null;
         }
 
         this.songWrapper.style.filter = '';

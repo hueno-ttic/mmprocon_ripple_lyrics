@@ -465,3 +465,79 @@
     }
 }
 
+/* ------------------------------------------------------------ */
+/* Takeover background tile styling (new) */
+/* ------------------------------------------------------------ */
+
+/* Container that holds all decoded‑lyric tiles */
+.to-bg-container {
+    position: absolute;
+    top: 13%;
+    left: 6%;
+    width: 88%;
+    height: 68%;
+    overflow-y: auto;             /* Allow scrolling if there are many lyrics */
+    pointer-events: none;        /* never block user interaction */
+    z-index: 10;                 /* Placed below phrase buttons (z-index 15) but above monitor background */
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    justify-content: flex-start;
+    gap: 6px 10px;
+    padding: 15px;
+    box-sizing: border-box;
+    scrollbar-width: none;       /* Hide scrollbar for clean UI */
+}
+.to-bg-container::-webkit-scrollbar {
+    display: none;               /* Hide scrollbar for WebKit browsers */
+}
+
+/* Individual lyric tile – appears as a semi‑transparent block */
+.to-tile {
+    position: relative;
+    display: inline-block;
+    padding: 4px 8px;
+    font-family: "Courier New", monospace;
+    font-size: 14px;
+    font-weight: bold;
+    line-height: 1.2;
+    border-radius: 4px;
+    transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+    box-sizing: border-box;
+    margin: 0;
+
+    /* Initial state: empty card placeholder */
+    color: transparent;
+    background: transparent;
+    border: 1px dashed rgba(255, 255, 255, 0.08);
+}
+
+/* Decoded lyric tile styling */
+.to-tile.decoded {
+    color: #fff;
+    background: rgba(255, 58, 58, 0.25);
+    border: 1px solid #ff3a3a;
+    text-shadow: 0 0 8px #ff3a3a, 0 0 15px #ff3a3a;
+    box-shadow: 0 0 10px rgba(255, 58, 58, 0.4);
+    animation: toTilePlace 0.5s ease-out forwards;
+}
+
+@keyframes toTilePlace {
+    0% { opacity: 0.5; transform: scale(0.9); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 768px) {
+    .to-tile {
+        font-size: 10px;
+        padding: 2px 4px;
+    }
+    .to-bg-container {
+        gap: 4px 6px;
+        padding: 8px;
+        top: 13%;
+        left: 5%;
+        width: 90%;
+        height: 65%;
+    }
+}
