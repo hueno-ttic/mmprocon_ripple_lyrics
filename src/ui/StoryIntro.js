@@ -1,3 +1,5 @@
+import { appState } from '../core/appState.js';
+
 export class StoryIntro {
     constructor(onComplete) {
         this.onComplete = onComplete;
@@ -58,8 +60,20 @@ export class StoryIntro {
 
         const raceOrText = (text, duration) => Promise.race([this.showText(text, duration), skipPromise]);
 
-        await raceOrText('ここは、問いが波紋になる世界。', 3000);
-        if (!this._skipped) await raceOrText('水面に浮かぶ記憶に触れてみてください。', 3500);
+        const phase = appState.getPhase();
+        const introTexts = [
+            ['よく晴れた空の下、一滴の水の旅がはじまる。', '陽にのぼる光のしずくに、触れてみてください。'],
+            ['のぼった水蒸気が、雲になって集まりだした。', '雲間に浮かぶ光に、触れてみてください。'],
+            ['集まった雲は、ついに雨を降らせた。', '雨の中に浮かぶ光に、触れてみてください。'],
+            ['雨があがり、地上に水たまりが残った。', '空を映す水たまりに、触れてみてください。'],
+            ['水たまりは流れ出し、小川になった。', '小川のほとりに浮かぶ光に、触れてみてください。'],
+            ['小川は合流し、大きな川になった。', '川を流れる光に、触れてみてください。'],
+            ['川はついに湖へとたどり着いた。', '湖面に浮かぶ光に、触れてみてください。'],
+        ];
+        const [line1, line2] = introTexts[phase] || introTexts[0];
+
+        await raceOrText(line1, 3000);
+        if (!this._skipped) await raceOrText(line2, 3500);
 
         this.container.style.transition = 'opacity 0.4s ease';
         this.container.style.opacity = '0';

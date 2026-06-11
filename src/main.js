@@ -1,7 +1,7 @@
 import { appState } from './core/appState.js';
 import { eventBus } from './core/eventBus.js';
 import { playerManager } from './core/player.js';
-import { LakeUI } from './lake/LakeUI.js';
+import { WorldUI } from './lake/WorldUI.js';
 import { PlayerControls } from './ui/PlayerControls.js';
 import { SONGS } from './config/songs.js';
 import { BaseSong } from './songs/BaseSong.js';
@@ -61,7 +61,7 @@ class Application {
             const storyIntro = new StoryIntro(() => {
                 // Intro finished, allow interaction & initialize LakeUI now!
                 console.log("Intro finished. Initializing LakeUI...");
-                this.lakeUI = new LakeUI(this.sceneContainer);
+                this.lakeUI = new WorldUI(this.sceneContainer);
                 
                 if (uiContainer) uiContainer.style.pointerEvents = 'none'; // Keep none so clicks pass through to canvas
                 this.lakeUI.container.style.pointerEvents = 'auto'; // allow canvas interaction
@@ -69,6 +69,12 @@ class Application {
             storyIntro.start();
         });
         titleScreen.start();
+
+        // ── DEBUG MODE(?debug=1 で有効。提出前にこのブロックと src/debug/ を削除)──
+        if (new URLSearchParams(location.search).get('debug') === '1') {
+            import('./debug/DebugPanel.js').then(m => m.initDebugPanel());
+        }
+        // ──────────────────────────────────────────────────────────────
     }
 
     bindEvents() {
@@ -97,12 +103,12 @@ class Application {
 
         eventBus.on('songEnd', () => {
             this._showSongEndOverlay(() => {
-                eventBus.emit('backToLake');
+                eventBus.emit('backToLake', { markComplete: true });
             });
         });
 
-        eventBus.on('backToLake', () => {
-            if (appState.currentSongId) {
+        eventBus.on('backToLake', ({ markComplete = false } = {}) => {
+            if (markComplete && appState.currentSongId) {
                 appState.markSongComplete(appState.currentSongId);
             }
             appState.setCurrentSong(null);
@@ -145,8 +151,10 @@ class Application {
             transition: color 1s ease 0.3s;
         `;
 
+        const phaseNames = ['晴れた空', '雲の下', '雨の中', '水たまりのそば', '小川のほとり', '川のほとり', '湖面'];
+        const phaseName = phaseNames[appState.getPhase()] || '湖面';
         const hint = document.createElement('div');
-        hint.textContent = '湖面へ戻ります…';
+        hint.textContent = `${phaseName}へ戻ります…`;
         hint.style.cssText = `
             margin-top: 16px;
             color: rgba(255,255,255,0);

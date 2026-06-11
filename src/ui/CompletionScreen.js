@@ -86,7 +86,7 @@ export class CompletionScreen {
         this.el.appendChild(title);
 
         const subtitle = document.createElement('p');
-        subtitle.textContent = '6つの問いすべてに向き合いました';
+        subtitle.textContent = '晴れた空の一滴は、湖になった ── 6つの問いすべてに向き合いました';
         subtitle.style.cssText = `
             color: rgba(255,255,255,0.55); font-size: clamp(11px, 2.2vw, 13px);
             letter-spacing: 0.3em; margin: 0 0 36px; text-align: center;
@@ -136,7 +136,7 @@ export class CompletionScreen {
 
         // Close button
         const btn = document.createElement('button');
-        btn.textContent = '湖面へ戻る';
+        btn.textContent = '湖のソナーレへ';
         btn.style.cssText = `
             padding: 11px 30px;
             border: 1px solid rgba(255,255,255,0.35);
