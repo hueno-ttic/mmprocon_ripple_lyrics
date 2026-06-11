@@ -162,9 +162,6 @@ class PlayerManager {
             if (song.video) {
                 options.video = song.video;
             }
-            if (song.altLyricsUrl && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-                options.altLyricsUrl = new URL(song.altLyricsUrl, window.location.href).href;
-            }
             this.player.createFromSongUrl(song.songUrl, options);
         }
     }

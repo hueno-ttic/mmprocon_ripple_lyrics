@@ -72,6 +72,9 @@ export class SongOrchestra extends BaseSong {
         this.currentVRM = null;
         this.relaxedQuaternions = null;
         this.tapAnimation = null;
+        this.hasTapped = false;
+        this.isFlying = false;
+        this.lastTappedMikuPos = null;
         this.baseMikuY = -3.2; // Adjusted down for Z=-13.0
         this.baseMikuX = 0;
         this.baseMikuZ = -13.0; // Placed behind the lyrics (Z=-11.0)
@@ -81,7 +84,7 @@ export class SongOrchestra extends BaseSong {
         const loader = new GLTFLoader();
         loader.register((parser) => new VRMLoaderPlugin(parser));
         loader.load(
-            '/assets/models/miku.vrm',
+            '/assets/models/model_miku.vrm',
             (gltf) => {
                 if (!this.isActive) {
                     this.disposeVRM(gltf.userData.vrm);
@@ -92,7 +95,7 @@ export class SongOrchestra extends BaseSong {
                 this.scene.add(vrm.scene);
                 vrm.scene.position.set(this.baseMikuX, this.baseMikuY, this.baseMikuZ);
                 vrm.scene.rotation.y = this.baseMikuRotY;
-                vrm.scene.scale.set(3.0, 3.0, 3.0); // Scale up to look natural at Z=-13.0
+                vrm.scene.scale.set(6.0, 6.0, 6.0); // Scale up 2x to look natural at Z=-13.0
                 
                 // Set initial relaxed pose
                 this.setupRelaxedPose(vrm);
@@ -356,27 +359,23 @@ export class SongOrchestra extends BaseSong {
         let index = 0;
         
         while (phrase) {
-            const groups = groupPhraseWords(phrase);
-            groups.forEach(group => {
-                // 記号類を削除（「 」 、 。 ? ! ？ ！ 等）
-                const cleanText = group.text.replace(/[「」『』、。？！?!.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
-                
-                // 空文字列になった場合は表示候補から除外
-                if (!cleanText) return;
-
+            // フレーズ全体のテキストを使用（記号類を除去）
+            const cleanText = phrase.text.replace(/[「」『』、。？！?!.,\/#!$%\^\&\*;:{}=\-_`~()]/g, "").trim();
+            
+            if (cleanText) {
                 this.allWordGroups.push({
                     index: index++,
                     text: cleanText,
-                    startTime: group.startTime,
-                    endTime: group.endTime,
+                    startTime: phrase.startTime,
+                    endTime: phrase.endTime,
                     phraseEndTime: phrase.endTime
                 });
-            });
+            }
             phrase = phrase.next;
         }
         
         this.allWordGroups.sort((a, b) => a.startTime - b.startTime);
-        console.log(`[ORCHESTRA] Pre-cached ${this.allWordGroups.length} word groups (symbols filtered).`);
+        console.log(`[ORCHESTRA] Pre-cached ${this.allWordGroups.length} phrases.`);
         this.lyricsCacheBuilt = true;
         return true;
     }
@@ -402,9 +401,9 @@ export class SongOrchestra extends BaseSong {
     }
 
     spawnText(lyricEntity, spawnTime) {
-        // 歌詞の同時出現数を最大3個に制限する
+        // フレーズ単位なので同時出現数を最大5個に制限する
         const activeLyrics = this.activeSprites.filter(s => !s.userData.isNode);
-        if (activeLyrics.length >= 3) {
+        if (activeLyrics.length >= 5) {
             const oldest = activeLyrics[0];
             this.disposeSprite(oldest);
             
@@ -440,10 +439,10 @@ export class SongOrchestra extends BaseSong {
             sprite.add(halo);
         }
         
-        let scale = 1.4 + Math.random() * 0.3; // 単語表示なので、少しだけコンパクトにして可読性を向上
-        if (aspect > 6.0) {
-            scale *= (6.0 / aspect); // Cap total horizontal width beautifully
-            scale = Math.max(1.0, scale); // Keep legible
+        let scale = 1.2 + Math.random() * 0.2; // フレーズ表示用にやや小さめのベーススケール
+        if (aspect > 10.0) {
+            scale *= (10.0 / aspect); // フレーズは長いのでキャップを広めに
+            scale = Math.max(0.7, scale); // 最低限の可読性を維持
         }
         
         // Ensure camera matrices are updated before projecting
@@ -510,20 +509,38 @@ export class SongOrchestra extends BaseSong {
             return false;
         };
         
-        // 画面中央（X=0付近）を完全に避けることで、カメラの正面視線を遮らないように配置
-        const xCandidates = [-5.5, -4.0, -2.5, 2.5, 4.0, 5.5];
-        const yCandidates = [-2.8, -2.4, -2.0, -1.6];
+        // 画面アスペクト比とカメラの視野角から、3D空間における可視領域を動的に算出して出現候補を決定
+        const dist = 21.0; // カメラZ(10) - オブジェクトZ(-11)
+        const fovRad = (this.camera.fov * Math.PI) / 180;
+        const visibleHeight = 2.0 * dist * Math.tan(fovRad / 2.0);
+        const visibleWidth = visibleHeight * this.camera.aspect;
+
+        // はみ出し防止のマージンを考慮した配置可能半幅・半高
+        const halfW = visibleWidth * 0.38;  // 左右端から十分な余裕をもたせる
+        const halfH = visibleHeight * 0.35; // 上下端から十分な余裕をもたせる
+
+        const xCandidates = [];
+        const yCandidates = [];
+        const cols = 10;
+        const rows = 8;
+
+        for (let i = 0; i < cols; i++) {
+            xCandidates.push(-halfW + (halfW * 2.0 * i) / (cols - 1));
+        }
+        for (let j = 0; j < rows; j++) {
+            yCandidates.push(-halfH + (halfH * 2.0 * j) / (rows - 1));
+        }
         
         let foundX = 0;
-        let foundY = -2.4;
+        let foundY = 0;
         let spawnZ = -11.0; // Zを-11.0に引っ込めてカメラを塞がないように調整
         let found = false;
         
         // Search passes with decreasing padding strictly to find optimal non-overlapping spots
         const passes = [
-            { padH: 45, padV: 50, below: 240 },
-            { padH: 25, padV: 30, below: 140 },
-            { padH: 10, padV: 15, below: 70 },
+            { padH: 60, padV: 60, below: 240 },
+            { padH: 35, padV: 40, below: 140 },
+            { padH: 15, padV: 20, below: 70 },
             { padH: 0,  padV: 0,  below: 0 }
         ];
         
@@ -549,9 +566,9 @@ export class SongOrchestra extends BaseSong {
         }
         
         if (!found) {
-            // Absolute backup fallback
-            foundX = (Math.random() - 0.5) * 6;
-            foundY = -2.3 - Math.random() * 0.3;
+            // Absolute backup fallback — 画面全体を使ってランダム配置
+            foundX = (Math.random() - 0.5) * 14;
+            foundY = (Math.random() - 0.5) * 7;
             console.warn(`[ORCHESTRA] Fallback spawning "${lyricEntity.text}" at (${foundX.toFixed(2)}, ${foundY.toFixed(2)})`);
         }
         
@@ -1241,7 +1258,62 @@ export class SongOrchestra extends BaseSong {
 
         // Update VRM Avatar animations & physics
         if (this.currentVRM) {
+            // Calculate responsive scale based on window width
+            const responsiveScale = Math.max(5.0, Math.min(14.0, (window.innerWidth / 1200) * 8.5));
+
+            // Determine if there are active lyrics on screen
+            const activeLyrics = this.activeSprites.filter(s => !s.userData.isNode);
+            const hasLyrics = activeLyrics.length > 0;
+
             const floatTime = position * 0.001; // Song time in seconds
+
+            if (!hasLyrics && !this.tapAnimation) {
+                // --- FLIGHT MODE (No lyrics on screen - glide in a Lissajous orbit) ---
+                this.isFlying = true;
+                const flightSpeed = floatTime * 0.6;
+                // Calculate dynamic path scale according to window aspect ratio
+                const dist = 21.0; // Camera Z(10) - Object Z(-11)
+                const fovRad = (this.camera.fov * Math.PI) / 180;
+                const visibleHeight = 2.0 * dist * Math.tan(fovRad / 2.0);
+                const visibleWidth = visibleHeight * this.camera.aspect;
+                
+                const flightRangeX = visibleWidth * 0.35;  // wide responsive movement
+                const flightRangeY = visibleHeight * 0.22; // tall responsive movement
+                
+                const targetFlightX = Math.sin(flightSpeed * 0.8) * flightRangeX;
+                const targetFlightY = Math.cos(flightSpeed * 1.2) * flightRangeY - (responsiveScale * 0.25);
+                const targetFlightZ = -13.0 + Math.sin(flightSpeed * 1.6) * 3.0;
+
+                // Glide smoothly to the flight path coordinates
+                this.baseMikuX += (targetFlightX - this.baseMikuX) * 0.03;
+                this.baseMikuY += (targetFlightY - this.baseMikuY) * 0.03;
+                this.baseMikuZ += (targetFlightZ - this.baseMikuZ) * 0.03;
+            } else {
+                // --- NORMAL / LYRIC ACTIVE MODE ---
+                this.isFlying = false;
+                
+                // If not tapped yet, adjust base position based on current scale dynamically
+                if (!this.hasTapped) {
+                    this.baseMikuX = 0;
+                    this.baseMikuY = -0.53 * responsiveScale;
+                    this.baseMikuZ = -13.0;
+                } else if (!this.tapAnimation) {
+                    // Smoothly slide back to the last tapped position or home position
+                    let targetHomeX = 0;
+                    let targetHomeY = -0.53 * responsiveScale;
+                    let targetHomeZ = -13.0;
+
+                    if (this.lastTappedMikuPos) {
+                        targetHomeX = this.lastTappedMikuPos.x;
+                        targetHomeY = this.lastTappedMikuPos.y;
+                        targetHomeZ = this.lastTappedMikuPos.z;
+                    }
+
+                    this.baseMikuX += (targetHomeX - this.baseMikuX) * 0.04;
+                    this.baseMikuY += (targetHomeY - this.baseMikuY) * 0.04;
+                    this.baseMikuZ += (targetHomeZ - this.baseMikuZ) * 0.04;
+                }
+            }
 
             // Gentle floating physics base calculation
             const floatX = this.baseMikuX + Math.cos(floatTime * 0.8) * 0.15;
@@ -1249,14 +1321,25 @@ export class SongOrchestra extends BaseSong {
             const floatZ = this.baseMikuZ;
             const basePos = new THREE.Vector3(floatX, floatY, floatZ);
 
-            // Keep facing front exactly (180 deg around Y)
-            this.currentVRM.scene.rotation.y = this.baseMikuRotY; 
-            this.currentVRM.scene.rotation.z = Math.sin(floatTime * 0.6) * 0.02; // Subtle tilt roll
+            // Apply slight flight banking roll and pitch in rotation if flying
+            if (this.isFlying) {
+                // Lean slightly forward and roll into the curve of the Lissajous path
+                const rollAmount = Math.cos(floatTime * 0.6) * 0.15;
+                const pitchAmount = Math.sin(floatTime * 1.2) * 0.08;
+                this.currentVRM.scene.rotation.y = this.baseMikuRotY;
+                this.currentVRM.scene.rotation.z = rollAmount;
+                this.currentVRM.scene.rotation.x = pitchAmount;
+            } else {
+                this.currentVRM.scene.rotation.y = this.baseMikuRotY; 
+                this.currentVRM.scene.rotation.z = Math.sin(floatTime * 0.6) * 0.02; // Subtle tilt roll
+                this.currentVRM.scene.rotation.x = 0; // reset pitch
+            }
 
             // Physics update for hair and costume joints (SpringBone) & Tap Animation elapsed time update
             const currentRealTime = performance.now();
             if (this.lastRealTime === undefined) this.lastRealTime = currentRealTime;
-            const deltaTime = Math.min(0.1, (currentRealTime - this.lastRealTime) / 1000);
+            // Cap deltaTime to 33ms (30fps equivalent) to prevent physics breakdown during frame drops
+            const deltaTime = Math.min(0.033, (currentRealTime - this.lastRealTime) / 1000);
             this.lastRealTime = currentRealTime;
 
             // Tap animation state and interpolation calculations
@@ -1293,21 +1376,27 @@ export class SongOrchestra extends BaseSong {
                     // Update Miku's base position to the last tapped lyric's position
                     // so she floats there instead of flying back to the center
                     this.baseMikuX = projectedTarget.x;
-                    this.baseMikuY = projectedTarget.y - 3.6;
-                    this.baseMikuZ = projectedTarget.z - 3.0;
+                    this.baseMikuY = projectedTarget.y + (-1.2 * responsiveScale);
+                    this.baseMikuZ = projectedTarget.z + (-1.0 * responsiveScale);
                     this.tapAnimation = null;
+
+                    // Save last tapped position to return back to after flight mode
+                    this.lastTappedMikuPos = new THREE.Vector3(this.baseMikuX, this.baseMikuY, this.baseMikuZ);
+
+                    // Reset SpringBone physics to prevent hair from locking in distorted poses when stop triggers
+                    if (this.currentVRM.springBoneManager) {
+                        this.currentVRM.springBoneManager.reset();
+                    }
                 }
             }
 
             // Miku body position interpolation (move to tapped lyric position and stay there)
             if (this.tapAnimation && projectedTarget) {
-                // Since Miku's scale is 3.0, her arm length and shoulder height are scaled.
-                // Target Y offset: -3.6 units below lyric center.
-                // Target Z offset: -3.0 units behind lyric center (in front of her shoulder).
+                // Adjust offsets dynamically based on responsive scale
                 const targetMikuPos = new THREE.Vector3(
                     projectedTarget.x,
-                    projectedTarget.y - 3.6,
-                    projectedTarget.z - 3.0
+                    projectedTarget.y + (-1.2 * responsiveScale),
+                    projectedTarget.z + (-1.0 * responsiveScale)
                 );
                 
                 const elapsed = this.tapAnimation.elapsed;
@@ -1335,22 +1424,44 @@ export class SongOrchestra extends BaseSong {
                 if (leftUpperArm) {
                     leftUpperArm.quaternion.copy(this.relaxedQuaternions.leftUpperArm);
                     const euler = new THREE.Euler().setFromQuaternion(leftUpperArm.quaternion);
-                    euler.z += Math.sin(floatTime * 1.5) * 0.05;
+                    if (this.isFlying) {
+                        // Glide arm wing pose
+                        euler.z += Math.PI / 4.5 + Math.sin(floatTime * 2.0) * 0.04;
+                        euler.x += Math.PI / 12.0;
+                    } else {
+                        euler.z += Math.sin(floatTime * 1.5) * 0.05;
+                    }
                     leftUpperArm.quaternion.setFromEuler(euler);
                 }
                 if (leftLowerArm) {
                     leftLowerArm.quaternion.copy(this.relaxedQuaternions.leftLowerArm);
+                    if (this.isFlying) {
+                        const euler = new THREE.Euler().setFromQuaternion(leftLowerArm.quaternion);
+                        euler.y += Math.PI / 8.0;
+                        leftLowerArm.quaternion.setFromEuler(euler);
+                    }
                 }
 
                 // Apply relaxed pose + breathing as base for right arm
                 if (rightUpperArm) {
                     rightUpperArm.quaternion.copy(this.relaxedQuaternions.rightUpperArm);
                     const euler = new THREE.Euler().setFromQuaternion(rightUpperArm.quaternion);
-                    euler.z -= Math.sin(floatTime * 1.5) * 0.05;
+                    if (this.isFlying) {
+                        // Glide arm wing pose
+                        euler.z -= Math.PI / 4.5 + Math.sin(floatTime * 2.0) * 0.04;
+                        euler.x += Math.PI / 12.0;
+                    } else {
+                        euler.z -= Math.sin(floatTime * 1.5) * 0.05;
+                    }
                     rightUpperArm.quaternion.setFromEuler(euler);
                 }
                 if (rightLowerArm) {
                     rightLowerArm.quaternion.copy(this.relaxedQuaternions.rightLowerArm);
+                    if (this.isFlying) {
+                        const euler = new THREE.Euler().setFromQuaternion(rightLowerArm.quaternion);
+                        euler.y -= Math.PI / 8.0;
+                        rightLowerArm.quaternion.setFromEuler(euler);
+                    }
                 }
 
                 // Superimpose arm extension animation if active
@@ -1397,10 +1508,8 @@ export class SongOrchestra extends BaseSong {
                 }
             }
 
-            // Rhythmic beat pulse scale effect
-            const beatPulse = Math.max(0, 1.0 - ((position % 500) / 500));
-            const avatarScale = 3.0 + beatPulse * 0.09; // Scaled base is 3.0
-            this.currentVRM.scene.scale.set(avatarScale, avatarScale, avatarScale);
+            // Set scale responsive to window size without beat pulse scaling (preventing jittery movement)
+            this.currentVRM.scene.scale.set(responsiveScale, responsiveScale, responsiveScale);
 
             // Rhythmic lipsync mouth animation synchronized with current vocal text
             if (currentWord && currentWord.text) {
@@ -1678,6 +1787,13 @@ export class SongOrchestra extends BaseSong {
         // 既にタップアニメーション進行中の場合は、新たなタップ処理を無視して多重動作を防ぐ
         if (this.tapAnimation) {
             return;
+        }
+
+        this.hasTapped = true; // Mark as tapped to stop auto-positioning based on scale
+
+        // Reset SpringBone physics to prevent hair twisting or jittering on sudden starting motion
+        if (this.currentVRM.springBoneManager) {
+            this.currentVRM.springBoneManager.reset();
         }
 
         // 歌詞スプライトの上昇・揺れ動作をフリーズ

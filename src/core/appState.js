@@ -1,5 +1,6 @@
 import { eventBus } from './eventBus.js';
 import { SONGS } from '../config/songs.js';
+import { PHASES } from '../config/constants.js';
 
 class AppState {
     constructor() {
@@ -8,6 +9,7 @@ class AppState {
         this.completedSongs = JSON.parse(localStorage.getItem('completedSongs') || '[]');
         this.isPlaying = false;
         this.currentTime = 0;
+        this._previousPhase = this.getPhase();
     }
 
     setLoading(isLoading) {
@@ -22,9 +24,11 @@ class AppState {
 
     markSongComplete(songId) {
         if (!this.completedSongs.includes(songId)) {
+            this._previousPhase = this.getPhase();
             this.completedSongs.push(songId);
             localStorage.setItem('completedSongs', JSON.stringify(this.completedSongs));
             eventBus.emit('songComplete', songId);
+            eventBus.emit('phaseChange', { from: this._previousPhase, to: this.getPhase() });
             if (this.completedSongs.length >= SONGS.length) {
                 setTimeout(() => eventBus.emit('allSongsComplete'), 1000);
             }
@@ -33,6 +37,18 @@ class AppState {
 
     isSongComplete(songId) {
         return this.completedSongs.includes(songId);
+    }
+
+    getPhase() {
+        return Math.min(this.completedSongs.length, PHASES.length - 1);
+    }
+
+    getPhaseName() {
+        return PHASES[this.getPhase()].name;
+    }
+
+    getPreviousPhase() {
+        return this._previousPhase;
     }
 }
 

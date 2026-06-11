@@ -127,7 +127,6 @@ export const SONGS = [
     artist: 'Twinfield',
     vocal: '初音ミク',
     songUrl: 'https://piapro.jp/t/E2i3/20251215092113',
-    altLyricsUrl: './assets/takeover_lyrics.txt',
     lyricUrl: 'https://piapro.jp/t/zxWP',
     video: {
       beatId: 4827298,
