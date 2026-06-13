@@ -212,6 +212,22 @@ export class SongKotaete extends BaseSong {
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, 128, 128);
         this.glowTexture = new THREE.CanvasTexture(canvas);
+
+        // リング(輪郭)テクスチャ — 「タップできる」合図と衝撃波に使う
+        const rc = document.createElement('canvas');
+        rc.width = 128; rc.height = 128;
+        const rx = rc.getContext('2d');
+        rx.strokeStyle = 'rgba(255,255,255,1)';
+        rx.lineWidth = 9;
+        rx.beginPath();
+        rx.arc(64, 64, 50, 0, Math.PI * 2);
+        rx.stroke();
+        rx.strokeStyle = 'rgba(255,255,255,0.35)';
+        rx.lineWidth = 18;
+        rx.beginPath();
+        rx.arc(64, 64, 50, 0, Math.PI * 2);
+        rx.stroke();
+        this.ringTexture = new THREE.CanvasTexture(rc);
     }
 
     // =====================================================================
@@ -470,6 +486,21 @@ export class SongKotaete extends BaseSong {
         sprite.userData.halo = halo;
         this.scene.add(halo);
 
+        // タップ対象を明示する光るアンダーライン(歌唱中の言葉ほど強く光る = 主目標)
+        const ring = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.glowTexture,
+            color: new THREE.Color(this.themeColor).lerp(new THREE.Color(0xffffff), 0.6),
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        }));
+        ring.scale.set(width * 0.92, height * 0.34, 1);
+        ring.position.set(sprite.position.x, sprite.position.y - height * 0.52, sprite.position.z - 0.04);
+        ring.renderOrder = -1;
+        sprite.userData.ring = ring;
+        this.scene.add(ring);
+
         this.scene.add(sprite);
         this.activeSprites.push(sprite);
     }
@@ -483,6 +514,12 @@ export class SongKotaete extends BaseSong {
         if (event.target && event.target.closest &&
             event.target.closest('.kotaete-choice-container, .song-tutorial-overlay')) {
             return;
+        }
+
+        // 選択中はオーブのタップを最優先
+        if (this.choiceActive && this.choiceOrbs) {
+            const orb = this._pickChoiceOrb(event.clientX, event.clientY);
+            if (orb) { this.applyChoice(orb.opt.color); return; }
         }
 
         // 指でも当てやすいよう、画面投影での最近傍ピック(判定マージン付き)
@@ -506,11 +543,14 @@ export class SongKotaete extends BaseSong {
 
     resonate(sprite, clientX, clientY) {
         sprite.userData.resonated = true;
-        sprite.userData.resonateFlash = 1.0;
+        sprite.userData.resonateFlash = 1.4; // 強めにポップ
         // 共鳴の還元①: 共鳴したフレーズは輝く軌跡として長く回廊に残る
         sprite.userData.life += 2800;
         this.resonanceCount++;
         this.updatePaletteResonance();
+
+        // タップした言葉から弾ける3D衝撃波リング(はっきりした手応え)
+        this.spawnShockwave(sprite.position.clone(), Math.max(sprite.scale.x, sprite.scale.y));
 
         // 波紋(DOM)
         const ripple = document.createElement('div');
@@ -525,6 +565,56 @@ export class SongKotaete extends BaseSong {
 
         // 光の粒がミクへ飛ぶ
         this.spawnFlyingParticles(sprite.position.clone());
+
+        // 絆ゲージを脈打たせて「増えた」と分かるように
+        if (this.gaugeFillEl) {
+            this.gaugeFillEl.classList.remove('bump');
+            void this.gaugeFillEl.offsetWidth;
+            this.gaugeFillEl.classList.add('bump');
+        }
+    }
+
+    // タップ位置から広がって消える発光リング(複数枚で奥行きを出す)
+    spawnShockwave(pos, baseSize) {
+        if (!this.shockwaves) this.shockwaves = [];
+        const color = new THREE.Color(this.worldColor).lerp(new THREE.Color(0xffffff), 0.5);
+        for (let k = 0; k < 2; k++) {
+            const ring = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this.ringTexture,
+                color,
+                transparent: true,
+                opacity: 0.9,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+            }));
+            ring.position.copy(pos);
+            ring.position.z -= 0.02;
+            const start = baseSize * (0.5 + k * 0.2);
+            ring.scale.set(start, start, 1);
+            ring.userData = { t: -k * 0.12, start, end: baseSize * (2.8 + k * 0.6) };
+            this.scene.add(ring);
+            this.shockwaves.push(ring);
+        }
+    }
+
+    updateShockwaves(deltaSec) {
+        if (!this.shockwaves) return;
+        for (let i = this.shockwaves.length - 1; i >= 0; i--) {
+            const r = this.shockwaves[i];
+            r.userData.t += deltaSec * 2.4;
+            const t = r.userData.t;
+            if (t < 0) continue;
+            if (t >= 1) {
+                this.scene.remove(r);
+                r.material.dispose();
+                this.shockwaves.splice(i, 1);
+                continue;
+            }
+            const ease = 1 - Math.pow(1 - t, 2);
+            const sz = r.userData.start + (r.userData.end - r.userData.start) * ease;
+            r.scale.set(sz, sz, 1);
+            r.material.opacity = 0.9 * (1 - t);
+        }
     }
 
     spawnFlyingParticles(fromPos) {
@@ -723,7 +813,7 @@ export class SongKotaete extends BaseSong {
             }
             s.scale.set(dispW, dispH, 1);
 
-            // タップできる合図のハロー(未共鳴のみ脈動、共鳴で消える)
+            // タップできる合図(未共鳴のみ脈動、共鳴で消える)
             if (ud.halo) {
                 ud.halo.position.set(s.position.x, s.position.y, s.position.z - 0.05);
                 if (ud.resonated) {
@@ -733,6 +823,20 @@ export class SongKotaete extends BaseSong {
                     ud.halo.material.opacity = (0.18 + breathe * 0.22) * s.material.opacity;
                     const hs = 1.0 + breathe * 0.08;
                     ud.halo.scale.set(dispW * 1.25 * hs, dispH * 2.0 * hs, 1);
+                }
+            }
+            if (ud.ring) {
+                ud.ring.position.set(s.position.x, s.position.y - dispH * 0.52, s.position.z - 0.04);
+                if (ud.resonated) {
+                    ud.ring.material.opacity = Math.max(0, ud.ring.material.opacity - deltaSec * 3.0);
+                } else {
+                    // 歌唱中の言葉ほど強く速く脈動 = 「今これに触れて」と分かる
+                    const sungBoost = ud.pulseProgress;
+                    const speed = 0.005 + sungBoost * 0.004;
+                    const pulse = 0.5 + 0.5 * Math.sin(now * speed + ud.haloPulse);
+                    ud.ring.material.opacity = (0.3 + sungBoost * 0.55 + pulse * 0.2) * s.material.opacity;
+                    const grow = 1.0 + pulse * 0.08 + sungBoost * 0.12;
+                    ud.ring.scale.set(dispW * 0.92 * grow, dispH * 0.34, 1);
                 }
             }
 
@@ -765,6 +869,10 @@ export class SongKotaete extends BaseSong {
                     this.scene.remove(ud.halo);
                     ud.halo.material.dispose();
                 }
+                if (ud.ring) {
+                    this.scene.remove(ud.ring);
+                    ud.ring.material.dispose();
+                }
                 this.activeSprites.splice(i, 1);
             }
         }
@@ -772,6 +880,8 @@ export class SongKotaete extends BaseSong {
         // ---- ミク & 光の粒 ----
         this.updateMiku(position, beatPulse);
         this.updateFlyingParticles(deltaSec);
+        this.updateShockwaves(deltaSec);
+        this.updateChoiceOrbs(now);
 
         this._lastFrameReal = now;
     }
@@ -809,64 +919,136 @@ export class SongKotaete extends BaseSong {
     showChoiceButtons() {
         const round = this.choiceRounds[Math.min(this.choicesMade, this.choiceRounds.length - 1)];
 
-        this.choiceContainer = document.createElement('div');
-        this.choiceContainer.className = 'kotaete-choice-container';
+        // 念のため既存オーブ・残ラベルを掃除(シーク等での残留防止)
+        if (this.choiceOrbs) this._clearChoiceOrbs();
+        this.songWrapper.querySelectorAll('.kotaete-orb-label').forEach(el => el.remove());
 
-        const hexToRgba = (hex, alpha) => {
-            const r = parseInt(hex.slice(1, 3), 16);
-            const g = parseInt(hex.slice(3, 5), 16);
-            const b = parseInt(hex.slice(5, 7), 16);
-            return `rgba(${r},${g},${b},${alpha})`;
+        // ミクが左右に差し出す、ワールド内の光るオーブ。これをタップして答える
+        this.choiceOrbs = [];
+        const baseZ = this.camera.position.z - 9.5;
+        const makeOrb = (opt, side) => {
+            const color = new THREE.Color(opt.color);
+            const group = new THREE.Group();
+            group.position.set(side * 3.4, 1.0, baseZ);
+
+            const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this.glowTexture, color, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending,
+            }));
+            glow.scale.set(4.4, 4.4, 1);
+            group.add(glow);
+
+            const core = new THREE.Mesh(
+                new THREE.SphereGeometry(0.62, 24, 18),
+                new THREE.MeshBasicMaterial({ color: color.clone().lerp(new THREE.Color(0xffffff), 0.35) })
+            );
+            group.add(core);
+
+            const ring = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this.ringTexture, color: color.clone().lerp(new THREE.Color(0xffffff), 0.5),
+                transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+            }));
+            ring.scale.set(2.6, 2.6, 1);
+            group.add(ring);
+
+            this.scene.add(group);
+
+            // 浮遊ラベル(DOM) — 毎フレーム投影で追従
+            const label = document.createElement('div');
+            label.className = 'kotaete-orb-label';
+            label.style.borderColor = opt.color;
+            label.innerHTML = `<span class="orb-main">${opt.main}</span><span class="orb-sub">${opt.sub}</span>`;
+            this.songWrapper.appendChild(label);
+            this._choiceTimers.push(setTimeout(() => label.classList.add('visible'), 60));
+
+            return { group, glow, core, ring, label, color, opt, side, ph: Math.random() * 6.28, born: performance.now() };
         };
+        this.choiceOrbs.push(makeOrb(round.left, -1));
+        this.choiceOrbs.push(makeOrb(round.right, 1));
 
-        const createBtn = (opt) => {
-            const btn = document.createElement('button');
-            btn.className = 'kotaete-choice-btn';
-            btn.style.border = `2px solid ${opt.color}`;
-            btn.innerHTML = `
-                <span class="choice-main">${opt.main}</span>
-                <span class="choice-sub">${opt.sub}</span>
-            `;
-            const on = () => {
-                btn.style.background = hexToRgba(opt.color, 0.35);
-                btn.style.boxShadow = `0 0 20px ${opt.color}`;
-            };
-            const off = () => {
-                btn.style.background = 'rgba(0,0,0,0.5)';
-                btn.style.boxShadow = 'none';
-            };
-            btn.addEventListener('mouseenter', on);
-            btn.addEventListener('mouseleave', off);
-            btn.addEventListener('touchstart', on, { passive: true });
-            btn.addEventListener('click', () => this.applyChoice(opt.color));
-            return btn;
-        };
-
-        this.choiceContainer.appendChild(createBtn(round.left));
-        this.choiceContainer.appendChild(createBtn(round.right));
-        this.songWrapper.appendChild(this.choiceContainer);
-        this._choiceTimers.push(setTimeout(() => {
-            if (this.choiceContainer) this.choiceContainer.classList.add('visible');
-        }, 50));
-
-        // キーボード対応
-        const btns = Array.from(this.choiceContainer.querySelectorAll('.kotaete-choice-btn'));
-        let focusIdx = -1;
+        // キーボード対応(←/→で選ぶ)
         this._choiceKeyHandler = (e) => {
-            if (!this.choiceContainer || !this.choiceContainer.parentNode) return;
-            if (e.code === 'ArrowLeft') {
-                e.preventDefault(); focusIdx = 0; btns[0].focus();
-            } else if (e.code === 'ArrowRight') {
-                e.preventDefault(); focusIdx = 1; btns[1].focus();
-            } else if ((e.code === 'Space' || e.code === 'Enter') && focusIdx >= 0) {
-                e.preventDefault(); btns[focusIdx].click();
-            }
+            if (!this.choiceOrbs) return;
+            if (e.code === 'ArrowLeft') { e.preventDefault(); this.applyChoice(round.left.color); }
+            else if (e.code === 'ArrowRight') { e.preventDefault(); this.applyChoice(round.right.color); }
         };
         document.addEventListener('keydown', this._choiceKeyHandler);
     }
 
+    updateChoiceOrbs(now) {
+        if (!this.choiceOrbs) return;
+        const widthHalf = window.innerWidth / 2;
+        const heightHalf = window.innerHeight / 2;
+        const v = new THREE.Vector3();
+        for (const orb of this.choiceOrbs) {
+            const appear = Math.min(1, (now - orb.born) / 500);
+            const breathe = 0.5 + 0.5 * Math.sin(now * 0.004 + orb.ph);
+            // カメラは前進し続けるので、毎フレーム前方に追従させ続ける
+            orb.group.position.x = orb.side * 3.4;
+            orb.group.position.z = this.camera.position.z - 9.5;
+            orb.group.position.y = 1.0 + Math.sin(now * 0.002 + orb.ph) * 0.15;
+            orb.glow.material.opacity = (0.55 + breathe * 0.3) * appear;
+            orb.ring.material.opacity = (0.4 + breathe * 0.35) * appear;
+            const rs = 2.6 * (1.0 + breathe * 0.12);
+            orb.ring.scale.set(rs, rs, 1);
+            const cs = 0.62 * (1.0 + breathe * 0.06) * appear;
+            orb.core.scale.set(cs / 0.62, cs / 0.62, cs / 0.62);
+
+            // ラベルをオーブ上に追従
+            v.copy(orb.group.position).project(this.camera);
+            if (v.z < 1) {
+                const x = v.x * widthHalf + widthHalf;
+                const y = -v.y * heightHalf + heightHalf;
+                orb.label.style.left = `${x}px`;
+                orb.label.style.top = `${y + 70}px`;
+                orb.label.style.opacity = String(appear);
+            }
+        }
+    }
+
+    // 選択オーブのタップ判定(onPointerDownから優先的に呼ぶ)
+    _pickChoiceOrb(clientX, clientY) {
+        if (!this.choiceOrbs) return null;
+        const widthHalf = window.innerWidth / 2;
+        const heightHalf = window.innerHeight / 2;
+        const v = new THREE.Vector3();
+        let best = null, bestD = Infinity;
+        const threshold = Math.max(120, window.innerWidth * 0.12);
+        for (const orb of this.choiceOrbs) {
+            v.copy(orb.group.position).project(this.camera);
+            if (v.z >= 1) continue;
+            const x = v.x * widthHalf + widthHalf;
+            const y = -v.y * heightHalf + heightHalf;
+            const d = Math.hypot(clientX - x, clientY - y);
+            if (d < threshold && d < bestD) { bestD = d; best = orb; }
+        }
+        return best;
+    }
+
+    _clearChoiceOrbs() {
+        if (!this.choiceOrbs) return;
+        for (const orb of this.choiceOrbs) {
+            this.scene.remove(orb.group);
+            orb.group.traverse((o) => {
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) o.material.dispose();
+            });
+            if (orb.label && orb.label.parentNode) orb.label.parentNode.removeChild(orb.label);
+        }
+        this.choiceOrbs = null;
+    }
+
     applyChoice(colorHex) {
         if (!this.choiceActive) return;
+
+        // 選んだオーブが弾けて世界へ色が広がる(はっきりした手応え)
+        if (this.choiceOrbs) {
+            const picked = this.choiceOrbs.find(o => o.opt.color === colorHex);
+            if (picked) {
+                this.spawnShockwave(picked.group.position.clone(), 4.0);
+                this.spawnFlyingParticles(picked.group.position.clone());
+            }
+        }
 
         this.chosenColors.push(colorHex);
         this.choicesMade++;
@@ -925,13 +1107,19 @@ export class SongKotaete extends BaseSong {
             this.currentVRM.springBoneManager.reset();
         }
 
-        if (this.choiceContainer) {
-            const container = this.choiceContainer;
-            this.choiceContainer = null;
-            container.style.pointerEvents = 'none'; // 残骸クリック防止
-            container.style.opacity = '0';
-            this._domTimers.push(setTimeout(() => {
-                if (container.parentNode) container.parentNode.removeChild(container);
+        // 選択オーブとラベルをフェードして撤収
+        if (this.choiceOrbs) {
+            this.choiceOrbs.forEach(o => { if (o.label) o.label.classList.remove('visible'); });
+            const orbs = this.choiceOrbs;
+            this.choiceOrbs = null; // タップ判定を即無効化
+            this._capturedOrbs = orbs;
+            this._choiceTimers.push(setTimeout(() => {
+                orbs.forEach(o => {
+                    this.scene.remove(o.group);
+                    o.group.traverse((ob) => { if (ob.geometry) ob.geometry.dispose(); if (ob.material) ob.material.dispose(); });
+                    if (o.label && o.label.parentNode) o.label.parentNode.removeChild(o.label);
+                });
+                this._capturedOrbs = null;
             }, 500));
         }
         if (this._choiceKeyHandler) {
@@ -1111,13 +1299,34 @@ export class SongKotaete extends BaseSong {
                 pointer-events: none;
                 transition: opacity 1s ease;
             }
-            /* 選択UIはミク(画面中央)を隠さないよう下寄せ+改行抑止 */
-            .kotaete-choice-container {
-                top: 72% !important;
-            }
-            .kotaete-choice-btn .choice-main,
-            .kotaete-choice-btn .choice-sub {
+            /* オーブに付く浮遊ラベル(ワールド座標から毎フレーム追従) */
+            .kotaete-orb-label {
+                position: absolute;
+                transform: translate(-50%, 0);
+                padding: 6px 14px;
+                border: 1.5px solid #7F77DD;
+                border-radius: 12px;
+                background: rgba(6, 6, 20, 0.72);
+                backdrop-filter: blur(4px);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 1px;
+                pointer-events: none;
+                opacity: 0;
+                z-index: 30;
                 white-space: nowrap;
+                transition: opacity 0.4s ease;
+            }
+            .kotaete-orb-label .orb-main {
+                font-size: 16px;
+                font-weight: 700;
+                color: #fff;
+                letter-spacing: 0.04em;
+            }
+            .kotaete-orb-label .orb-sub {
+                font-size: 11px;
+                color: rgba(255, 255, 255, 0.72);
             }
             .kotaete-palette-slot.silent {
                 background: rgba(150, 150, 165, 0.5) !important;
@@ -1151,6 +1360,12 @@ export class SongKotaete extends BaseSong {
                 background: #7F77DD;
                 border-radius: 5px;
                 transition: height 0.5s cubic-bezier(0.22, 1, 0.36, 1), background 0.6s ease;
+            }
+            .kotaete-gauge-fill.bump { animation: kotaete-gauge-bump 0.4s ease; }
+            @keyframes kotaete-gauge-bump {
+                0% { filter: brightness(1); transform: scaleX(1); }
+                40% { filter: brightness(2.2); transform: scaleX(1.7); }
+                100% { filter: brightness(1); transform: scaleX(1); }
             }
             .kotaete-gauge-label {
                 font-size: 11px;
@@ -1341,6 +1556,10 @@ export class SongKotaete extends BaseSong {
                 this.scene.remove(s.userData.halo);
                 s.userData.halo.material.dispose();
             }
+            if (s.userData.ring) {
+                this.scene.remove(s.userData.ring);
+                s.userData.ring.material.dispose();
+            }
         });
         this.activeSprites = [];
 
@@ -1383,6 +1602,20 @@ export class SongKotaete extends BaseSong {
             this.glowTexture.dispose();
             this.glowTexture = null;
         }
+        if (this.ringTexture) {
+            this.ringTexture.dispose();
+            this.ringTexture = null;
+        }
+        // 衝撃波・選択オーブ(撤収中のものを含む)を解放
+        (this.shockwaves || []).forEach(r => { this.scene.remove(r); r.material.dispose(); });
+        this.shockwaves = null;
+        const orbSets = [this.choiceOrbs, this._capturedOrbs].filter(Boolean);
+        orbSets.forEach(set => set.forEach(o => {
+            this.scene.remove(o.group);
+            o.group.traverse(ob => { if (ob.geometry) ob.geometry.dispose(); if (ob.material) ob.material.dispose(); });
+            if (o.label && o.label.parentNode) o.label.parentNode.removeChild(o.label);
+        }));
+        this.choiceOrbs = null; this._capturedOrbs = null;
 
         // DOM
         if (this.choiceContainer && this.choiceContainer.parentNode) {
