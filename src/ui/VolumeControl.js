@@ -94,13 +94,15 @@ export class VolumeControl {
         style.textContent = `
             .app-volume-control {
                 position: fixed;
-                right: 14px;
-                bottom: 64px;
+                right: 12px;
+                top: 50%;
+                transform: translateY(-50%);
                 z-index: 1200;
                 display: flex;
+                flex-direction: column;
                 align-items: center;
-                gap: 8px;
-                padding: 7px 12px 7px 8px;
+                gap: 10px;
+                padding: 12px 8px;
                 border-radius: 22px;
                 background: rgba(8, 12, 24, 0.62);
                 border: 1px solid rgba(255, 255, 255, 0.18);
@@ -122,38 +124,40 @@ export class VolumeControl {
             .app-volume-slider {
                 -webkit-appearance: none;
                 appearance: none;
-                width: 110px;
-                height: 4px;
-                border-radius: 2px;
-                background: linear-gradient(to right,
+                writing-mode: vertical-lr;
+                direction: rtl;            /* 下=0, 上=100 */
+                width: 5px;
+                height: 130px;
+                border-radius: 3px;
+                background: linear-gradient(to top,
                     rgba(255,255,255,0.9) var(--vol, 80%),
                     rgba(255,255,255,0.22) var(--vol, 80%));
                 outline: none;
                 cursor: pointer;
             }
             .app-volume-control.muted .app-volume-slider {
-                background: linear-gradient(to right,
+                background: linear-gradient(to top,
                     rgba(255,255,255,0.35) var(--vol, 80%),
                     rgba(255,255,255,0.15) var(--vol, 80%));
             }
             .app-volume-slider::-webkit-slider-thumb {
                 -webkit-appearance: none;
-                width: 14px;
-                height: 14px;
+                width: 15px;
+                height: 15px;
                 border-radius: 50%;
                 background: #fff;
                 box-shadow: 0 0 6px rgba(0,0,0,0.5);
             }
             .app-volume-slider::-moz-range-thumb {
-                width: 14px;
-                height: 14px;
+                width: 15px;
+                height: 15px;
                 border: none;
                 border-radius: 50%;
                 background: #fff;
             }
             @media (max-width: 600px) {
-                .app-volume-control { bottom: 110px; right: 10px; }
-                .app-volume-slider { width: 80px; }
+                .app-volume-control { right: 8px; padding: 10px 6px; }
+                .app-volume-slider { height: 104px; }
             }
         `;
         document.head.appendChild(style);
