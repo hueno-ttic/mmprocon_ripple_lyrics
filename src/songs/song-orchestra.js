@@ -1645,6 +1645,43 @@ export class SongOrchestra extends BaseSong {
                 if (rightUpperArm) rightUpperArm.rotation.z = -(Math.PI / 6) - Math.sin(floatTime * 1.5) * 0.05;
             }
 
+            // アイドル時にちょくちょく客席(プレイヤー)へ手を振る挨拶。
+            // 飛行中・歌詞タップ中は本来の演出を優先するため挨拶しない。
+            if (this.greetTimer === undefined) {
+                this.greetTimer = 6 + Math.random() * 4; this.greetActive = false;
+                this.greetElapsed = 0; this.greetWave = 0;
+            }
+            const greetBusy = this.isFlying || !!this.tapAnimation;
+            if (greetBusy) {
+                this.greetActive = false; this.greetWave = 0;
+            } else if (!this.greetActive) {
+                this.greetTimer -= deltaTime;
+                if (this.greetTimer <= 0) { this.greetActive = true; this.greetElapsed = 0; }
+            }
+            if (this.greetActive) {
+                const GD = 2.8;
+                this.greetElapsed += deltaTime;
+                this.greetWave = Math.sin(Math.min(1, this.greetElapsed / GD) * Math.PI); // 0→1→0
+                if (this.greetElapsed >= GD) {
+                    this.greetActive = false; this.greetWave = 0;
+                    this.greetTimer = 7 + Math.random() * 5;
+                }
+            }
+            if (this.greetWave > 0 && rightUpperArm) {
+                const wv = this.greetWave;
+                const swing = Math.sin(floatTime * 12) * 0.5; // 速い手振り
+                // 既存ポーズの上に加算して右手を上げ、左右に振る
+                const eu = new THREE.Euler().setFromQuaternion(rightUpperArm.quaternion);
+                eu.z += -1.1 * wv + swing * wv;  // 右腕はzを下げると上がる
+                eu.x += -1.0 * wv;               // 前方(客席)へ
+                rightUpperArm.quaternion.setFromEuler(eu);
+                if (rightLowerArm) {
+                    const el = new THREE.Euler().setFromQuaternion(rightLowerArm.quaternion);
+                    el.z += (Math.PI / 3) * wv;  // 肘を曲げ前腕を立てる
+                    rightLowerArm.quaternion.setFromEuler(el);
+                }
+            }
+
             // Head/neck lookAt tracking (looking at the lyric during tap, otherwise looking at camera)
             const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
             if (neck) {

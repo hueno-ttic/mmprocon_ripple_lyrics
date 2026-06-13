@@ -605,6 +605,36 @@ export class SongAfter extends BaseSong {
             rL.rotation.z = lerp(0, 0.18);
         }
 
+        // ちょくちょく客席(プレイヤー)へ手を振る挨拶。ミクは正面を向いたまま。
+        // サビ(両腕オープン)・終演中は本来の演出を優先するので挨拶しない。
+        if (this.greetTimer === undefined) {
+            this.greetTimer = 6 + Math.random() * 4; this.greetActive = false;
+            this.greetElapsed = 0; this.greetWave = 0;
+        }
+        const greetBusy = this.isClimax || this.finaleP >= 0.3;
+        if (greetBusy) {
+            this.greetActive = false; this.greetWave = 0;
+        } else if (!this.greetActive) {
+            this.greetTimer -= dt;
+            if (this.greetTimer <= 0) { this.greetActive = true; this.greetElapsed = 0; }
+        }
+        if (this.greetActive) {
+            const GD = 2.8;
+            this.greetElapsed += dt;
+            this.greetWave = Math.sin(Math.min(1, this.greetElapsed / GD) * Math.PI); // 0→1→0
+            if (this.greetElapsed >= GD) {
+                this.greetActive = false; this.greetWave = 0;
+                this.greetTimer = 7 + Math.random() * 5;
+            }
+        }
+        if (this.greetWave > 0 && rU) {
+            const wv = this.greetWave;
+            const swing = Math.sin(rel * 12) * 0.5; // 速い手振り
+            rU.rotation.z += (-Math.PI / 16 - rU.rotation.z) * wv + swing * wv; // 上げて左右へ
+            rU.rotation.x += (-Math.PI / 2.6 - rU.rotation.x) * wv;             // 前方へ
+            if (rL) rL.rotation.z += (Math.PI / 3) * wv;                        // 肘を曲げ前腕を立てる
+        }
+
         // 頭: スポットライトがミク付近に当たると顔をそちらへ (クランプ付き)
         const head = vrm.humanoid.getNormalizedBoneNode('head');
         if (head) {
