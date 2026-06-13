@@ -42,6 +42,8 @@ export class SongKotaete extends BaseSong {
         this.mikuLoaded = false;
         this.mikuFacingTarget = Math.PI;  // PI = 背中向き(進行方向) / 0 = カメラの方を向く
         this.mikuRotY = Math.PI;
+        this.mikuDepth = 11;              // カメラからの奥行き(曲展開で前後に動かす)
+        this._mikuRise = 0;               // サビでの上昇量(補間)
         this.reachBlend = 0;              // 0=脱力 1=手を差し伸べる
         this.reachBlendTarget = 0;
         this.mikuGlowPulse = 0;
@@ -314,12 +316,28 @@ export class SongKotaete extends BaseSong {
 
         const vs = this.currentVRM.scene;
 
-        // 回廊の少し先を先導(カメラ相対で固定し、上下にゆったり浮遊)
+        // 曲の進行に応じてミクが前後左右・上下へダイナミックに動く(単調さ回避)
+        // --- 奥行き: 長短周期のうねり + サビで前進 + ビートで弾む + 振り返りで接近 ---
+        let depthTarget = 11
+            + Math.sin(t * 0.13) * 3.2      // 長周期: ゆっくり奥へ/手前へ
+            + Math.sin(t * 0.31) * 1.8;     // 中周期のうねり
+        if (this.isClimax) depthTarget -= 4.5;        // サビは前へ出てくる
+        if (this.greetActive) depthTarget -= 2.2;     // 振り返るとき少し近づく
+        depthTarget -= beatPulse * 1.4;               // ビート頭で前へ弾む
+        depthTarget = Math.max(6.5, Math.min(16.5, depthTarget));
+        this.mikuDepth += (depthTarget - this.mikuDepth) * Math.min(1, deltaSec * 1.4);
+        vs.position.z = this.camera.position.z - this.mikuDepth;
+
+        // --- 左右: 8の字に weaving(近いほど振り幅を抑えて枠外に出さない) ---
+        const nearK = Math.max(0.4, Math.min(1, (this.mikuDepth - 5) / 8));
+        const swayX = (Math.sin(t * 0.37) * 1.7 + Math.sin(t * 0.83) * 0.6) * nearK;
+        vs.position.x += (swayX - vs.position.x) * 0.04;
+
+        // --- 上下: 浮遊のbob + サビで少し上昇 ---
         const bobY = Math.sin(t * 1.25) * 0.35 + Math.sin(t * 0.47) * 0.12;
-        const swayX = Math.sin(t * 0.6) * 0.55;
-        vs.position.x += ((swayX) - vs.position.x) * 0.05;
-        vs.position.y = 1.5 + bobY + beatPulse * 0.08;
-        vs.position.z = this.camera.position.z - 11;
+        const riseTarget = this.isClimax ? 0.7 : 0.0;
+        this._mikuRise += (riseTarget - this._mikuRise) * Math.min(1, deltaSec * 1.2);
+        vs.position.y = 1.5 + bobY + this._mikuRise + beatPulse * 0.1;
 
         // ちょくちょく振り返って手を振る挨拶(選択・フィナーレ中は本来の演出を優先)
         this.updateGreet(deltaSec);
@@ -811,6 +829,7 @@ export class SongKotaete extends BaseSong {
             chorus = playerManager.player.findChorus(position);
         }
         const isClimax = !!chorus;
+        this.isClimax = isClimax; // updateMiku / spawnText から参照(サビ演出)
 
         if (chorus && this.choicesMade < this.maxChoices && !this.choiceActive
             && !this.consumedChoruses.has(chorus.startTime)) {
