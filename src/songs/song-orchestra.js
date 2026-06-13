@@ -96,7 +96,7 @@ export class SongOrchestra extends BaseSong {
         const loader = new GLTFLoader();
         loader.register((parser) => new VRMLoaderPlugin(parser));
         loader.load(
-            '/assets/models/model_miku.vrm',
+            import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
             (gltf) => {
                 if (!this.isActive) {
                     this.disposeVRM(gltf.userData.vrm);

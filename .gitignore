@@ -41,7 +41,10 @@ verify_fixes.cjs
 scratch/
 
 # Drafts and Backup Source Files
-src/**/*_*.js
+# (二重拡張子のみ無視。`src/**/*_*.js` は song_data.js 等の正規ファイルまで
+#  無言で無視してしまう地雷だったため、明示的な接尾辞に限定)
+src/**/*.draft.js
+src/**/*.bak.js
 
 # Local Tests, Playwright Config & E2E Run Artifacts
 coverage/
