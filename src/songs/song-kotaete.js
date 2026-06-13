@@ -348,25 +348,74 @@ export class SongKotaete extends BaseSong {
     // =====================================================================
     // 歌詞スプライト
     // =====================================================================
+    // 実測してテクスチャを可変サイズにし、長文は2行に折り返す。
+    // 戻り値の aspect でスプライト比率を決めるため、テクスチャ内・画面内
+    // どちらでも歌詞が見切れない。
     createTextTexture(text, colorStr) {
+        const FONT = 'bold 80px "Inter", "Noto Sans JP", "Hiragino Kaku Gothic Pro", sans-serif';
+        const PAD = 56;
+        const LINE_H = 116;
+        const MAX_LINE = 1100; // この幅を超えたら2行に折り返す
+
+        const meas = document.createElement('canvas').getContext('2d');
+        meas.font = FONT;
+        const fullW = meas.measureText(text).width;
+
+        // 行分割: 1行で収まればそのまま、収まらなければ中央付近で2分割
+        let lines = [text];
+        if (fullW > MAX_LINE && text.length >= 4) {
+            let best = Math.ceil(text.length / 2);
+            // 句読点や助詞の近くで割れるよう微調整
+            for (let off = 0; off <= 3; off++) {
+                const c = text[best + off];
+                if (c && '、。　 はがにをのとへもや'.includes(c)) { best = best + off + 1; break; }
+            }
+            lines = [text.slice(0, best), text.slice(best)];
+        }
+
+        const lineWidths = lines.map(l => meas.measureText(l).width);
+        const w = Math.ceil(Math.min(MAX_LINE, Math.max(...lineWidths)) + PAD);
+        const h = LINE_H * lines.length + PAD;
+
         const canvas = document.createElement('canvas');
-        canvas.width = 1024;
-        canvas.height = 128;
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, 1024, 128);
-        ctx.font = 'bold 80px "Inter", "Noto Sans JP", "Hiragino Kaku Gothic Pro", sans-serif';
+        ctx.font = FONT;
         ctx.fillStyle = '#ffffff';
         ctx.shadowColor = colorStr;
         ctx.shadowBlur = 22;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(text, 512, 64);
-        return new THREE.CanvasTexture(canvas);
+        // 長すぎる行は最大幅へスケール(切れさせない最後の保険)
+        lines.forEach((line, i) => {
+            const lw = lineWidths[i];
+            const y = (h / 2) - (LINE_H * (lines.length - 1)) / 2 + i * LINE_H;
+            if (lw > MAX_LINE) {
+                ctx.save();
+                ctx.translate(w / 2, y);
+                ctx.scale(MAX_LINE / lw, 1);
+                ctx.fillText(line, 0, 0);
+                ctx.restore();
+            } else {
+                ctx.fillText(line, w / 2, y);
+            }
+        });
+
+        const tex = new THREE.CanvasTexture(canvas);
+        return { texture: tex, aspect: w / h };
+    }
+
+    // カメラの視錐台から、指定zでの可視幅(ワールド単位)を返す
+    _visibleWidthAt(z) {
+        const dist = Math.abs(this.camera.position.z - z);
+        const vH = 2 * dist * Math.tan((this.camera.fov * Math.PI / 180) / 2);
+        return vH * this.camera.aspect;
     }
 
     spawnText(phrase, spawnTime) {
         const colorStr = `#${this.worldColor.getHexString()}`;
-        const texture = this.createTextTexture(phrase.text, colorStr);
+        const { texture, aspect } = this.createTextTexture(phrase.text, colorStr);
         const material = new THREE.SpriteMaterial({
             map: texture,
             transparent: true,
@@ -374,32 +423,52 @@ export class SongKotaete extends BaseSong {
         });
         const sprite = new THREE.Sprite(material);
 
-        // ミク(中央)を避けて左右に散らす
-        const side = Math.random() < 0.5 ? -1 : 1;
-        sprite.position.set(
-            side * (2.5 + Math.random() * 4),
-            0.5 + Math.random() * 4,
-            this.camera.position.z - 16 - Math.random() * 6
-        );
+        // 中央を流れる読みやすい配置(横は控えめ、縦は重ならないよう散らす)
+        const z = this.camera.position.z - 17 - Math.random() * 5;
+        const x = (Math.random() - 0.5) * 3.0;
+        const y = 1.4 + (Math.random() - 0.5) * 3.2;
+        sprite.position.set(x, y, z);
 
-        const aspect = 1024 / 128;
-        let scale = 2 + Math.random();
-        // 見切れ防止: スプライト幅をビューポート内に収める
-        const maxWidth = 17;
-        if (scale * aspect > maxWidth) scale = maxWidth / aspect;
-        // メリハリ: サビのフレーズだけ一回り大きく堂々と
-        if (this.isClimax) scale = Math.min(scale * 1.3, (maxWidth * 1.15) / aspect);
+        // 画面内に必ず収める: 可視幅の82%を上限に、近づいて大きく見える分も考慮
+        const fitW = this._visibleWidthAt(z) * 0.82;
+        let height = 2.4 + Math.random() * 0.5;
+        if (this.isClimax) height *= 1.18; // サビは少し大きく
+        let width = height * aspect;
+        if (Math.abs(x) + width / 2 > fitW / 2) {
+            // 端に寄った分も含めて収まるよう縮小
+            width = Math.max(1.2, fitW - Math.abs(x) * 2);
+            height = width / aspect;
+        }
+        const maxHeight = this.isClimax ? 3.4 : 3.0;
+        if (height > maxHeight) { height = maxHeight; width = height * aspect; }
+
+        sprite.scale.set(width, height, 1);
         sprite.userData = {
             birth: spawnTime,
             life: 5000,
             text: phrase.text,
-            baseScale: scale,
-            aspect: aspect,
+            baseW: width,
+            baseH: height,
             pulseProgress: 0,
             resonated: false,
             resonateFlash: 0,
+            haloPulse: Math.random() * Math.PI * 2,
         };
-        sprite.scale.set(scale * aspect, scale, 1);
+
+        // タップできる合図: 言葉の後ろに淡く脈動する光のハロー
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.glowTexture,
+            color: new THREE.Color(this.themeColor).lerp(new THREE.Color(0xffffff), 0.4),
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        }));
+        halo.scale.set(width * 1.25, height * 2.0, 1);
+        halo.position.copy(sprite.position);
+        halo.renderOrder = -1;
+        sprite.userData.halo = halo;
+        this.scene.add(halo);
 
         this.scene.add(sprite);
         this.activeSprites.push(sprite);
@@ -416,17 +485,23 @@ export class SongKotaete extends BaseSong {
             return;
         }
 
-        this.pointerVec.x = (event.clientX / window.innerWidth) * 2 - 1;
-        this.pointerVec.y = -(event.clientY / window.innerHeight) * 2 + 1;
-        this.raycaster.setFromCamera(this.pointerVec, this.camera);
-
-        const hits = this.raycaster.intersectObjects(this.activeSprites, false);
-        if (hits.length > 0) {
-            const sprite = hits[0].object;
-            if (!sprite.userData.resonated) {
-                this.resonate(sprite, event.clientX, event.clientY);
-            }
+        // 指でも当てやすいよう、画面投影での最近傍ピック(判定マージン付き)
+        const widthHalf = window.innerWidth / 2;
+        const heightHalf = window.innerHeight / 2;
+        const threshold = Math.max(96, window.innerWidth * 0.09);
+        let best = null;
+        let bestDist = Infinity;
+        const v = new THREE.Vector3();
+        for (const s of this.activeSprites) {
+            if (s.userData.resonated) continue;
+            v.copy(s.position).project(this.camera);
+            if (v.z >= 1) continue;
+            const sx = v.x * widthHalf + widthHalf;
+            const sy = -v.y * heightHalf + heightHalf;
+            const d = Math.hypot(event.clientX - sx, event.clientY - sy);
+            if (d < threshold && d < bestDist) { bestDist = d; best = s; }
         }
+        if (best) this.resonate(best, event.clientX, event.clientY);
     }
 
     resonate(sprite, clientX, clientY) {
@@ -635,7 +710,31 @@ export class SongKotaete extends BaseSong {
             const flash = ud.resonateFlash;
 
             const pulseScale = 1.0 + ud.pulseProgress * 0.25 + flash * 0.45;
-            s.scale.set(ud.baseScale * ud.aspect * pulseScale, ud.baseScale * pulseScale, 1);
+            let dispW = ud.baseW * pulseScale;
+            let dispH = ud.baseH * pulseScale;
+            // 毎フレーム、現在の距離での可視幅にクランプ(接近して巨大化→
+            // 見切れるのを完全に防ぐ)。横位置も中央へ寄せて枠内に保つ
+            const visW = this._visibleWidthAt(s.position.z);
+            s.position.x += (0 - s.position.x) * 0.012; // ゆっくり中央寄せ
+            const maxW = visW * 0.9 - Math.abs(s.position.x) * 2;
+            if (dispW > maxW && maxW > 0.5) {
+                const f = maxW / dispW;
+                dispW *= f; dispH *= f;
+            }
+            s.scale.set(dispW, dispH, 1);
+
+            // タップできる合図のハロー(未共鳴のみ脈動、共鳴で消える)
+            if (ud.halo) {
+                ud.halo.position.set(s.position.x, s.position.y, s.position.z - 0.05);
+                if (ud.resonated) {
+                    ud.halo.material.opacity = Math.max(0, ud.halo.material.opacity - deltaSec * 2.5);
+                } else {
+                    const breathe = 0.5 + 0.5 * Math.sin(now * 0.004 + ud.haloPulse);
+                    ud.halo.material.opacity = (0.18 + breathe * 0.22) * s.material.opacity;
+                    const hs = 1.0 + breathe * 0.08;
+                    ud.halo.scale.set(dispW * 1.25 * hs, dispH * 2.0 * hs, 1);
+                }
+            }
 
             // 発光色: 歌唱パルスで暖色、共鳴で世界の色に染まる
             const r = 1.0;
@@ -657,10 +756,15 @@ export class SongKotaete extends BaseSong {
                 s.material.opacity = ud.resonated ? 1 : 0.92;
             }
 
-            if (age > ud.life || s.position.z > this.camera.position.z) {
+            // カメラに近づきすぎる前に少し早めに撤収(顔面で巨大化するのを防ぐ)
+            if (age > ud.life || s.position.z > this.camera.position.z - 3) {
                 this.scene.remove(s);
                 if (s.material.map) s.material.map.dispose();
                 s.material.dispose();
+                if (ud.halo) {
+                    this.scene.remove(ud.halo);
+                    ud.halo.material.dispose();
+                }
                 this.activeSprites.splice(i, 1);
             }
         }
@@ -858,6 +962,26 @@ export class SongKotaete extends BaseSong {
         this.paletteSwatch = this.paletteEl.querySelector('.kotaete-palette-swatch');
         this.paletteResonanceEl = this.paletteEl.querySelector('.kotaete-palette-resonance');
         this.songWrapper.appendChild(this.paletteEl);
+
+        // 絆(共鳴)ゲージ — 右端に縦バーで常設。触れるほど伸びる
+        this.bondGaugeMax = 12;
+        this.gaugeEl = document.createElement('div');
+        this.gaugeEl.className = 'kotaete-gauge';
+        this.gaugeEl.innerHTML = `
+            <div class="kotaete-gauge-track"><div class="kotaete-gauge-fill"></div></div>
+            <div class="kotaete-gauge-label">絆</div>
+        `;
+        this.gaugeFillEl = this.gaugeEl.querySelector('.kotaete-gauge-fill');
+        this.songWrapper.appendChild(this.gaugeEl);
+        this._updateGauge();
+    }
+
+    _updateGauge() {
+        if (!this.gaugeFillEl) return;
+        const ratio = Math.min(1, this.resonanceCount / this.bondGaugeMax);
+        this.gaugeFillEl.style.height = `${ratio * 100}%`;
+        this.gaugeFillEl.style.background = `#${this.worldColor.getHexString()}`;
+        this.gaugeFillEl.style.boxShadow = `0 0 12px #${this.worldColor.getHexString()}`;
     }
 
     addPaletteLayer(colorHex) {
@@ -893,6 +1017,7 @@ export class SongKotaete extends BaseSong {
             void this.paletteResonanceEl.offsetWidth;
             this.paletteResonanceEl.classList.add('pop');
         }
+        this._updateGauge();
     }
 
     // =====================================================================
@@ -998,38 +1123,81 @@ export class SongKotaete extends BaseSong {
                 background: rgba(150, 150, 165, 0.5) !important;
                 box-shadow: none !important;
             }
-            .kotaete-palette {
+            /* 絆ゲージ — 左端中央。触れるほど縦に伸びる */
+            .kotaete-gauge {
                 position: absolute;
-                right: 14px;
+                left: 16px;
                 top: 50%;
                 transform: translateY(-50%);
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 gap: 8px;
-                padding: 12px 8px;
+                z-index: 25;
+                pointer-events: none;
+            }
+            .kotaete-gauge-track {
+                width: 8px;
+                height: 150px;
+                border-radius: 5px;
+                background: rgba(255, 255, 255, 0.12);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column-reverse;
+            }
+            .kotaete-gauge-fill {
+                width: 100%;
+                height: 0%;
+                background: #7F77DD;
+                border-radius: 5px;
+                transition: height 0.5s cubic-bezier(0.22, 1, 0.36, 1), background 0.6s ease;
+            }
+            .kotaete-gauge-label {
+                font-size: 11px;
+                letter-spacing: 0.1em;
+                color: rgba(255, 255, 255, 0.6);
+                font-family: 'Noto Serif JP', serif;
+            }
+            @media (max-width: 600px) {
+                .kotaete-gauge { left: 8px; }
+                .kotaete-gauge-track { height: 110px; }
+            }
+            /* 答えのパレット — 上部中央に横並び(右の音量UIと干渉しない) */
+            .kotaete-palette {
+                position: absolute;
+                left: 50%;
+                top: 16px;
+                transform: translateX(-50%);
+                display: flex;
+                flex-direction: row;
+                align-items: center;
+                gap: 10px;
+                padding: 8px 16px;
                 background: rgba(5, 5, 16, 0.55);
                 border: 1px solid rgba(127, 119, 221, 0.5);
-                border-radius: 14px;
+                border-radius: 20px;
                 backdrop-filter: blur(4px);
                 z-index: 25;
                 pointer-events: none;
                 transition: box-shadow 0.8s ease;
+            }
+            .kotaete-palette .kotaete-palette-slots {
+                flex-direction: row;
             }
             .kotaete-palette.confirmed {
                 box-shadow: 0 0 22px rgba(255, 255, 255, 0.35);
                 animation: kotaete-palette-breathe 2.4s ease-in-out infinite;
             }
             @keyframes kotaete-palette-breathe {
-                0%, 100% { transform: translateY(-50%) scale(1); }
-                50%      { transform: translateY(-50%) scale(1.05); }
+                0%, 100% { transform: translateX(-50%) scale(1); }
+                50%      { transform: translateX(-50%) scale(1.05); }
             }
             .kotaete-palette-label {
-                writing-mode: vertical-rl;
                 font-size: 11px;
-                letter-spacing: 3px;
+                letter-spacing: 2px;
                 color: rgba(255, 255, 255, 0.85);
                 text-shadow: 0 0 6px rgba(127, 119, 221, 0.9);
+                white-space: nowrap;
             }
             .kotaete-palette-slots {
                 display: flex;
@@ -1169,6 +1337,10 @@ export class SongKotaete extends BaseSong {
             this.scene.remove(s);
             if (s.material.map) s.material.map.dispose();
             s.material.dispose();
+            if (s.userData.halo) {
+                this.scene.remove(s.userData.halo);
+                s.userData.halo.material.dispose();
+            }
         });
         this.activeSprites = [];
 
@@ -1218,6 +1390,9 @@ export class SongKotaete extends BaseSong {
         }
         if (this.paletteEl && this.paletteEl.parentNode) {
             this.paletteEl.parentNode.removeChild(this.paletteEl);
+        }
+        if (this.gaugeEl && this.gaugeEl.parentNode) {
+            this.gaugeEl.parentNode.removeChild(this.gaugeEl);
         }
         if (this.finaleOverlay && this.finaleOverlay.parentNode) {
             this.finaleOverlay.parentNode.removeChild(this.finaleOverlay);
