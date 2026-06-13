@@ -45,6 +45,11 @@ export class SongKotaete extends BaseSong {
         this.reachBlend = 0;              // 0=脱力 1=手を差し伸べる
         this.reachBlendTarget = 0;
         this.mikuGlowPulse = 0;
+        // ちょくちょく振り返って手を振る挨拶演出
+        this.greetTimer = 5 + Math.random() * 4;  // 次に振り返るまでの秒
+        this.greetActive = false;
+        this.greetElapsed = 0;
+        this.greetWave = 0;               // 0..1 手を振る強さ
         this._lastFrameReal = performance.now();
         this._sceneStartReal = performance.now(); // シェーダー/アニメ用の相対時刻基準
 
@@ -315,6 +320,9 @@ export class SongKotaete extends BaseSong {
         vs.position.y = 1.5 + bobY + beatPulse * 0.08;
         vs.position.z = this.camera.position.z - 13;
 
+        // ちょくちょく振り返って手を振る挨拶(選択・フィナーレ中は本来の演出を優先)
+        this.updateGreet(deltaSec);
+
         // 向きの補間(問いが届くと振り返る)
         this.mikuRotY += (this.mikuFacingTarget - this.mikuRotY) * Math.min(1, deltaSec * 2.6);
         vs.rotation.y = this.mikuRotY;
@@ -338,6 +346,23 @@ export class SongKotaete extends BaseSong {
             if (ll) { ll.rotation.y = lerp(Math.PI / 12, Math.PI / 18); }
             if (rl) { rl.rotation.y = lerp(-Math.PI / 12, -Math.PI / 18); }
             if (neck) { neck.rotation.x = lerp(0, 0.12); }
+
+            // 振り返ったときに右手を上げて振る(脱力ポーズに重ねる)
+            if (this.greetWave > 0) {
+                const wv = this.greetWave;
+                const swing = Math.sin(t * 12) * 0.5; // 速い手振り
+                if (ru) {
+                    // 右上腕を持ち上げ前方へ(手が顔の横に来る)
+                    ru.rotation.z += (-Math.PI / 14 - ru.rotation.z) * wv;
+                    ru.rotation.x += (-Math.PI / 2.5 - ru.rotation.x) * wv;
+                    ru.rotation.z += swing * wv;        // 左右に振る
+                }
+                if (rl) {
+                    rl.rotation.z += (-Math.PI / 3) * wv; // 肘を曲げて前腕を立てる
+                }
+                if (neck) { neck.rotation.y += -0.12 * wv; } // 顔をこちらへ少し向ける
+                this.mikuGlowPulse = Math.max(this.mikuGlowPulse, wv * 0.4);
+            }
         }
 
         // ミクの光輪と専用ライト
@@ -359,6 +384,36 @@ export class SongKotaete extends BaseSong {
         this.mikuGlowPulse = Math.max(0, this.mikuGlowPulse - deltaSec * 1.8);
 
         this.currentVRM.update(deltaSec);
+    }
+
+    // 楽曲中ちょくちょく振り返って手を振る挨拶の進行管理。
+    // 選択・フィナーレ中は本来の振り返り演出を優先するため挨拶は引っ込める。
+    updateGreet(deltaSec) {
+        if (this.choiceActive || this.finaleActive) {
+            if (this.greetActive) { this.greetActive = false; this.greetWave = 0; }
+            return;
+        }
+        if (!this.greetActive) {
+            this.greetTimer -= deltaSec;
+            if (this.greetTimer <= 0) {
+                this.greetActive = true;
+                this.greetElapsed = 0;
+            }
+            return;
+        }
+        // 背中向き → 振り返り → 手を振る → 背中向きへ戻る
+        const DUR = 3.4;
+        this.greetElapsed += deltaSec;
+        const p = Math.min(1, this.greetElapsed / DUR);
+        const turn = Math.sin(p * Math.PI);                       // 0→1→0(振り返り量)
+        this.mikuFacingTarget = Math.PI * (1 - turn * 0.96);      // ほぼ正面まで振り返る
+        this.greetWave = Math.max(0, (turn - 0.35) / 0.65);       // ピーク付近だけ手を振る
+        if (this.greetElapsed >= DUR) {
+            this.greetActive = false;
+            this.greetWave = 0;
+            this.mikuFacingTarget = Math.PI;
+            this.greetTimer = 6 + Math.random() * 5;              // 次の振り返りまで
+        }
     }
 
     // =====================================================================
