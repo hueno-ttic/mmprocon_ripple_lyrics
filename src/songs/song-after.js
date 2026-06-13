@@ -586,13 +586,14 @@ export class SongAfter extends BaseSong {
         const rL = vrm.humanoid.getNormalizedBoneNode('rightLowerArm');
         const sway = Math.sin(rel * 1.5 + 1.2) * 0.02; // 腕も呼吸に同期して微かに揺れる
         // サビは「Tポーズ」ではなく45°のオープンポーズ+肘の柔らかい曲げで人間らしく
+        // 新VRMは上腕ロール軸が逆: 左+/右- が下げ方向。脱力(下げ)→サビでオープン
         if (lU) {
-            lU.rotation.z = lerp(-Math.PI / 2.8, -Math.PI / 4.2) + sway;
+            lU.rotation.z = lerp(Math.PI / 2.8, Math.PI / 4.2) + sway;
             lU.rotation.x = lerp(0, -0.38);
             lU.rotation.y = lerp(0, 0.15);
         }
         if (rU) {
-            rU.rotation.z = lerp(Math.PI / 2.8, Math.PI / 4.2) - sway;
+            rU.rotation.z = lerp(-Math.PI / 2.8, -Math.PI / 4.2) - sway;
             rU.rotation.x = lerp(0, -0.38);
             rU.rotation.y = lerp(0, -0.15);
         }
@@ -629,11 +630,11 @@ export class SongAfter extends BaseSong {
         }
         if (this.greetWave > 0 && rU) {
             const wv = this.greetWave;
-            const swing = Math.sin(rel * 9) * 0.32; // 手を左右に振る(穏やかに)
-            // 上腕を肩〜水平あたりまで上げ前方へ。zは正のまま=水平より上げすぎない(万歳防止)
-            rU.rotation.z += (Math.PI / 7 - rU.rotation.z) * wv + swing * wv;
-            rU.rotation.x += (-Math.PI / 4 - rU.rotation.x) * wv;
-            if (rL) rL.rotation.y += (-Math.PI / 5) * wv; // 肘を軽く曲げ手を顔の近くへ
+            const swing = Math.sin(rel * 9) * 0.28; // 手を左右に振る(穏やかに)
+            // 右腕は z+ で上がる。頭の高さ程度に留め(万歳にしない)、左右にゆらす
+            rU.rotation.z += (0.5 - rU.rotation.z) * wv + swing * wv;
+            rU.rotation.x += (-0.5 - rU.rotation.x) * wv;       // 前方(客席)へ
+            if (rL) rL.rotation.y += (-1.2 - rL.rotation.y) * wv; // 肘を曲げ手を顔の横へ
         }
 
         // 頭: スポットライトがミク付近に当たると顔をそちらへ (クランプ付き)

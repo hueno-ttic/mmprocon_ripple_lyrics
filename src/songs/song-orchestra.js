@@ -1641,8 +1641,9 @@ export class SongOrchestra extends BaseSong {
                 }
             } else {
                 // Fallback direct rotation update if relaxedQuaternions are not yet cached
-                if (leftUpperArm) leftUpperArm.rotation.z = (Math.PI / 6) + Math.sin(floatTime * 1.5) * 0.05;
-                if (rightUpperArm) rightUpperArm.rotation.z = -(Math.PI / 6) - Math.sin(floatTime * 1.5) * 0.05;
+                // 新VRMは上腕ロール軸が逆: 左+/右- が下げ方向
+                if (leftUpperArm) leftUpperArm.rotation.z = (Math.PI / 3.2) + Math.sin(floatTime * 1.5) * 0.05;
+                if (rightUpperArm) rightUpperArm.rotation.z = -(Math.PI / 3.2) - Math.sin(floatTime * 1.5) * 0.05;
             }
 
             // アイドル時にちょくちょく客席(プレイヤー)へ手を振る挨拶。
@@ -1670,14 +1671,14 @@ export class SongOrchestra extends BaseSong {
             if (this.greetWave > 0 && rightUpperArm) {
                 const wv = this.greetWave;
                 const swing = Math.sin(floatTime * 9) * 0.3; // 手を左右に振る(穏やかに)
-                // 既存ポーズに加算。上げすぎない範囲で肩〜水平あたりまで持ち上げる(万歳防止)
+                // 既存ポーズ(下ろした腕)に加算。新VRMは右腕 z+ で上がる。頭の高さ程度に留める
                 const eu = new THREE.Euler().setFromQuaternion(rightUpperArm.quaternion);
-                eu.z += -0.7 * wv + swing * wv;  // 右腕はzを下げると上がる
-                eu.x += -0.65 * wv;              // 前方(客席)へ
+                eu.z += 1.5 * wv + swing * wv;  // 下げ位置(約-1.1)から頭の高さ(約+0.4)へ
+                eu.x += -0.6 * wv;              // 前方(客席)へ
                 rightUpperArm.quaternion.setFromEuler(eu);
                 if (rightLowerArm) {
                     const el = new THREE.Euler().setFromQuaternion(rightLowerArm.quaternion);
-                    el.y += (-Math.PI / 6) * wv; // 肘を軽く曲げ手を顔の近くへ
+                    el.y += -1.0 * wv; // 肘を曲げ手を顔の横へ(右前腕 y- で前方屈曲)
                     rightLowerArm.quaternion.setFromEuler(el);
                 }
             }
@@ -1934,8 +1935,9 @@ export class SongOrchestra extends BaseSong {
         const leftLowerArm = vrm.humanoid.getNormalizedBoneNode('leftLowerArm');
         const rightLowerArm = vrm.humanoid.getNormalizedBoneNode('rightLowerArm');
 
-        if (leftUpperArm) leftUpperArm.rotation.z = -Math.PI / 2.8; // 手を下ろした脱力状態
-        if (rightUpperArm) rightUpperArm.rotation.z = Math.PI / 2.8; // 手を下ろした脱力状態
+        // 新VRMは上腕ロール軸が逆: 左+/右- で手を下ろした脱力状態
+        if (leftUpperArm) leftUpperArm.rotation.z = Math.PI / 2.8;
+        if (rightUpperArm) rightUpperArm.rotation.z = -Math.PI / 2.8;
         if (leftLowerArm) leftLowerArm.rotation.y = Math.PI / 12; // 肘をわずかに前に曲げる
         if (rightLowerArm) rightLowerArm.rotation.y = -Math.PI / 12; // 肘をわずかに前に曲げる
 

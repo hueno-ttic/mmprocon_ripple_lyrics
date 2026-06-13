@@ -288,8 +288,9 @@ export class SongKotaete extends BaseSong {
         const rightUpperArm = get('rightUpperArm');
         const leftLowerArm = get('leftLowerArm');
         const rightLowerArm = get('rightLowerArm');
-        if (leftUpperArm) leftUpperArm.rotation.z = -Math.PI / 2.8;
-        if (rightUpperArm) rightUpperArm.rotation.z = Math.PI / 2.8;
+        // 新VRMモデルは上腕ロール軸が逆: 左+/右- で腕が下がる
+        if (leftUpperArm) leftUpperArm.rotation.z = Math.PI / 2.8;
+        if (rightUpperArm) rightUpperArm.rotation.z = -Math.PI / 2.8;
         if (leftLowerArm) leftLowerArm.rotation.y = Math.PI / 12;
         if (rightLowerArm) rightLowerArm.rotation.y = -Math.PI / 12;
 
@@ -341,23 +342,23 @@ export class SongKotaete extends BaseSong {
             const ll = this.currentVRM.humanoid.getNormalizedBoneNode('leftLowerArm');
             const rl = this.currentVRM.humanoid.getNormalizedBoneNode('rightLowerArm');
             const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
-            if (lu) { lu.rotation.z = lerp(-Math.PI / 2.8, -Math.PI / 9); lu.rotation.x = lerp(0, -Math.PI / 2.4); }
-            if (ru) { ru.rotation.z = lerp(Math.PI / 2.8, Math.PI / 9); ru.rotation.x = lerp(0, -Math.PI / 2.4); }
+            // 新VRMは上腕ロール軸が逆: 左+/右- が「下げる」。脱力(下げる)→差し伸べ(やや上げ前方)
+            if (lu) { lu.rotation.z = lerp(Math.PI / 2.8, Math.PI / 9); lu.rotation.x = lerp(0, -Math.PI / 2.4); }
+            if (ru) { ru.rotation.z = lerp(-Math.PI / 2.8, -Math.PI / 9); ru.rotation.x = lerp(0, -Math.PI / 2.4); }
             if (ll) { ll.rotation.y = lerp(Math.PI / 12, Math.PI / 18); }
             if (rl) { rl.rotation.y = lerp(-Math.PI / 12, -Math.PI / 18); }
             // neck は x/y とも毎フレーム基準値へリセット(加算による首の回転暴走を防ぐ)
             if (neck) { neck.rotation.x = lerp(0, 0.12); neck.rotation.y = 0; }
 
             // 振り返ったときに右手を上げて振る(脱力ポーズに重ねる)
-            // ※上腕の z は概ね正のまま=水平より上げすぎない(万歳にしない)
+            // 右腕は z+ で上がる。頭の高さ程度に留め(万歳にしない)、左右にゆらす
             if (this.greetWave > 0 && ru) {
                 const wv = this.greetWave;
-                const swing = Math.sin(t * 9) * 0.32; // 手を左右に振る(穏やかに)
-                // 上腕を肩〜水平あたりまで上げ、前方(こちら)へ向け、左右にゆれる
-                ru.rotation.z += (Math.PI / 7 - ru.rotation.z) * wv + swing * wv;
-                ru.rotation.x += (-Math.PI / 4 - ru.rotation.x) * wv;
-                // 肘を軽く曲げて手を顔の近くへ(自然な可動軸 rotation.y を使用)
-                if (rl) { rl.rotation.y += (-Math.PI / 5) * wv; }
+                const swing = Math.sin(t * 9) * 0.28; // 手を左右に振る(穏やかに)
+                ru.rotation.z += (0.5 - ru.rotation.z) * wv + swing * wv; // 肩〜頭の高さへ
+                ru.rotation.x += (-0.5 - ru.rotation.x) * wv;            // 前方(こちら)へ
+                // 肘を曲げ手を顔の横へ(右前腕は y- で前方へ屈曲)
+                if (rl) { rl.rotation.y += (-1.2 - rl.rotation.y) * wv; }
                 // 顔を少しだけこちらへ(絶対値・基準0からのオフセットなので累積しない)
                 if (neck) { neck.rotation.y = -0.1 * wv; }
                 this.mikuGlowPulse = Math.max(this.mikuGlowPulse, wv * 0.4);

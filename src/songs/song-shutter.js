@@ -6,30 +6,31 @@ import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
 
 // 被写体ミクのポーズプリセット（正規化ヒューマノイドボーンのオイラー回転）
-// 左腕は z=-1.12 で下ろした状態（orchestra実績値）。符号反転で挙手になる。
+// 新VRMモデルは上腕/前腕のロール軸(z)が旧モデルと逆。
+// 左腕は z=+1.12 で下ろした状態。z 符号反転で挙手になる。
 const SHUTTER_MIKU_POSES = [
     { // 0: リラックス（基本姿勢）
-        leftUpperArm: { x: 0, y: 0, z: -1.12 }, rightUpperArm: { x: 0, y: 0, z: 1.12 },
+        leftUpperArm: { x: 0, y: 0, z: 1.12 }, rightUpperArm: { x: 0, y: 0, z: -1.12 },
         leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: 0, y: -0.26, z: 0 },
         head: { x: 0, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }
     },
     { // 1: 右手を挙げて手を振る
-        leftUpperArm: { x: 0, y: 0, z: -1.12 }, rightUpperArm: { x: 0, y: 0, z: -0.55 },
-        leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: 0, y: 0, z: -0.85 },
+        leftUpperArm: { x: 0, y: 0, z: 1.12 }, rightUpperArm: { x: 0, y: 0, z: 0.55 },
+        leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: 0, y: 0, z: 0.85 },
         head: { x: 0, y: -0.18, z: -0.12 }, spine: { x: 0, y: -0.08, z: 0.04 }
     },
     { // 2: 左手を挙げてアピール
-        leftUpperArm: { x: 0, y: 0, z: 0.55 }, rightUpperArm: { x: 0, y: 0, z: 1.12 },
-        leftLowerArm: { x: 0, y: 0, z: 0.85 }, rightLowerArm: { x: 0, y: -0.26, z: 0 },
+        leftUpperArm: { x: 0, y: 0, z: -0.55 }, rightUpperArm: { x: 0, y: 0, z: -1.12 },
+        leftLowerArm: { x: 0, y: 0, z: -0.85 }, rightLowerArm: { x: 0, y: -0.26, z: 0 },
         head: { x: 0, y: 0.18, z: 0.12 }, spine: { x: 0, y: 0.08, z: -0.04 }
     },
     { // 3: 両手を挙げてチアー（サビ用）
-        leftUpperArm: { x: 0, y: 0, z: 0.7 }, rightUpperArm: { x: 0, y: 0, z: -0.7 },
-        leftLowerArm: { x: 0, y: 0, z: 0.35 }, rightLowerArm: { x: 0, y: 0, z: -0.35 },
+        leftUpperArm: { x: 0, y: 0, z: -0.7 }, rightUpperArm: { x: 0, y: 0, z: 0.7 },
+        leftLowerArm: { x: 0, y: 0, z: -0.35 }, rightLowerArm: { x: 0, y: 0, z: 0.35 },
         head: { x: -0.12, y: 0, z: 0 }, spine: { x: -0.05, y: 0, z: 0 }
     },
     { // 4: 顔の横でピースっぽいカメラ目線ポーズ
-        leftUpperArm: { x: 0, y: 0, z: -1.12 }, rightUpperArm: { x: -0.5, y: 0, z: 0.85 },
+        leftUpperArm: { x: 0, y: 0, z: 1.12 }, rightUpperArm: { x: -0.5, y: 0, z: -0.85 },
         leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: -1.25, y: -0.35, z: 0 },
         head: { x: 0, y: -0.1, z: 0.18 }, spine: { x: 0, y: 0, z: -0.05 }
     }

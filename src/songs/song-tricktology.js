@@ -387,8 +387,9 @@ export class SongTricktology extends BaseSong {
         const ru = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
         const ll = vrm.humanoid.getNormalizedBoneNode('leftLowerArm');
         const rl = vrm.humanoid.getNormalizedBoneNode('rightLowerArm');
-        if (lu) lu.rotation.z = -Math.PI / 2.8;
-        if (ru) ru.rotation.z = Math.PI / 2.8;
+        // 新VRMは上腕ロール軸が逆: 左+/右- で腕が下がる
+        if (lu) lu.rotation.z = Math.PI / 2.8;
+        if (ru) ru.rotation.z = -Math.PI / 2.8;
         if (ll) ll.rotation.y = Math.PI / 12;
         if (rl) rl.rotation.y = -Math.PI / 12;
     }
