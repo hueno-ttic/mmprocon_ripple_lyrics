@@ -629,10 +629,11 @@ export class SongAfter extends BaseSong {
         }
         if (this.greetWave > 0 && rU) {
             const wv = this.greetWave;
-            const swing = Math.sin(rel * 12) * 0.5; // 速い手振り
-            rU.rotation.z += (-Math.PI / 16 - rU.rotation.z) * wv + swing * wv; // 上げて左右へ
-            rU.rotation.x += (-Math.PI / 2.6 - rU.rotation.x) * wv;             // 前方へ
-            if (rL) rL.rotation.z += (Math.PI / 3) * wv;                        // 肘を曲げ前腕を立てる
+            const swing = Math.sin(rel * 9) * 0.32; // 手を左右に振る(穏やかに)
+            // 上腕を肩〜水平あたりまで上げ前方へ。zは正のまま=水平より上げすぎない(万歳防止)
+            rU.rotation.z += (Math.PI / 7 - rU.rotation.z) * wv + swing * wv;
+            rU.rotation.x += (-Math.PI / 4 - rU.rotation.x) * wv;
+            if (rL) rL.rotation.y += (-Math.PI / 5) * wv; // 肘を軽く曲げ手を顔の近くへ
         }
 
         // 頭: スポットライトがミク付近に当たると顔をそちらへ (クランプ付き)

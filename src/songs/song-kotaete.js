@@ -345,22 +345,21 @@ export class SongKotaete extends BaseSong {
             if (ru) { ru.rotation.z = lerp(Math.PI / 2.8, Math.PI / 9); ru.rotation.x = lerp(0, -Math.PI / 2.4); }
             if (ll) { ll.rotation.y = lerp(Math.PI / 12, Math.PI / 18); }
             if (rl) { rl.rotation.y = lerp(-Math.PI / 12, -Math.PI / 18); }
-            if (neck) { neck.rotation.x = lerp(0, 0.12); }
+            // neck は x/y とも毎フレーム基準値へリセット(加算による首の回転暴走を防ぐ)
+            if (neck) { neck.rotation.x = lerp(0, 0.12); neck.rotation.y = 0; }
 
             // 振り返ったときに右手を上げて振る(脱力ポーズに重ねる)
-            if (this.greetWave > 0) {
+            // ※上腕の z は概ね正のまま=水平より上げすぎない(万歳にしない)
+            if (this.greetWave > 0 && ru) {
                 const wv = this.greetWave;
-                const swing = Math.sin(t * 12) * 0.5; // 速い手振り
-                if (ru) {
-                    // 右上腕を持ち上げ前方へ(手が顔の横に来る)
-                    ru.rotation.z += (-Math.PI / 14 - ru.rotation.z) * wv;
-                    ru.rotation.x += (-Math.PI / 2.5 - ru.rotation.x) * wv;
-                    ru.rotation.z += swing * wv;        // 左右に振る
-                }
-                if (rl) {
-                    rl.rotation.z += (-Math.PI / 3) * wv; // 肘を曲げて前腕を立てる
-                }
-                if (neck) { neck.rotation.y += -0.12 * wv; } // 顔をこちらへ少し向ける
+                const swing = Math.sin(t * 9) * 0.32; // 手を左右に振る(穏やかに)
+                // 上腕を肩〜水平あたりまで上げ、前方(こちら)へ向け、左右にゆれる
+                ru.rotation.z += (Math.PI / 7 - ru.rotation.z) * wv + swing * wv;
+                ru.rotation.x += (-Math.PI / 4 - ru.rotation.x) * wv;
+                // 肘を軽く曲げて手を顔の近くへ(自然な可動軸 rotation.y を使用)
+                if (rl) { rl.rotation.y += (-Math.PI / 5) * wv; }
+                // 顔を少しだけこちらへ(絶対値・基準0からのオフセットなので累積しない)
+                if (neck) { neck.rotation.y = -0.1 * wv; }
                 this.mikuGlowPulse = Math.max(this.mikuGlowPulse, wv * 0.4);
             }
         }

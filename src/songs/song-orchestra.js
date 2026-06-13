@@ -1669,15 +1669,15 @@ export class SongOrchestra extends BaseSong {
             }
             if (this.greetWave > 0 && rightUpperArm) {
                 const wv = this.greetWave;
-                const swing = Math.sin(floatTime * 12) * 0.5; // 速い手振り
-                // 既存ポーズの上に加算して右手を上げ、左右に振る
+                const swing = Math.sin(floatTime * 9) * 0.3; // 手を左右に振る(穏やかに)
+                // 既存ポーズに加算。上げすぎない範囲で肩〜水平あたりまで持ち上げる(万歳防止)
                 const eu = new THREE.Euler().setFromQuaternion(rightUpperArm.quaternion);
-                eu.z += -1.1 * wv + swing * wv;  // 右腕はzを下げると上がる
-                eu.x += -1.0 * wv;               // 前方(客席)へ
+                eu.z += -0.7 * wv + swing * wv;  // 右腕はzを下げると上がる
+                eu.x += -0.65 * wv;              // 前方(客席)へ
                 rightUpperArm.quaternion.setFromEuler(eu);
                 if (rightLowerArm) {
                     const el = new THREE.Euler().setFromQuaternion(rightLowerArm.quaternion);
-                    el.z += (Math.PI / 3) * wv;  // 肘を曲げ前腕を立てる
+                    el.y += (-Math.PI / 6) * wv; // 肘を軽く曲げ手を顔の近くへ
                     rightLowerArm.quaternion.setFromEuler(el);
                 }
             }
