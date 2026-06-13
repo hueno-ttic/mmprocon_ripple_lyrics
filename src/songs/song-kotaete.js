@@ -252,7 +252,7 @@ export class SongKotaete extends BaseSong {
                 this.currentVRM = vrm;
                 this.scene.add(vrm.scene);
                 vrm.scene.scale.setScalar(3.1);
-                vrm.scene.position.set(0, 1.5, this.camera.position.z - 13);
+                vrm.scene.position.set(0, 1.5, this.camera.position.z - 11);
                 vrm.scene.rotation.y = Math.PI; // 背中向きで先導
                 this.mikuRotY = Math.PI;
                 this.setupGlidePose(vrm);
@@ -319,7 +319,7 @@ export class SongKotaete extends BaseSong {
         const swayX = Math.sin(t * 0.6) * 0.55;
         vs.position.x += ((swayX) - vs.position.x) * 0.05;
         vs.position.y = 1.5 + bobY + beatPulse * 0.08;
-        vs.position.z = this.camera.position.z - 13;
+        vs.position.z = this.camera.position.z - 11;
 
         // ちょくちょく振り返って手を振る挨拶(選択・フィナーレ中は本来の演出を優先)
         this.updateGreet(deltaSec);
@@ -383,7 +383,63 @@ export class SongKotaete extends BaseSong {
         }
         this.mikuGlowPulse = Math.max(0, this.mikuGlowPulse - deltaSec * 1.8);
 
+        // 表情(まばたき・リップシンク・感情)を毎フレーム更新
+        this.updateMikuFace(positionMs, beatPulse);
+
         this.currentVRM.update(deltaSec);
+    }
+
+    // ミクの表情を細かく動かす: まばたき・歌唱に合わせた口形(母音)・感情の補間。
+    updateMikuFace(positionMs, beatPulse) {
+        const em = this.currentVRM.expressionManager;
+        if (!em) return;
+        const now = performance.now();
+        const dt = Math.min(0.1, (now - (this._lastFaceReal || now)) / 1000);
+        this._lastFaceReal = now;
+
+        // --- まばたき(時々パチッと) ---
+        if (this._blinkTimer === undefined) this._blinkTimer = 1 + Math.random() * 3;
+        this._blinkTimer -= dt;
+        let blink = 0;
+        const BLINK_DUR = 0.16;
+        if (this._blinkTimer <= 0) {
+            const bp = (this._blinkTimer + BLINK_DUR) / BLINK_DUR; // 1→0
+            blink = Math.sin(Math.max(0, Math.min(1, bp)) * Math.PI);
+            if (this._blinkTimer <= -BLINK_DUR) this._blinkTimer = 1.6 + Math.random() * 3.4;
+        }
+        em.setValue('blink', Math.min(1, blink));
+
+        // --- リップシンク(歌っている文字の母音で口形を変える) ---
+        const v = playerManager.player.video;
+        const char = (v && v.findChar) ? v.findChar(positionMs) : null;
+        const vowels = ['aa', 'ih', 'ou', 'ee', 'oh'];
+        let mouthOpen = 0, vowel = 'aa';
+        if (char && char.text && positionMs >= char.startTime && positionMs <= char.endTime) {
+            vowel = this._vowelOf(char.text);
+            const span = Math.max(1, char.endTime - char.startTime);
+            const cp = (positionMs - char.startTime) / span;
+            mouthOpen = Math.sin(Math.min(1, cp) * Math.PI) * 0.85 + 0.12; // 開いて閉じる
+        }
+        for (const vw of vowels) em.setValue(vw, vw === vowel ? mouthOpen : 0);
+
+        // --- 感情(なめらかに補間) ---
+        // 振り返って手を振るとき・歌詞が触れたとき・ビートの高揚で笑顔に、
+        // それ以外は穏やか(relaxed)を基調にする。
+        this._contactJoy = Math.max(0, (this._contactJoy || 0) - dt * 1.4);
+        const happyTarget = Math.min(1, Math.max(this.greetWave, this._contactJoy, this.mikuGlowPulse * 0.4, beatPulse * 0.25));
+        this._faceHappy = (this._faceHappy || 0) + (happyTarget - (this._faceHappy || 0)) * Math.min(1, dt * 4);
+        em.setValue('happy', Math.min(1, this._faceHappy));
+        em.setValue('relaxed', Math.max(0, 0.4 - this._faceHappy * 0.8));
+    }
+
+    // 文字の母音を判定してVRMの口形プリセット名を返す
+    _vowelOf(ch) {
+        if (/[いぃきぎしじちぢにひびぴみりゐイィキギシジチヂニヒビピミリ]/.test(ch)) return 'ih';
+        if (/[うぅくぐすずつづぬふぶぷむゆるゔウゥクグスズツヅヌフブプムユルヴ]/.test(ch)) return 'ou';
+        if (/[えぇけげせぜてでねへべぺめれゑエェケゲセゼテデネヘベペメレ]/.test(ch)) return 'ee';
+        if (/[おぉこごそぞとどのほぼぽもよろをオォコゴソゾトドノホボポモヨロヲ]/.test(ch)) return 'oh';
+        if (/[んンっッ]/.test(ch)) return 'aa';
+        return 'aa';
     }
 
     // 振り返って手を振る演出の進行管理。
@@ -703,7 +759,7 @@ export class SongKotaete extends BaseSong {
         if (this.flyingParticles.length === 0) return;
         const target = this.currentVRM
             ? this.currentVRM.scene.position.clone().add(new THREE.Vector3(0, 1.6, 0))
-            : new THREE.Vector3(0, 1.5, this.camera.position.z - 13);
+            : new THREE.Vector3(0, 1.5, this.camera.position.z - 11);
 
         for (let i = this.flyingParticles.length - 1; i >= 0; i--) {
             const p = this.flyingParticles[i];
@@ -858,9 +914,29 @@ export class SongKotaete extends BaseSong {
             const targetPulse = isWordActive ? 1.0 : 0.0;
             ud.pulseProgress += (targetPulse - ud.pulseProgress) * 0.2;
 
-            // 共鳴フラッシュ(タップ直後の発光・拡大)
+            // 共鳴フラッシュ(タップ直後の発光・拡大) + ミク接触のきらめき
             ud.resonateFlash = Math.max(0, ud.resonateFlash - deltaSec * 2.2);
-            const flash = ud.resonateFlash;
+            ud.contactFlash = Math.max(0, (ud.contactFlash || 0) - deltaSec * 2.6);
+            const flash = ud.resonateFlash + ud.contactFlash;
+
+            // 歌詞がミクを通り抜ける瞬間の反応(1フレーズにつき一度だけ)
+            if (this.currentVRM && !ud.passedMiku) {
+                const mp = this.currentVRM.scene.position;
+                if (Math.abs(s.position.z - mp.z) < 1.3) {
+                    const dx = s.position.x - mp.x;
+                    const dy = s.position.y - (mp.y + 1.1); // 胸〜頭のあたり
+                    if (Math.hypot(dx, dy) < 1.9) {
+                        ud.passedMiku = true;
+                        ud.contactFlash = 1.0;                 // 言葉が一瞬きらめく
+                        this.mikuGlowPulse = Math.min(1.5, this.mikuGlowPulse + 0.5); // ミクが受け取って輝く
+                        this._contactJoy = 0.8;                // 表情がふっとほころぶ
+                        // 接触点に小さな波紋ときらめき
+                        const cp = new THREE.Vector3(s.position.x, s.position.y, mp.z);
+                        this.spawnShockwave(cp, 1.2);
+                        this.spawnFlyingParticles(cp);
+                    }
+                }
+            }
 
             // 応答済みの言葉は「ポップ → 縮んで落ち着いた軌跡」へ変化させ、
             // タップ済みと未タップを一目で区別できるようにする(再タップ防止)
