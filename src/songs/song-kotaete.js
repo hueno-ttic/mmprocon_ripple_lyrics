@@ -769,16 +769,13 @@ export class SongKotaete extends BaseSong {
         }
 
         // ---- 歌詞 ----
+        // 歌詞表示は「触れて応える」フレーズ3Dスプライトに一本化。
+        // 単語DOM(汎用lyricRenderer)は二重表示で紛らわしいため使わない。
+        // 「今どこを歌っているか」は各フレーズ内の歌唱パルス(該当文字の発光)で表現する。
         const phrase = playerManager.player.video.findPhrase(position);
         const word = playerManager.player.video.findWord(position)
                   || playerManager.player.video.findChar(position);
-        if (this.lyricRenderer) {
-            if (word) {
-                this.lyricRenderer.update(word);
-            } else if (!phrase) {
-                this.lyricRenderer.update(null);
-            }
-        }
+        if (this.lyricRenderer) this.lyricRenderer.update(null);
         if (phrase && phrase !== this.lastPhrase && !this.isTutorialActive) {
             this.lastPhrase = phrase;
             this.spawnText(phrase, position);
