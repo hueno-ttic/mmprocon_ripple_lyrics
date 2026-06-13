@@ -60,8 +60,9 @@ export class Credits {
                 </section>
 
                 <p class="credits-note">
-                    歌詞・タイミングは TextAlive App API を利用しています。<br>
-                    各楽曲は piapro より使用しています。
+                    楽曲はマジカルミライ2026 プログラミングコンテスト課題曲を使用しています。<br>
+                    歌詞・タイミングは TextAlive App API を通じて取得しています。<br>
+                    楽曲・キャラクターは piapro キャラクター・ライセンスに基づいて利用しています。
                 </p>
             </div>
         `;
