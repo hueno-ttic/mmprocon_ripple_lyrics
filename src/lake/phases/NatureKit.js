@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // Procedural nature props shared by the world phases. Everything is
 // generated in code (no external assets — contest regulation safe).
@@ -196,57 +197,54 @@ export function createGrassTuft(scale = 1, color = 0x4E8E55) {
 
 // ── Sunflower ─────────────────────────────────────────────────
 
+// Sunflower per the approved Claude Design spec: 13 merged box petals,
+// two-layer brown disc, and an exposed head (userData.head / userData.ph)
+// so phases can sway just the bloom, not the whole stalk.
+const _petalGeo = (() => {
+    const arr = [];
+    const base = new THREE.BoxGeometry(0.11, 0.34, 0.05);
+    for (let i = 0; i < 13; i++) {
+        const g = base.clone();
+        g.translate(0, 0.34, 0);
+        g.rotateZ((i / 13) * Math.PI * 2);
+        arr.push(g);
+    }
+    return mergeGeometries(arr);
+})();
+const _discGeo = new THREE.CylinderGeometry(0.30, 0.30, 0.08, 16).rotateX(Math.PI / 2);
+const _coreGeo = new THREE.CylinderGeometry(0.20, 0.20, 0.10, 14).rotateX(Math.PI / 2);
+const _leafGeo = new THREE.ConeGeometry(0.14, 0.5, 5);
+
 export function createSunflower(scale = 1) {
     const flower = new THREE.Group();
-    const stemH = (0.65 + Math.random() * 0.45) * scale;
+    const H = 1.7;
 
-    const stem = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.016 * scale, 0.028 * scale, stemH, 6),
-        new THREE.MeshLambertMaterial({ color: vary(0x3E7C3E, 0.02, 0.06) })
-    );
-    stem.position.y = stemH / 2;
+    const stemMat = new THREE.MeshLambertMaterial({ color: vary(0x357D2A, 0.02, 0.05) });
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, H, 6), stemMat);
+    stem.position.y = H / 2;
     flower.add(stem);
 
-    for (let i = 0; i < 2; i++) {
-        const leaf = new THREE.Mesh(
-            new THREE.SphereGeometry(0.1 * scale, 8, 6),
-            new THREE.MeshLambertMaterial({ color: vary(0x4E9050, 0.02, 0.07) })
-        );
-        const side = i === 0 ? 1 : -1;
-        leaf.scale.set(1.5, 0.22, 0.7);
-        leaf.position.set(side * 0.09 * scale, stemH * (0.38 + 0.22 * i), 0);
-        leaf.rotation.z = side * 0.55;
-        flower.add(leaf);
-    }
+    const leaf = new THREE.Mesh(_leafGeo, stemMat);
+    leaf.position.set(0.18, H * 0.45, 0);
+    leaf.rotation.z = -1.2;
+    leaf.rotation.y = 0.4;
+    flower.add(leaf);
 
-    // Head faces +z (toward the camera side), tilted gently upward
     const head = new THREE.Group();
-    const center = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.085 * scale, 0.085 * scale, 0.035 * scale, 12),
-        new THREE.MeshLambertMaterial({ color: vary(0x6B4A2A, 0.01, 0.06) })
-    );
-    center.rotation.x = Math.PI / 2;
-    head.add(center);
-
-    const petalMat = new THREE.MeshLambertMaterial({
-        color: vary(Math.random() < 0.5 ? 0xFFC93E : 0xFFD45A, 0.012, 0.04),
-        side: THREE.DoubleSide,
-    });
-    const petalGeo = new THREE.CircleGeometry(0.055 * scale, 5);
-    const petals = 12;
-    for (let i = 0; i < petals; i++) {
-        const a = (i / petals) * Math.PI * 2;
-        const petal = new THREE.Mesh(petalGeo, petalMat);
-        petal.scale.set(0.5, 1.5, 1);
-        petal.position.set(Math.cos(a) * 0.125 * scale, Math.sin(a) * 0.125 * scale, 0);
-        petal.rotation.z = a - Math.PI / 2;
-        head.add(petal);
-    }
-
-    head.position.y = stemH + 0.03 * scale;
-    head.rotation.x = -0.25;
-    head.rotation.y = (Math.random() - 0.5) * 0.5;
+    head.position.y = H;
+    head.rotation.x = -1.0;
+    const petals = new THREE.Mesh(_petalGeo, new THREE.MeshLambertMaterial({
+        color: vary(0xF4B400, 0.01, 0.04),
+    }));
+    const disc = new THREE.Mesh(_discGeo, new THREE.MeshLambertMaterial({ color: 0x6E4A1E }));
+    disc.position.z = 0.02;
+    const core = new THREE.Mesh(_coreGeo, new THREE.MeshLambertMaterial({ color: 0x3F2A12 }));
+    core.position.z = 0.05;
+    head.add(petals, disc, core);
     flower.add(head);
+
+    flower.scale.setScalar(scale);
+    flower.userData = { head, ph: Math.random() * Math.PI * 2 };
     return flower;
 }
 

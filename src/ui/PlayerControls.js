@@ -9,10 +9,38 @@ export class PlayerControls {
         this.progressBarContainer = document.getElementById('progress-bar-container');
         this.playerControls = document.getElementById('player-controls');
         this.backToLakeBtn = document.getElementById('back-to-lake');
+
+        // 再生時間表示 (1:23 / 3:45)
+        this.timeLabel = document.createElement('span');
+        this.timeLabel.id = 'time-label';
+        this.timeLabel.style.cssText = `
+            color: rgba(255,255,255,0.7); font-size: 12px;
+            font-family: 'Inter', monospace; letter-spacing: 0.06em;
+            margin-left: 12px; min-width: 92px; text-align: right;
+            flex-shrink: 0; user-select: none;
+        `;
+        this.timeLabel.textContent = '0:00 / 0:00';
+        if (this.playerControls) this.playerControls.appendChild(this.timeLabel);
         this.songTitle = document.getElementById('song-title');
         this.songArtist = document.getElementById('song-artist');
 
         this.bindEvents();
+    }
+
+    _duration() {
+        return (playerManager.player && playerManager.player.video)
+            ? playerManager.player.video.duration : 0;
+    }
+
+    _fmt(ms) {
+        const s = Math.max(0, Math.floor(ms / 1000));
+        return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    _updateTimeLabel(position) {
+        if (this.timeLabel) {
+            this.timeLabel.textContent = `${this._fmt(position)} / ${this._fmt(this._duration())}`;
+        }
     }
 
     bindEvents() {
@@ -46,23 +74,52 @@ export class PlayerControls {
             }
         });
 
-        this.progressBarContainer.addEventListener('click', (e) => {
-            if (!playerManager.isTimerReady) return; // Guard seeks during loading
-            unlockAudioContext();
+        // シークバー: ドラッグでスクラブ(クリック一発も同じ経路で処理)
+        this._scrubbing = false;
+        this._scrubRatio = 0;
+        this.progressBarContainer.style.touchAction = 'none';
+        const ratioFromEvent = (e) => {
             const rect = this.progressBarContainer.getBoundingClientRect();
-            const ratio = (e.clientX - rect.left) / rect.width;
-            if (playerManager.player && playerManager.player.video) {
-                const position = ratio * playerManager.player.video.duration;
-                playerManager.seek(position);
-            }
+            return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        };
+        this.progressBarContainer.addEventListener('pointerdown', (e) => {
+            if (!playerManager.isTimerReady) return;
+            unlockAudioContext();
+            this._scrubbing = true;
+            this._scrubRatio = ratioFromEvent(e);
+            this.progressBar.style.width = `${this._scrubRatio * 100}%`;
+            this._updateTimeLabel(this._scrubRatio * this._duration());
+            e.preventDefault();
         });
+        window.addEventListener('pointermove', (e) => {
+            if (!this._scrubbing) return;
+            this._scrubRatio = ratioFromEvent(e);
+            this.progressBar.style.width = `${this._scrubRatio * 100}%`;
+            this._updateTimeLabel(this._scrubRatio * this._duration());
+        });
+        const endScrub = () => {
+            if (!this._scrubbing) return;
+            this._scrubbing = false;
+            const dur = this._duration();
+            if (dur > 0) playerManager.seek(this._scrubRatio * dur);
+        };
+        window.addEventListener('pointerup', endScrub);
+        window.addEventListener('pointercancel', endScrub);
 
-        this.backToLakeBtn.addEventListener('click', () => {
-            if (playerManager.isTimerReady) {
-                playerManager.stop();
+        const backWithFade = () => {
+            if (playerManager.isTimerReady && appState.isPlaying) {
+                // フェードアウトしてから停止(ブツ切り防止)
+                playerManager.fadeOutAnd(() => {
+                    playerManager.stop();
+                    eventBus.emit('backToLake');
+                });
+            } else {
+                if (playerManager.isTimerReady) playerManager.stop();
+                eventBus.emit('backToLake');
             }
-            eventBus.emit('backToLake');
-        });
+        };
+        this.backToLakeBtn.addEventListener('click', backWithFade);
+        this._backWithFade = backWithFade;
 
         window.addEventListener('keydown', (e) => {
             if (!playerManager.isTimerReady) {
@@ -81,8 +138,7 @@ export class PlayerControls {
                     playerManager.play();
                 }
             } else if (e.code === 'Escape') {
-                playerManager.stop();
-                eventBus.emit('backToLake');
+                this._backWithFade();
             }
         });
 
@@ -115,8 +171,11 @@ export class PlayerControls {
 
         eventBus.on('timeUpdate', (position) => {
             if (playerManager.player && playerManager.player.video) {
-                const ratio = position / playerManager.player.video.duration;
-                this.progressBar.style.width = `${ratio * 100}%`;
+                if (!this._scrubbing) {
+                    const ratio = position / this._duration();
+                    this.progressBar.style.width = `${ratio * 100}%`;
+                    this._updateTimeLabel(position);
+                }
             }
         });
         

@@ -1,7 +1,39 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
+
+// 被写体ミクのポーズプリセット（正規化ヒューマノイドボーンのオイラー回転）
+// 左腕は z=-1.12 で下ろした状態（orchestra実績値）。符号反転で挙手になる。
+const SHUTTER_MIKU_POSES = [
+    { // 0: リラックス（基本姿勢）
+        leftUpperArm: { x: 0, y: 0, z: -1.12 }, rightUpperArm: { x: 0, y: 0, z: 1.12 },
+        leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: 0, y: -0.26, z: 0 },
+        head: { x: 0, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }
+    },
+    { // 1: 右手を挙げて手を振る
+        leftUpperArm: { x: 0, y: 0, z: -1.12 }, rightUpperArm: { x: 0, y: 0, z: -0.55 },
+        leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: 0, y: 0, z: -0.85 },
+        head: { x: 0, y: -0.18, z: -0.12 }, spine: { x: 0, y: -0.08, z: 0.04 }
+    },
+    { // 2: 左手を挙げてアピール
+        leftUpperArm: { x: 0, y: 0, z: 0.55 }, rightUpperArm: { x: 0, y: 0, z: 1.12 },
+        leftLowerArm: { x: 0, y: 0, z: 0.85 }, rightLowerArm: { x: 0, y: -0.26, z: 0 },
+        head: { x: 0, y: 0.18, z: 0.12 }, spine: { x: 0, y: 0.08, z: -0.04 }
+    },
+    { // 3: 両手を挙げてチアー（サビ用）
+        leftUpperArm: { x: 0, y: 0, z: 0.7 }, rightUpperArm: { x: 0, y: 0, z: -0.7 },
+        leftLowerArm: { x: 0, y: 0, z: 0.35 }, rightLowerArm: { x: 0, y: 0, z: -0.35 },
+        head: { x: -0.12, y: 0, z: 0 }, spine: { x: -0.05, y: 0, z: 0 }
+    },
+    { // 4: 顔の横でピースっぽいカメラ目線ポーズ
+        leftUpperArm: { x: 0, y: 0, z: -1.12 }, rightUpperArm: { x: -0.5, y: 0, z: 0.85 },
+        leftLowerArm: { x: 0, y: 0.26, z: 0 }, rightLowerArm: { x: -1.25, y: -0.35, z: 0 },
+        head: { x: 0, y: -0.1, z: 0.18 }, spine: { x: 0, y: 0, z: -0.05 }
+    }
+];
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
 const SHUTTER_VOCAL_MAP = {
@@ -82,6 +114,30 @@ export class SongShutter extends BaseSong {
         this.allWordGroups = [];
         this.lyricTexturesCache = null;
         this.lastPosition = -1;
+
+        // --- モバイル負荷分岐 ---
+        this.isMobile = window.innerWidth < 768;
+
+        // --- フィルムストリップ（撮影成果の内部記録・最大12枚） ---
+        this.photoLog = [];          // { url, starred, timeStr }
+        this.MAX_FILM_PHOTOS = 12;
+        this.totalShots = 0;         // 累計撮影枚数
+        this.starShots = 0;          // ★ベストショット枚数
+        this.lockShots = 0;          // ターゲットロック成功回数
+        this.filmStripVisible = false;
+        this.filmStripEl = null;
+
+        // --- 被写体ミクVRM ---
+        this.mikuVRM = null;
+        this.mikuBaseY = -4.2;
+        this.mikuBaseX = 0;
+        this.mikuBaseZ = -16.5;      // AFターゲットスコープ(z=-15)のすぐ奥のステージ位置
+        this.mikuPoseIndex = 0;
+        this.lastPhraseStartTime = -1;
+        this.lastPoseBeatStart = -1;
+        this.poseBeatCounter = 0;
+        this.lastVrmRealTime = undefined;
+        this.vrmUpdateAccum = 0;
 
         // --- カメラズーム（写真の拡大縮小範囲）制御システム ---
         this.zoomLevel = 1.0;
@@ -197,6 +253,7 @@ export class SongShutter extends BaseSong {
     init() {
         this.initThree();
         this.initEnvironment();
+        this.loadMiku();
         this.injectCustomStyles();
         this.createViewfinderUI();
         
@@ -232,6 +289,105 @@ export class SongShutter extends BaseSong {
         
         this.isActive = true;
         super.init();
+
+        // 曲終了オーバーレイに表示される撮影成果を初期登録
+        this.updateResultSummary();
+    }
+
+    // 撮影成果サマリーの登録（撮影のたびに最新値で上書き）
+    updateResultSummary() {
+        const lines = [`撮影 ${this.totalShots}枚 ・ ★ベストショット ${this.starShots}枚`];
+        if (this.lockShots > 0) {
+            lines.push(`ターゲットロック成功 ${this.lockShots}回`);
+        }
+        this.setResultSummary({
+            lines: lines,
+            accentColor: '#D85A30',
+            swatch: '#D85A30'
+        });
+    }
+
+    // 被写体ミクVRMをステージ奥にロード（orchestraの実績パターンを踏襲）
+    loadMiku() {
+        const loader = new GLTFLoader();
+        loader.register((parser) => new VRMLoaderPlugin(parser));
+        loader.load(
+            '/assets/models/model_miku.vrm',
+            (gltf) => {
+                if (!this.isActive) {
+                    this.disposeVRM(gltf.userData.vrm);
+                    return;
+                }
+                const vrm = gltf.userData.vrm;
+                this.mikuVRM = vrm;
+                this.scene.add(vrm.scene);
+                vrm.scene.position.set(this.mikuBaseX, this.mikuBaseY, this.mikuBaseZ);
+                vrm.scene.rotation.y = 0; // カメラ（撮影者）の方を向かせる
+                vrm.scene.scale.set(6.0, 6.0, 6.0);
+
+                // 初期ポーズ（リラックス）を即適用
+                this.applyMikuPoseImmediate(SHUTTER_MIKU_POSES[0]);
+                console.log('[SHUTTER] Miku VRM loaded successfully.');
+            },
+            undefined,
+            (error) => {
+                console.error('[SHUTTER] Failed to load VRM:', error);
+            }
+        );
+    }
+
+    applyMikuPoseImmediate(pose) {
+        if (!this.mikuVRM || !this.mikuVRM.humanoid) return;
+        Object.keys(pose).forEach(boneName => {
+            const bone = this.mikuVRM.humanoid.getNormalizedBoneNode(boneName);
+            if (bone) {
+                bone.rotation.set(pose[boneName].x, pose[boneName].y, pose[boneName].z);
+            }
+        });
+    }
+
+    // 目標ポーズへ毎フレーム滑らかにイージング補間
+    lerpMikuPose(pose, t) {
+        if (!this.mikuVRM || !this.mikuVRM.humanoid) return;
+        Object.keys(pose).forEach(boneName => {
+            const bone = this.mikuVRM.humanoid.getNormalizedBoneNode(boneName);
+            if (!bone) return;
+            bone.rotation.x += (pose[boneName].x - bone.rotation.x) * t;
+            bone.rotation.y += (pose[boneName].y - bone.rotation.y) * t;
+            bone.rotation.z += (pose[boneName].z - bone.rotation.z) * t;
+        });
+    }
+
+    advanceMikuPose() {
+        if (!this.mikuVRM) return;
+        // 同じポーズの連続を避けつつ次のポーズへ
+        let next = Math.floor(Math.random() * SHUTTER_MIKU_POSES.length);
+        if (next === this.mikuPoseIndex) {
+            next = (next + 1) % SHUTTER_MIKU_POSES.length;
+        }
+        this.mikuPoseIndex = next;
+        // ポーズ切替時に髪の物理が暴れないようリセット
+        if (this.mikuVRM.springBoneManager) {
+            this.mikuVRM.springBoneManager.reset();
+        }
+    }
+
+    disposeVRM(vrm) {
+        if (!vrm) return;
+        vrm.scene.traverse((obj) => {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                if (Array.isArray(obj.material)) {
+                    obj.material.forEach((m) => {
+                        if (m.map) m.map.dispose();
+                        m.dispose();
+                    });
+                } else {
+                    if (obj.material.map) obj.material.map.dispose();
+                    obj.material.dispose();
+                }
+            }
+        });
     }
 
     onResize() {
@@ -295,6 +451,13 @@ export class SongShutter extends BaseSong {
         this.renderer.domElement.style.left = '0';
         this.renderer.domElement.style.pointerEvents = 'none'; // allow clicks to pass through to songWrapper
         this.songWrapper.appendChild(this.renderer.domElement);
+
+        // 被写体ミクVRM用ライティング（既存のワイヤーフレーム・スプライトは無灯影響なし）
+        this.ambientLight = new THREE.AmbientLight(0x554038, 1.6);
+        this.scene.add(this.ambientLight);
+        this.dirLight = new THREE.DirectionalLight(0xffe8d0, 2.2);
+        this.dirLight.position.set(2, 5, 10);
+        this.scene.add(this.dirLight);
     }
 
     updateFramePosition(frame) {
@@ -428,6 +591,100 @@ export class SongShutter extends BaseSong {
                 border: 2px solid #B9543C;
                 cursor: pointer;
                 box-shadow: 0 0 8px #FFEE11;
+            }
+            /* --- シャッターチャンス: 終盤フィルムストリップ --- */
+            #shutter-filmstrip {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                z-index: 45;
+                display: flex;
+                justify-content: center;
+                pointer-events: none;
+                transform: translateY(120%);
+                transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+            }
+            #shutter-filmstrip.shutter-filmstrip-visible {
+                transform: translateY(0);
+            }
+            #shutter-filmstrip-track {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                max-width: 96vw;
+                overflow-x: auto;
+                padding: 18px 22px;
+                background:
+                    repeating-linear-gradient(90deg, rgba(216,90,48,0.55) 0 6px, transparent 6px 22px) top / 100% 8px no-repeat,
+                    repeating-linear-gradient(90deg, rgba(216,90,48,0.55) 0 6px, transparent 6px 22px) bottom / 100% 8px no-repeat,
+                    rgba(12, 5, 3, 0.92);
+                border-top: 1px solid rgba(216, 90, 48, 0.6);
+                box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.6);
+                pointer-events: auto;
+            }
+            .shutter-film-cell {
+                position: relative;
+                flex: 0 0 auto;
+                width: 76px;
+                height: 76px;
+                border: 3px solid #f5f0ea;
+                background: #000;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+                transform: rotate(var(--film-tilt, 0deg));
+            }
+            .shutter-film-cell img {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                display: block;
+            }
+            .shutter-film-cell.shutter-film-star {
+                border-color: #FFEE11;
+                box-shadow: 0 0 12px rgba(255, 238, 17, 0.75);
+            }
+            .shutter-film-badge {
+                position: absolute;
+                top: -12px;
+                right: -9px;
+                font-size: 17px;
+                color: #FFEE11;
+                text-shadow: 0 0 6px #FFEE11, 0 0 2px #000;
+                font-family: monospace;
+            }
+            .shutter-film-time {
+                position: absolute;
+                bottom: 1px;
+                left: 2px;
+                font-family: monospace;
+                font-size: 8px;
+                color: rgba(255, 255, 255, 0.85);
+                text-shadow: 0 0 3px #000;
+            }
+            .shutter-film-empty {
+                color: rgba(216, 90, 48, 0.85);
+                font-family: monospace;
+                font-size: 12px;
+                letter-spacing: 2px;
+                padding: 28px 10px;
+                white-space: nowrap;
+            }
+            .shutter-film-label {
+                position: absolute;
+                top: -22px;
+                left: 50%;
+                transform: translateX(-50%);
+                color: #D85A30;
+                font-family: monospace;
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 3px;
+                text-shadow: 0 0 8px #D85A30;
+                white-space: nowrap;
+            }
+            @media (max-width: 767px) {
+                .shutter-film-cell { width: 54px; height: 54px; border-width: 2px; }
+                #shutter-filmstrip-track { gap: 6px; padding: 14px 12px; }
             }
         `;
         document.head.appendChild(this.customStyleElement);
@@ -1042,9 +1299,73 @@ export class SongShutter extends BaseSong {
                 pulseScale = 1.0 + 0.25 * Math.exp(-beatProgress * 4.0); // 拍の頭でパッと広がり、指数減衰で縮む
             }
             this.targetScope.scale.set(pulseScale, pulseScale, 1.0);
-            
+
             // ターゲットサークル自体をゆっくり回転させてSFチックにする
             this.targetScope.rotation.z += 0.01;
+        }
+
+        // --- 被写体ミクVRMのポーズ切替＆アイドルアニメーション ---
+        if (this.mikuVRM) {
+            const nowReal = performance.now();
+            if (this.lastVrmRealTime === undefined) this.lastVrmRealTime = nowReal;
+            const deltaTime = Math.min(0.05, (nowReal - this.lastVrmRealTime) / 1000);
+            this.lastVrmRealTime = nowReal;
+
+            // フレーズ切替でポーズチェンジ
+            const currentPhrase = playerManager.player.video.findPhrase(position);
+            if (currentPhrase && currentPhrase.startTime !== this.lastPhraseStartTime) {
+                this.lastPhraseStartTime = currentPhrase.startTime;
+                this.advanceMikuPose();
+            }
+
+            // ビート4拍ごとにもポーズチェンジ（間奏などフレーズが無い区間用）
+            const poseBeat = playerManager.player ? playerManager.player.findBeat(position) : null;
+            if (poseBeat && poseBeat.startTime !== this.lastPoseBeatStart) {
+                this.lastPoseBeatStart = poseBeat.startTime;
+                this.poseBeatCounter++;
+                if (!currentPhrase && this.poseBeatCounter % 4 === 0) {
+                    this.advanceMikuPose();
+                }
+            }
+
+            // サビ突入の瞬間は両手チアーポーズへ
+            if (this.isClimax && this.mikuPoseIndex !== 3 && currentPhrase &&
+                currentPhrase.startTime === this.lastPhraseStartTime &&
+                position - currentPhrase.startTime < 200) {
+                this.mikuPoseIndex = 3;
+            }
+
+            // 目標ポーズへ滑らかに補間
+            this.lerpMikuPose(SHUTTER_MIKU_POSES[this.mikuPoseIndex], 0.08);
+
+            // ビート同期の浮遊バウンス＆ゆれ（シーン生成からの相対時刻ベース）
+            const floatT = position / 1000;
+            let bounce = 0;
+            if (poseBeat) {
+                const beatProg = Math.min(1.0, (position - poseBeat.startTime) / poseBeat.duration);
+                bounce = 0.12 * Math.exp(-beatProg * 5.0);
+            }
+            this.mikuVRM.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.06 + bounce;
+            this.mikuVRM.scene.rotation.y = Math.sin(floatT * 0.5) * 0.08;
+            this.mikuVRM.scene.rotation.z = Math.sin(floatT * 0.7) * 0.015;
+
+            // VRM内部更新（スプリングボーン等）。モバイルは約30fpsに間引いて負荷削減
+            if (this.isMobile) {
+                this.vrmUpdateAccum += deltaTime;
+                if (this.vrmUpdateAccum >= 1 / 30) {
+                    this.mikuVRM.update(this.vrmUpdateAccum);
+                    this.vrmUpdateAccum = 0;
+                }
+            } else {
+                this.mikuVRM.update(deltaTime);
+            }
+        }
+
+        // --- 曲終了12秒前: フィルムストリップ（撮影成果の回収演出）を表示 ---
+        const video = playerManager.player.video;
+        if (!this.filmStripVisible && video && video.duration > 0 &&
+            position >= video.duration - 12000) {
+            this.showFilmStrip();
         }
     }
 
@@ -1127,6 +1448,72 @@ export class SongShutter extends BaseSong {
         }
     }
 
+    // 撮影写真をフィルムストリップ用に内部記録（小型サムネイル化・最大12枚で古い順に間引き）
+    recordPhotoToFilm(canvas, starred, timeStr) {
+        const thumbSize = this.isMobile ? 112 : 160;
+        const thumb = document.createElement('canvas');
+        thumb.width = thumbSize;
+        thumb.height = thumbSize;
+        const tctx = thumb.getContext('2d');
+        tctx.drawImage(canvas, 0, 0, thumbSize, thumbSize);
+        const url = thumb.toDataURL('image/jpeg', 0.72);
+
+        this.photoLog.push({ url: url, starred: starred, timeStr: timeStr });
+        while (this.photoLog.length > this.MAX_FILM_PHOTOS) {
+            this.photoLog.shift(); // 超過分は古い順に間引く
+        }
+
+        // すでにフィルムストリップ表示中なら即時反映
+        if (this.filmStripVisible) {
+            this.renderFilmStripPhotos();
+        }
+    }
+
+    // 曲終了が近づいたら画面下部に撮影成果をフィルムとして横一列表示
+    showFilmStrip() {
+        if (this.filmStripVisible || !this.songWrapper) return;
+        this.filmStripVisible = true;
+
+        const strip = document.createElement('div');
+        strip.id = 'shutter-filmstrip';
+        strip.innerHTML = `
+            <div id="shutter-filmstrip-track" style="position: relative;">
+                <span class="shutter-film-label">— FILM ROLL : BEST MOMENTS —</span>
+            </div>
+        `;
+        this.songWrapper.appendChild(strip);
+        this.filmStripEl = strip;
+        this.renderFilmStripPhotos();
+
+        requestAnimationFrame(() => {
+            strip.classList.add('shutter-filmstrip-visible');
+        });
+    }
+
+    renderFilmStripPhotos() {
+        if (!this.filmStripEl) return;
+        const track = this.filmStripEl.querySelector('#shutter-filmstrip-track');
+        if (!track) return;
+
+        const label = '<span class="shutter-film-label">— FILM ROLL : BEST MOMENTS —</span>';
+        if (this.photoLog.length === 0) {
+            track.innerHTML = `${label}<div class="shutter-film-empty">NO FILM — タップでシャッターを切ろう！</div>`;
+            return;
+        }
+
+        const cells = this.photoLog.map((p, i) => {
+            const tilt = ((i % 2 === 0) ? -1 : 1) * (1 + (i % 3));
+            return `
+                <div class="shutter-film-cell${p.starred ? ' shutter-film-star' : ''}" style="--film-tilt: ${tilt}deg;">
+                    <img src="${p.url}" alt="">
+                    ${p.starred ? '<span class="shutter-film-badge">★</span>' : ''}
+                    <span class="shutter-film-time">${p.timeStr}</span>
+                </div>
+            `;
+        }).join('');
+        track.innerHTML = label + cells;
+    }
+
     triggerShutterFlash() {
         const flash = document.createElement('div');
         flash.style.position = 'absolute';
@@ -1148,6 +1535,61 @@ export class SongShutter extends BaseSong {
         }, 50);
     }
     
+    // 被写体ミクVRMだけを透過レンダリングし、ポラロイド写真の中央に焼き付ける
+    burnMikuIntoPhoto(ctx, photoX, photoY, photoW, photoH) {
+        if (!this.mikuVRM || !this.renderer) return;
+
+        // ミク以外のオブジェクトを一時的に非表示にする
+        const toHide = [];
+        this.frames.forEach(f => {
+            toHide.push(f);
+            if (f.userData.photoMesh) toHide.push(f.userData.photoMesh);
+        });
+        this.activeSprites.forEach(s => toHide.push(s));
+        this.transitioningPhotos.forEach(p => toHide.push(p));
+        if (this.targetScope) toHide.push(this.targetScope);
+
+        const prevVisibility = toHide.map(o => o.visible);
+        toHide.forEach(o => { o.visible = false; });
+
+        const prevBackground = this.scene.background;
+        const prevFog = this.scene.fog;
+        this.scene.background = null;
+        this.scene.fog = null;
+
+        try {
+            // ミクのみを透過背景でレンダリングし、その場でCanvasへ転写
+            this.renderer.render(this.scene, this.camera);
+
+            const srcCanvas = this.renderer.domElement;
+            const srcW = srcCanvas.width;
+            const srcH = srcCanvas.height;
+
+            // 写真エリアのアスペクト比に合わせて中央クロップ
+            const photoAspect = photoW / photoH;
+            let sw = srcW;
+            let sh = srcW / photoAspect;
+            if (sh > srcH) {
+                sh = srcH;
+                sw = srcH * photoAspect;
+            }
+            const sx = (srcW - sw) / 2;
+            const sy = (srcH - sh) / 2;
+
+            ctx.save();
+            ctx.globalAlpha = 0.96;
+            ctx.drawImage(srcCanvas, sx, sy, sw, sh, photoX, photoY, photoW, photoH);
+            ctx.restore();
+        } catch (err) {
+            console.warn('[SHUTTER] Miku burn-in skipped:', err);
+        }
+
+        // すべての可視状態と背景・フォグを復元
+        toHide.forEach((o, i) => { o.visible = prevVisibility[i]; });
+        this.scene.background = prevBackground;
+        this.scene.fog = prevFog;
+    }
+
     takePhoto() {
         if (!playerManager.player || !playerManager.player.isPlaying || !playerManager.player.timer) {
             return;
@@ -1184,6 +1626,9 @@ export class SongShutter extends BaseSong {
                 activeVocal = 'miku'; // fallback
             }
         }
+
+        // 【★ベストショット判定】サビ中（findChorus）またはミク＆リン両ボーカル同時パート中の撮影
+        const isBestShot = this.isClimax || activeVocal === 'duet';
 
         // 【フォトスポット・ターゲットロック判定 (案B)】
         let isTargetLocked = false;
@@ -1412,6 +1857,9 @@ export class SongShutter extends BaseSong {
         ctx.beginPath();
         ctx.rect(photoX, photoY, photoW, photoH);
         ctx.clip();
+
+        // --- 0. 被写体ミクVRMの焼き付け（実際のWebGLレンダリングをミクのみ表示で抽出） ---
+        this.burnMikuIntoPhoto(ctx, photoX, photoY, photoW, photoH);
 
         // --- 1. 背景のすべての浮遊フレーム（ワイヤーフレーム ＆ 過去の写真）の焼き付け ---
         ctx.save();
@@ -1872,6 +2320,29 @@ export class SongShutter extends BaseSong {
             ctx.fillText('終わらない瞬間を、いつまでも。 ✨', photoX + 30, textYPos);
         }
 
+        // 【★ベストショット刻印】サビ／デュエット同時パート撮影は写真フレーム左上に★マークを付与
+        if (isBestShot) {
+            ctx.save();
+            ctx.shadowColor = '#FFEE11';
+            ctx.shadowBlur = 16;
+            ctx.fillStyle = '#FFEE11';
+            ctx.font = 'bold 64px "Inter", "Noto Sans JP", sans-serif';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('★', 22, 48);
+            ctx.shadowBlur = 0;
+            ctx.font = 'bold 16px monospace';
+            ctx.fillText('BEST', 24, 92);
+            ctx.restore();
+        }
+
+        // 【フィルムストリップ記録 ＆ 撮影成果サマリー更新】
+        this.totalShots++;
+        if (isBestShot) this.starShots++;
+        if (isTargetLocked) this.lockShots++;
+        this.recordPhotoToFilm(canvas, isBestShot, timeStr);
+        this.updateResultSummary();
+
         // 3. CanvasTexture の生成と設定
         const texture = new THREE.CanvasTexture(canvas);
         texture.colorSpace = THREE.SRGBColorSpace;
@@ -1976,7 +2447,31 @@ export class SongShutter extends BaseSong {
         if (this.viewfinder && this.viewfinder.parentNode) {
             this.viewfinder.parentNode.removeChild(this.viewfinder);
         }
-        
+
+        // フィルムストリップDOMと写真ログの解放
+        if (this.filmStripEl && this.filmStripEl.parentNode) {
+            this.filmStripEl.parentNode.removeChild(this.filmStripEl);
+        }
+        this.filmStripEl = null;
+        this.photoLog = [];
+
+        // 被写体ミクVRMの完全解放
+        if (this.mikuVRM) {
+            this.scene.remove(this.mikuVRM.scene);
+            this.disposeVRM(this.mikuVRM);
+            this.mikuVRM = null;
+        }
+
+        // ライトの解放
+        if (this.ambientLight) {
+            this.scene.remove(this.ambientLight);
+            this.ambientLight = null;
+        }
+        if (this.dirLight) {
+            this.scene.remove(this.dirLight);
+            this.dirLight = null;
+        }
+
         if (this.renderer) this.renderer.dispose();
 
         super.destroy();

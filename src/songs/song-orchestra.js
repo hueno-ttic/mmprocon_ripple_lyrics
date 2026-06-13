@@ -49,6 +49,16 @@ export class SongOrchestra extends BaseSong {
         this.climaxOrbs = [];                 // サビ中に順次打ち上げるオーブの退避用配列
         this.climaxLaunchedOrbs = new Set();  // 既に打ち上げ開始したオーブのインデックス
 
+        // オーブゲージ(蓄積の可視化)と成果サマリーのステート
+        this.collectedColors = [];        // 曲全体で集めたオーブ色の履歴(混色スウォッチ用)
+        this.totalCollectedCount = 0;     // 曲全体で集めたオーブ総数(成果サマリー用)
+        this.chorusOrbCount = 0;          // 直近のサビで消費するオーブ数(花火規模の比例係数)
+        this.GAUGE_CAPACITY = 16;         // ゲージが満タンになるオーブ数
+        this.orbGaugeEl = null;
+        this.orbGaugeFillEl = null;
+        this.orbGaugeCountEl = null;
+        this._gaugeResetTimer = null;
+
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnClick = this.onClick.bind(this);
 
@@ -64,6 +74,8 @@ export class SongOrchestra extends BaseSong {
         this.glowTexture = this.createGlowTexture();
         this.initThree();
         this.initStars();
+        this.initOrbGauge();
+        this.updateResultSummary(); // 0個の状態でも成果サマリーを初期登録
         window.addEventListener('resize', this.boundOnResize);
         this.container.addEventListener('click', this.boundOnClick);
         this.container.addEventListener('mousemove', this._boundOnMouseMove);
@@ -748,6 +760,12 @@ export class SongOrchestra extends BaseSong {
         this.scene.add(orb);
         this.resonateOrbs.push(orb);
 
+        // 蓄積の可視化: 左端のオーブゲージへ色の層を積み、成果サマリーを更新
+        this.collectedColors.push(nextColorHex);
+        this.totalCollectedCount++;
+        this.addOrbToGauge(nextColorHex);
+        this.updateResultSummary();
+
         // 3. カラー変更を告げる美しい一時的なミニポップアップ（Toast）の表示
         const colorNames = {
             '#ffffff': '純白',
@@ -783,20 +801,28 @@ export class SongOrchestra extends BaseSong {
         });
     }
 
-    spawnCustomColorFirework(color, targetPos) {
+    /**
+     * 色彩交響花火の生成。intensity(蓄積オーブ数に比例)で
+     * 粒子数・拡散速度・粒子サイズが変化する。
+     * intensity=1.0 が従来規模、0.35前後=控えめな単発、2.2=大輪。
+     */
+    spawnCustomColorFirework(color, targetPos, intensity = 1.0) {
+        const clamped = Math.min(2.4, Math.max(0.3, intensity));
+        const isMobile = window.innerWidth < 768;
         const geo = new THREE.BufferGeometry();
-        const count = 180; // 粒子数を増やして大輪の密度の高さを維持（120 ➔ 180）
+        const baseCount = isMobile ? 110 : 180; // モバイルは粒子数を抑えて負荷軽減
+        const count = Math.round(baseCount * clamped); // 蓄積数に比例した密度
         const positions = new Float32Array(count * 3);
         const velocities = [];
         for (let i = 0; i < count; i++) {
             positions[i*3] = targetPos.x;
             positions[i*3+1] = targetPos.y;
             positions[i*3+2] = targetPos.z;
-            
+
             // 全方位球状拡散ベクトル（2倍大きく広がるよう初期爆発速度を倍増）
             const theta = Math.random() * Math.PI * 2;
             const phi = Math.acos((Math.random() * 2) - 1);
-            const speed = 0.95 + Math.random() * 1.0; // 拡散スピードを倍増 (0.45 ➔ 0.95)
+            const speed = (0.95 + Math.random() * 1.0) * (0.7 + clamped * 0.3); // 蓄積数に比例して大きく開く
             velocities.push(new THREE.Vector3(
                 Math.sin(phi) * Math.cos(theta) * speed,
                 Math.sin(phi) * Math.sin(theta) * speed + 0.04, // わずかな上昇バイアス
@@ -804,9 +830,9 @@ export class SongOrchestra extends BaseSong {
             ));
         }
         geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        const mat = new THREE.PointsMaterial({ 
-            color: color, 
-            size: 0.50, // 粒子サイズを大きく（0.30 ➔ 0.50）
+        const mat = new THREE.PointsMaterial({
+            color: color,
+            size: 0.50 * (0.75 + clamped * 0.25), // 蓄積数に比例して粒も大きく
             map: this.glowTexture, // 加算合成のぼかし発光テクスチャを割り当て
             blending: THREE.AdditiveBlending, // 加算合成で火花同士が重なるとより明るく輝く
             transparent: true, 
@@ -817,6 +843,96 @@ export class SongOrchestra extends BaseSong {
         particles.userData = { velocities, birth: Date.now() };
         this.scene.add(particles);
         this.fireworks.push(particles);
+    }
+
+    // ─── オーブゲージ（蓄積の可視化）DOM ───
+
+    initOrbGauge() {
+        const isMobile = window.innerWidth < 768;
+        if (!document.getElementById('orchestra-orb-gauge-style')) {
+            const style = document.createElement('style');
+            style.id = 'orchestra-orb-gauge-style';
+            style.textContent = `
+                .orchestra-orb-gauge { position:absolute; left:${isMobile ? 8 : 16}px; top:50%; transform:translateY(-50%); width:${isMobile ? 12 : 16}px; height:${isMobile ? '36vh' : '46vh'}; z-index:150; pointer-events:none; display:flex; flex-direction:column; align-items:center; }
+                .orchestra-orb-gauge-count { font:600 ${isMobile ? 10 : 12}px/1.4 "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif; color:rgba(255,255,255,0.88); letter-spacing:0.08em; margin-bottom:6px; text-shadow:0 0 6px rgba(0,0,0,0.85); white-space:nowrap; }
+                .orchestra-orb-gauge-tube { position:relative; flex:1 1 auto; width:100%; border:1px solid rgba(255,255,255,0.25); border-radius:8px; background:rgba(8,8,30,0.55); overflow:hidden; box-shadow:inset 0 0 12px rgba(24,95,165,0.35); }
+                .orchestra-orb-gauge-fill { position:absolute; bottom:0; left:0; width:100%; height:0%; display:flex; flex-direction:column-reverse; transition:height 0.45s cubic-bezier(0.22,1,0.36,1); }
+                .orchestra-orb-gauge-layer { flex:1 1 0; min-height:2px; width:100%; opacity:0.92; box-shadow:0 0 6px currentColor; animation:orchestra-orb-layer-in 0.5s ease; }
+                @keyframes orchestra-orb-layer-in { from { opacity:0; filter:brightness(2.4); } to { opacity:0.92; filter:brightness(1); } }
+                .orchestra-orb-gauge-label { writing-mode:vertical-rl; font:500 ${isMobile ? 9 : 10}px/1 "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif; color:rgba(255,255,255,0.55); letter-spacing:0.22em; margin-top:8px; text-shadow:0 0 6px rgba(0,0,0,0.85); }
+                .orchestra-orb-gauge-burst .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-flash 0.7s ease; }
+                @keyframes orchestra-orb-gauge-flash { 0% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35); } 30% { box-shadow:0 0 26px rgba(255,255,255,0.95); border-color:#fff; } 100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35); } }
+            `;
+            document.head.appendChild(style);
+        }
+
+        const gauge = document.createElement('div');
+        gauge.className = 'orchestra-orb-gauge';
+        gauge.innerHTML = `
+            <div class="orchestra-orb-gauge-count">0</div>
+            <div class="orchestra-orb-gauge-tube"><div class="orchestra-orb-gauge-fill"></div></div>
+            <div class="orchestra-orb-gauge-label">共鳴オーブ</div>
+        `;
+        this.songWrapper.appendChild(gauge);
+        this.orbGaugeEl = gauge;
+        this.orbGaugeFillEl = gauge.querySelector('.orchestra-orb-gauge-fill');
+        this.orbGaugeCountEl = gauge.querySelector('.orchestra-orb-gauge-count');
+    }
+
+    // 集めたオーブの色を1層としてゲージに積む
+    addOrbToGauge(hex) {
+        if (!this.orbGaugeFillEl) return;
+        const layer = document.createElement('div');
+        layer.className = 'orchestra-orb-gauge-layer';
+        layer.style.background = hex;
+        layer.style.color = hex; // box-shadow の currentColor 発光用
+        this.orbGaugeFillEl.appendChild(layer);
+
+        const n = this.orbGaugeFillEl.children.length;
+        this.orbGaugeFillEl.style.height = `${Math.min(100, (n / this.GAUGE_CAPACITY) * 100)}%`;
+        if (this.orbGaugeCountEl) this.orbGaugeCountEl.textContent = String(n);
+    }
+
+    // サビでオーブを消費した瞬間にゲージをフラッシュ→空にして「次のサビへまた集める」ループを作る
+    resetOrbGauge(consumedCount) {
+        if (!this.orbGaugeEl) return;
+        clearTimeout(this._gaugeResetTimer);
+        if (consumedCount > 0) {
+            this.orbGaugeEl.classList.add('orchestra-orb-gauge-burst');
+        }
+        this._gaugeResetTimer = setTimeout(() => {
+            if (!this.orbGaugeEl) return;
+            this.orbGaugeEl.classList.remove('orchestra-orb-gauge-burst');
+            if (this.orbGaugeFillEl) {
+                this.orbGaugeFillEl.style.height = '0%';
+                while (this.orbGaugeFillEl.firstChild) {
+                    this.orbGaugeFillEl.removeChild(this.orbGaugeFillEl.firstChild);
+                }
+            }
+            if (this.orbGaugeCountEl) this.orbGaugeCountEl.textContent = '0';
+        }, consumedCount > 0 ? 700 : 0);
+    }
+
+    // ─── 成果サマリー（集めた音色の混色 = あなたの空の色）───
+
+    mixCollectedColors() {
+        if (!this.collectedColors.length) return '#185FA5';
+        let r = 0, g = 0, b = 0;
+        this.collectedColors.forEach(hex => {
+            const c = new THREE.Color(hex);
+            r += c.r; g += c.g; b += c.b;
+        });
+        const n = this.collectedColors.length;
+        const mixed = new THREE.Color(r / n, g / n, b / n);
+        return `#${mixed.getHexString()}`;
+    }
+
+    updateResultSummary() {
+        this.setResultSummary({
+            lines: [`集めた音色 ${this.totalCollectedCount} ・ あなたの空の色`],
+            accentColor: '#185FA5',
+            swatch: this.mixCollectedColors()
+        });
     }
 
     update(time) {
@@ -1054,6 +1170,9 @@ export class SongOrchestra extends BaseSong {
                 this.climaxLaunchedOrbs.clear();
 
                 const orbCount = this.climaxOrbs.length;
+                this.chorusOrbCount = orbCount; // 花火規模の比例係数として保持
+                this.resetOrbGauge(orbCount);   // ゲージを消費リセット（次のサビへまた集めるループ）
+
                 if (orbCount > 0) {
                     let climaxDuration = 30000;
                     if (playerManager.player && playerManager.player.timer) {
@@ -1069,6 +1188,19 @@ export class SongOrchestra extends BaseSong {
                         icon: '🎆',
                         title: '色彩交響曲（カラー・シンフォニー）',
                         body: `蓄積された${orbCount}個の言葉の記憶が、\nサビの終わりに向け時間をかけて夜空に咲き誇ります！`,
+                        duration: 4500
+                    });
+                } else {
+                    // 蓄積0個のサビ: 控えめな単発花火を一輪だけ上げ、蓄積が体験に直結することを伝える
+                    this.spawnCustomColorFirework(
+                        new THREE.Color(this.currentColor),
+                        new THREE.Vector3((Math.random() - 0.5) * 6.0, 3.0 + Math.random() * 2.0, -24.0),
+                        0.35
+                    );
+                    this.showTutorialCard({
+                        icon: '🌠',
+                        title: '静かな夜空…',
+                        body: 'オーブが空のため、ささやかな一輪だけ。\n歌詞に触れてオーブを集めると、\nサビの花火が大連鎖になります。',
                         duration: 4500
                     });
                 }
@@ -1152,7 +1284,25 @@ export class SongOrchestra extends BaseSong {
                             }
                         });
 
-                        this.spawnCustomColorFirework(orb.userData.color, orb.position);
+                        // 花火の比例: 蓄積オーブ数が多いほど一発あたりの規模が増し、さらに連鎖サブ爆発が加わる
+                        const accumulated = Math.max(this.chorusOrbCount, totalOrbs);
+                        const intensity = Math.min(2.2, 0.6 + accumulated * 0.11);
+                        this.spawnCustomColorFirework(orb.userData.color, orb.position, intensity);
+
+                        const extraBursts = accumulated >= 12 ? 2 : (accumulated >= 6 ? 1 : 0);
+                        for (let b = 0; b < extraBursts; b++) {
+                            const offset = new THREE.Vector3(
+                                (Math.random() - 0.5) * 6.0,
+                                (Math.random() - 0.5) * 4.0,
+                                (Math.random() - 0.5) * 4.0
+                            );
+                            this.spawnCustomColorFirework(
+                                orb.userData.color,
+                                orb.position.clone().add(offset),
+                                intensity * 0.55
+                            );
+                        }
+
                         this.scene.remove(orb);
                         if (orb.material) orb.material.dispose();
                         if (orb.userData.trail) {
@@ -1646,7 +1796,20 @@ export class SongOrchestra extends BaseSong {
         clearTimeout(this._tutCardTimer);
         clearTimeout(this._drawAutoConfirmTimer);
         clearTimeout(this._introAutoTimer);
-        
+        clearTimeout(this._gaugeResetTimer);
+
+        // オーブゲージのDOM・注入スタイルのクリーンアップ
+        if (this.orbGaugeEl && this.orbGaugeEl.parentNode) {
+            this.orbGaugeEl.parentNode.removeChild(this.orbGaugeEl);
+        }
+        this.orbGaugeEl = null;
+        this.orbGaugeFillEl = null;
+        this.orbGaugeCountEl = null;
+        const orbGaugeStyle = document.getElementById('orchestra-orb-gauge-style');
+        if (orbGaugeStyle && orbGaugeStyle.parentNode) {
+            orbGaugeStyle.parentNode.removeChild(orbGaugeStyle);
+        }
+
         if (this.mainLyricEl && this.mainLyricEl.parentNode) {
             this.mainLyricEl.parentNode.removeChild(this.mainLyricEl);
             this.mainLyricEl = null;

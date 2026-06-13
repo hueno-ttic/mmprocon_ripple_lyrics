@@ -56,3 +56,7 @@ tests/
 eval_output*/
 eval_*.cjs
 eval_*.js
+
+# Claude Design 連携用(参照素材・下書き — アプリ本体に含めない)
+design_refs/
+design_drafts/

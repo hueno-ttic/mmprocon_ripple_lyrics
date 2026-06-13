@@ -139,12 +139,22 @@ export class BaseSong {
                     console.warn('[Lake Sonare] Web Audio unlock failed safely: ', err);
                 }
                 playerManager.seek(0);
+                playerManager.fadeIn(1200); // 曲の頭出しをなめらかに
                 playerManager.play();
             }
         });
         if (playerManager.managed) {
             this._tutorialDismissTimer = setTimeout(dismiss, 15000);
         }
+    }
+
+    /**
+     * 曲のプレイ成果を登録する。曲終了オーバーレイ(main.js)に
+     * 曲固有のサマリーとして表示される。何度呼んでも最新値で上書き。
+     * @param {{lines: string[], accentColor?: string, swatch?: string}} summary
+     */
+    setResultSummary(summary) {
+        eventBus.emit('songResult', { songId: this.songId, ...summary });
     }
 
     showHintUI(hintText, themeColor) {

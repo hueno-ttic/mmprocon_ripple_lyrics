@@ -198,6 +198,48 @@ class PlayerManager {
             this.player.volume = value;
         }
     }
+
+    // ── 音量フェード(ユーザー設定値はlocalStorageが真実) ──
+    _storedVolume() {
+        if (localStorage.getItem('appMuted') === '1') return 0;
+        const v = parseInt(localStorage.getItem('appVolume'), 10);
+        return Number.isFinite(v) ? v : 80;
+    }
+
+    _clearFade() {
+        if (this._fadeTimer) {
+            clearInterval(this._fadeTimer);
+            this._fadeTimer = null;
+        }
+    }
+
+    /** 曲の頭出し用: 0 → 設定音量へなめらかに上げる */
+    fadeIn(ms = 1200) {
+        this._clearFade();
+        const t0 = performance.now();
+        this.setVolume(0);
+        this._fadeTimer = setInterval(() => {
+            const k = Math.min(1, (performance.now() - t0) / ms);
+            this.setVolume(this._storedVolume() * k);
+            if (k >= 1) this._clearFade();
+        }, 50);
+    }
+
+    /** 停止前用: 設定音量 → 0 へ下げてからコールバック、その後設定値へ復帰 */
+    fadeOutAnd(onDone, ms = 450) {
+        this._clearFade();
+        const t0 = performance.now();
+        const start = this._storedVolume();
+        this._fadeTimer = setInterval(() => {
+            const k = Math.min(1, (performance.now() - t0) / ms);
+            this.setVolume(start * (1 - k));
+            if (k >= 1) {
+                this._clearFade();
+                if (onDone) onDone();
+                this.setVolume(this._storedVolume());
+            }
+        }, 40);
+    }
 }
 
 export const playerManager = new PlayerManager();

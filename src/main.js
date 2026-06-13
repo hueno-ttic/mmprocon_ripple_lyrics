@@ -3,6 +3,7 @@ import { eventBus } from './core/eventBus.js';
 import { playerManager } from './core/player.js';
 import { WorldUI } from './lake/WorldUI.js';
 import { PlayerControls } from './ui/PlayerControls.js';
+import { VolumeControl } from './ui/VolumeControl.js';
 import { SONGS } from './config/songs.js';
 import { BaseSong } from './songs/BaseSong.js';
 import { SongKotaete } from './songs/song-kotaete.js';
@@ -45,6 +46,9 @@ class Application {
         // Initialize PlayerControls
         this.playerControls = new PlayerControls();
 
+        // 全曲共通の音量コントロール(右下常設・localStorageで永続化)
+        this.volumeControl = new VolumeControl();
+
         // Prevent interaction during intro
         const uiContainer = document.getElementById('ui-container');
         if (uiContainer) uiContainer.style.pointerEvents = 'none';
@@ -58,6 +62,8 @@ class Application {
 
         // Start Entry Sequence
         const titleScreen = new TitleScreen(() => {
+            // タイトル通過後から音量コントロールを表示
+            this.volumeControl.show();
             const storyIntro = new StoryIntro(() => {
                 // Intro finished, allow interaction & initialize LakeUI now!
                 console.log("Intro finished. Initializing LakeUI...");
@@ -99,6 +105,16 @@ class Application {
 
         eventBus.on('allSongsComplete', () => {
             setTimeout(() => new CompletionScreen().show(), 1200);
+        });
+
+        // 各曲のプレイ成果(エンドカード用)。最新値で上書きし、湖への還元用に永続化
+        eventBus.on('songResult', (result) => {
+            this._lastSongResult = result;
+            try {
+                const all = JSON.parse(localStorage.getItem('songResults') || '{}');
+                all[result.songId] = result;
+                localStorage.setItem('songResults', JSON.stringify(all));
+            } catch (e) { /* storage失敗は致命的でない */ }
         });
 
         eventBus.on('songEnd', () => {
@@ -165,6 +181,42 @@ class Application {
         `;
 
         overlay.appendChild(text);
+
+        // 曲固有の成果サマリー(エンドカード) — setResultSummary登録曲のみ
+        let resultEl = null;
+        const result = this._lastSongResult;
+        if (result && result.songId === appState.currentSongId && Array.isArray(result.lines)) {
+            const accent = result.accentColor || color;
+            resultEl = document.createElement('div');
+            resultEl.style.cssText = `
+                margin-top: 22px; display: flex; flex-direction: column;
+                align-items: center; gap: 7px;
+                color: rgba(255,255,255,0);
+                font-size: clamp(12px, 2.2vw, 15px);
+                letter-spacing: 0.2em; font-weight: 300;
+                font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
+                transition: color 1.2s ease 0.8s;
+            `;
+            result.lines.forEach((line) => {
+                const row = document.createElement('div');
+                row.textContent = line;
+                row.style.textShadow = `0 0 14px ${accent}`;
+                resultEl.appendChild(row);
+            });
+            if (result.swatch) {
+                const sw = document.createElement('div');
+                sw.style.cssText = `
+                    width: 30px; height: 30px; border-radius: 50%;
+                    background: ${result.swatch};
+                    box-shadow: 0 0 18px ${result.swatch};
+                    margin-top: 4px;
+                `;
+                resultEl.appendChild(sw);
+            }
+            overlay.appendChild(resultEl);
+        }
+        this._lastSongResult = null;
+
         overlay.appendChild(hint);
         document.body.appendChild(overlay);
 
@@ -172,6 +224,7 @@ class Application {
             overlay.style.background = 'rgba(0,0,0,0.7)';
             text.style.color = 'rgba(255,255,255,0.9)';
             hint.style.color = 'rgba(255,255,255,0.4)';
+            if (resultEl) resultEl.style.color = 'rgba(255,255,255,0.85)';
         });
 
         setTimeout(() => {
