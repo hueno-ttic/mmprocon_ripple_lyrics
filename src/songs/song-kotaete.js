@@ -45,11 +45,11 @@ export class SongKotaete extends BaseSong {
         this.reachBlend = 0;              // 0=脱力 1=手を差し伸べる
         this.reachBlendTarget = 0;
         this.mikuGlowPulse = 0;
-        // ちょくちょく振り返って手を振る挨拶演出
-        this.greetTimer = 5 + Math.random() * 4;  // 次に振り返るまでの秒
+        // 歌詞「手を振る/手を降る」のときだけ振り返って手を振る演出
         this.greetActive = false;
         this.greetElapsed = 0;
         this.greetWave = 0;               // 0..1 手を振る強さ
+        this._lastGreetPhraseStart = -1;  // 同じフレーズで多重発火しないための記録
         this._lastFrameReal = performance.now();
         this._sceneStartReal = performance.now(); // シェーダー/アニメ用の相対時刻基準
 
@@ -386,21 +386,16 @@ export class SongKotaete extends BaseSong {
         this.currentVRM.update(deltaSec);
     }
 
-    // 楽曲中ちょくちょく振り返って手を振る挨拶の進行管理。
+    // 振り返って手を振る演出の進行管理。
+    // 開始は歌詞「手を振る/手を降る」検知時のみ(update内でgreetActiveをtrueにする)。
+    // それ以外は背中向き(向こう側)で先導し、手も振らない。
     // 選択・フィナーレ中は本来の振り返り演出を優先するため挨拶は引っ込める。
     updateGreet(deltaSec) {
         if (this.choiceActive || this.finaleActive) {
             if (this.greetActive) { this.greetActive = false; this.greetWave = 0; }
             return;
         }
-        if (!this.greetActive) {
-            this.greetTimer -= deltaSec;
-            if (this.greetTimer <= 0) {
-                this.greetActive = true;
-                this.greetElapsed = 0;
-            }
-            return;
-        }
+        if (!this.greetActive) return; // 歌詞トリガーが来るまで何もしない(背中向きのまま)
         // 背中向き → 振り返り → 手を振る → 背中向きへ戻る
         const DUR = 3.4;
         this.greetElapsed += deltaSec;
@@ -411,8 +406,7 @@ export class SongKotaete extends BaseSong {
         if (this.greetElapsed >= DUR) {
             this.greetActive = false;
             this.greetWave = 0;
-            this.mikuFacingTarget = Math.PI;
-            this.greetTimer = 6 + Math.random() * 5;              // 次の振り返りまで
+            this.mikuFacingTarget = Math.PI;                      // 背中向きへ戻る
         }
     }
 
@@ -839,6 +833,18 @@ export class SongKotaete extends BaseSong {
         if (spawnPhrase && spawnPhrase !== this.lastPhrase && !this.isTutorialActive) {
             this.lastPhrase = spawnPhrase;
             this.spawnText(spawnPhrase, position);
+        }
+
+        // 歌詞が「手を振る/手を降る」のフレーズに差し掛かったときだけ振り返って手を振る。
+        // 先読みフレーズ(約LEADms先)で検知して、歌唱の瞬間に振り返り動作が合うようにする。
+        if (spawnPhrase && spawnPhrase.text && spawnPhrase.startTime !== this._lastGreetPhraseStart
+            && !this.choiceActive && !this.finaleActive) {
+            const tx = spawnPhrase.text;
+            if (tx.includes('手を振') || tx.includes('手を降') || tx.includes('手をふ') || tx.includes('てをふ')) {
+                this._lastGreetPhraseStart = spawnPhrase.startTime;
+                this.greetActive = true;
+                this.greetElapsed = 0;
+            }
         }
 
         // ---- スプライト更新 ----
