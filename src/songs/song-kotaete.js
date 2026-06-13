@@ -544,6 +544,7 @@ export class SongKotaete extends BaseSong {
     resonate(sprite, clientX, clientY) {
         sprite.userData.resonated = true;
         sprite.userData.resonateFlash = 1.4; // 強めにポップ
+        sprite.userData.settle = 0;          // 0→1: 応答済みの「落ち着いた軌跡」へ変化
         // 共鳴の還元①: 共鳴したフレーズは輝く軌跡として長く回廊に残る
         sprite.userData.life += 2800;
         this.resonanceCount++;
@@ -772,13 +773,17 @@ export class SongKotaete extends BaseSong {
         // 歌詞表示は「触れて応える」フレーズ3Dスプライトに一本化。
         // 単語DOM(汎用lyricRenderer)は二重表示で紛らわしいため使わない。
         // 「今どこを歌っているか」は各フレーズ内の歌唱パルス(該当文字の発光)で表現する。
-        const phrase = playerManager.player.video.findPhrase(position);
+        // 演出ラグ相殺の先読み: フェードイン+奥からの流れ込みで視認が遅れる分、
+        // フレーズを startTime より早め(LEAD ms 前)に生成して歌唱と合わせる。
+        // サビはカメラが速く流れ込みが短いので先読みを減らす。
+        const LEAD = isClimax ? 350 : 750;
         const word = playerManager.player.video.findWord(position)
                   || playerManager.player.video.findChar(position);
         if (this.lyricRenderer) this.lyricRenderer.update(null);
-        if (phrase && phrase !== this.lastPhrase && !this.isTutorialActive) {
-            this.lastPhrase = phrase;
-            this.spawnText(phrase, position);
+        const spawnPhrase = playerManager.player.video.findPhrase(position + LEAD);
+        if (spawnPhrase && spawnPhrase !== this.lastPhrase && !this.isTutorialActive) {
+            this.lastPhrase = spawnPhrase;
+            this.spawnText(spawnPhrase, position);
         }
 
         // ---- スプライト更新 ----
@@ -796,7 +801,14 @@ export class SongKotaete extends BaseSong {
             ud.resonateFlash = Math.max(0, ud.resonateFlash - deltaSec * 2.2);
             const flash = ud.resonateFlash;
 
-            const pulseScale = 1.0 + ud.pulseProgress * 0.25 + flash * 0.45;
+            // 応答済みの言葉は「ポップ → 縮んで落ち着いた軌跡」へ変化させ、
+            // タップ済みと未タップを一目で区別できるようにする(再タップ防止)
+            if (ud.resonated) {
+                ud.settle = Math.min(1, (ud.settle || 0) + deltaSec * 1.8);
+            }
+            const settle = ud.settle || 0;
+            const settleScale = 1 - settle * 0.42;            // 1 → 0.58 へ縮む
+            const pulseScale = (1.0 + ud.pulseProgress * 0.25 + flash * 0.45) * settleScale;
             let dispW = ud.baseW * pulseScale;
             let dispH = ud.baseH * pulseScale;
             // 毎フレーム、現在の距離での可視幅にクランプ(接近して巨大化→
@@ -843,18 +855,25 @@ export class SongKotaete extends BaseSong {
             const bch = 1.0 - ud.pulseProgress * 0.2 + flash * 0.3;
             s.material.color.setRGB(r, Math.min(1, g), Math.min(1, bch));
             if (ud.resonated && flash <= 0.01) {
-                s.material.color.copy(this.worldColor).lerp(new THREE.Color(0xffffff), 0.55);
+                // 応答済みは世界の色の落ち着いた発光(白寄せを弱め、彩度を残す)
+                s.material.color.copy(this.worldColor).lerp(new THREE.Color(0xffffff), 0.3 - settle * 0.1);
             }
 
             const age = Math.max(0, position - ud.birth);
-            s.position.y += Math.sin(position * 0.002) * 0.01;
+            // 応答済みはふわっと上へ昇る軌跡に、未応答はその場で微かに揺れる
+            if (ud.resonated) {
+                s.position.y += deltaSec * (0.6 + settle * 0.8);
+            } else {
+                s.position.y += Math.sin(position * 0.002) * 0.01;
+            }
 
             if (age < 150) {
                 s.material.opacity = age / 150;
             } else if (age > ud.life - 200) {
                 s.material.opacity = Math.max(0, (ud.life - age) / 200);
             } else {
-                s.material.opacity = ud.resonated ? 1 : 0.92;
+                // 応答済みは落ち着いた半透明の軌跡(0.92 → 約0.5)、未応答ははっきり
+                s.material.opacity = ud.resonated ? (0.92 - settle * 0.42) : 0.92;
             }
 
             // カメラに近づきすぎる前に少し早めに撤収(顔面で巨大化するのを防ぐ)
