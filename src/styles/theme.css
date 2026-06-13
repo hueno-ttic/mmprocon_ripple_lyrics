@@ -173,6 +173,41 @@
     opacity: 1;
 }
 
+/* ── Selected song thumbnail card (above the selection panel) ── */
+.world-thumb-card {
+    position: absolute;
+    left: 50%;
+    bottom: 132px;
+    transform: translateX(-50%);
+    width: min(168px, 38vw);
+    aspect-ratio: 1 / 1;
+    border-radius: 14px;
+    overflow: hidden;
+    z-index: 100;
+    pointer-events: none;
+    border: 2px solid color-mix(in srgb, var(--selection-color, #7F77DD) 70%, rgba(255,255,255,0.3));
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.5),
+                0 0 22px color-mix(in srgb, var(--selection-color, #7F77DD) 35%, transparent);
+    background: rgba(0, 0, 0, 0.3);
+    transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+.world-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.world-thumb-card.swap {
+    animation: world-thumb-swap 0.45s ease;
+}
+@keyframes world-thumb-swap {
+    0%   { opacity: 0.35; transform: translateX(-50%) scale(0.94); }
+    100% { opacity: 1;    transform: translateX(-50%) scale(1); }
+}
+@media (max-width: 480px) {
+    .world-thumb-card { bottom: 150px; width: min(132px, 40vw); }
+}
+
 /* ── Song selection panel (bottom operation bar) ─────────── */
 .world-selection-panel {
     position: absolute;

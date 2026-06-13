@@ -15,6 +15,7 @@ export const SONGS = [
     },
     themeQuestion: 'あなたが僕ならばどんな答えを出すでしょうか',
     color: '#7F77DD',
+    thumbnail: 'assets/thumbnails/kotaete.jpg',
     waterBehavior: 'boiling',
     tutorial: {
       steps: [
@@ -41,6 +42,7 @@ export const SONGS = [
     },
     themeQuestion: '終わりの後に何が残るのか',
     color: '#1D9E75',
+    thumbnail: 'assets/thumbnails/after.jpg',
     waterBehavior: 'residue',
     tutorial: {
       steps: [
@@ -66,6 +68,7 @@ export const SONGS = [
     },
     themeQuestion: 'この瞬間を永遠にできるか',
     color: '#D85A30',
+    thumbnail: 'assets/thumbnails/shutter.jpg',
     waterBehavior: 'freeze',
     tutorial: {
       steps: [
@@ -91,6 +94,7 @@ export const SONGS = [
     },
     themeQuestion: '空はどんな色？あなたはどんなカタチ？',
     color: '#185FA5',
+    thumbnail: 'assets/thumbnails/orchestra.jpg',
     waterBehavior: 'evaporate',
     tutorial: {
       steps: [
@@ -116,6 +120,7 @@ export const SONGS = [
     },
     themeQuestion: '水面に映るあたしと本物のあたしはどちら？',
     color: '#3C3489',
+    thumbnail: 'assets/thumbnails/tricktology.jpg',
     waterBehavior: 'mirror',
     tutorial: {
       steps: [
@@ -141,6 +146,7 @@ export const SONGS = [
     },
     themeQuestion: '世界を変えるのは誰か',
     color: '#FF3A3A',
+    thumbnail: 'assets/thumbnails/takeover.jpg',
     waterBehavior: 'explosion',
     tutorial: {
       steps: [

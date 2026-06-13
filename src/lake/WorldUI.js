@@ -139,6 +139,13 @@ export class WorldUI {
     }
 
     _createSelectionPanel() {
+        // 選択中の曲のサムネイル(課題曲の公式MVサムネイル)を大きく表示
+        this.thumbCard = document.createElement('div');
+        this.thumbCard.className = 'world-thumb-card';
+        this.thumbCard.innerHTML = `<img class="world-thumb-img" alt="" />`;
+        this.container.appendChild(this.thumbCard);
+        this.thumbImg = this.thumbCard.querySelector('.world-thumb-img');
+
         this.selectionPanel = document.createElement('div');
         this.selectionPanel.className = 'world-selection-panel';
         this.selectionPanel.innerHTML = `
@@ -191,6 +198,20 @@ export class WorldUI {
         titleEl.innerHTML = `${song.title}${isCompleted ? ' <span style="color:#D4AF37">✓</span>' : ''}`;
         artistEl.textContent = song.artist;
         this.selectionPanel.style.setProperty('--selection-color', song.color);
+
+        // 選択中の曲のサムネイルを更新(曲のテーマ色の縁取り付き)
+        if (this.thumbCard && this.thumbImg && song.thumbnail) {
+            const src = import.meta.env.BASE_URL + song.thumbnail;
+            if (this.thumbImg.getAttribute('src') !== src) {
+                this.thumbImg.src = src;
+                this.thumbImg.alt = `${song.title} ジャケット`;
+                // 切り替え時にふわっと差し替え
+                this.thumbCard.classList.remove('swap');
+                void this.thumbCard.offsetWidth;
+                this.thumbCard.classList.add('swap');
+            }
+            this.thumbCard.style.setProperty('--selection-color', song.color);
+        }
 
         // Draw the eye to the start button right after a new song is focused
         const startBtn = this.selectionPanel.querySelector('.world-selection-start');
@@ -256,6 +277,7 @@ export class WorldUI {
         this.renderer.domElement.style.display = 'none';
         this.labelsContainer.style.display = 'none';
         if (this.selectionPanel) this.selectionPanel.style.display = 'none';
+        if (this.thumbCard) this.thumbCard.style.display = 'none';
         eventBus.emit('loadSong', song);
     }
 
@@ -263,6 +285,7 @@ export class WorldUI {
         this.renderer.domElement.style.display = 'block';
         this.labelsContainer.style.display = 'block';
         if (this.selectionPanel) this.selectionPanel.style.display = 'flex';
+        if (this.thumbCard) this.thumbCard.style.display = 'block';
 
         const playerControls = document.getElementById('player-controls');
         const backBtn = document.getElementById('back-to-lake');
@@ -537,6 +560,9 @@ export class WorldUI {
         }
         if (this.selectionPanel?.parentNode) {
             this.selectionPanel.parentNode.removeChild(this.selectionPanel);
+        }
+        if (this.thumbCard?.parentNode) {
+            this.thumbCard.parentNode.removeChild(this.thumbCard);
         }
     }
 }
