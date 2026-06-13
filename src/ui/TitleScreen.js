@@ -1,6 +1,9 @@
+import { Credits } from './Credits.js';
+
 export class TitleScreen {
     constructor(onComplete) {
         this.onComplete = onComplete;
+        this.credits = new Credits();
         
         this.container = document.createElement('div');
         this.container.style.position = 'absolute';
@@ -55,6 +58,37 @@ export class TitleScreen {
         this.subtitle.className = 'pulse-text';
         this.container.appendChild(this.subtitle);
 
+        // 右下のクレジットボタン(タイトル画面のみの導線)
+        this.creditsBtn = document.createElement('button');
+        this.creditsBtn.type = 'button';
+        this.creditsBtn.textContent = 'クレジット';
+        this.creditsBtn.style.cssText = `
+            position: absolute; right: 22px; bottom: 22px;
+            padding: 9px 20px;
+            font-family: 'Noto Sans JP', 'Inter', sans-serif;
+            font-size: 13px; letter-spacing: 0.18em;
+            color: rgba(255,255,255,0.85);
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.28);
+            border-radius: 22px; cursor: pointer;
+            opacity: 0; transition: opacity 1s ease, background 0.2s ease, border-color 0.2s ease;
+            -webkit-tap-highlight-color: transparent;
+        `;
+        this.creditsBtn.addEventListener('mouseenter', () => {
+            this.creditsBtn.style.background = 'rgba(255,255,255,0.18)';
+            this.creditsBtn.style.borderColor = 'rgba(255,255,255,0.55)';
+        });
+        this.creditsBtn.addEventListener('mouseleave', () => {
+            this.creditsBtn.style.background = 'rgba(255,255,255,0.08)';
+            this.creditsBtn.style.borderColor = 'rgba(255,255,255,0.28)';
+        });
+        // クリックがタイトルの画面遷移に伝播しないよう抑止
+        this.creditsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.credits.open();
+        });
+        this.container.appendChild(this.creditsBtn);
+
         document.body.appendChild(this.container);
 
         this.boundOnClick = this.onClick.bind(this);
@@ -68,6 +102,7 @@ export class TitleScreen {
             
             setTimeout(() => {
                 this.subtitle.style.opacity = '1';
+                this.creditsBtn.style.opacity = '1';
                 this.container.addEventListener('click', this.boundOnClick);
             }, 2000);
         }, 500);
@@ -75,7 +110,12 @@ export class TitleScreen {
 
     onClick() {
         this.container.removeEventListener('click', this.boundOnClick);
-        
+
+        // クレジットが開いていれば閉じ、ボタンも隠す
+        if (this.credits) this.credits.close();
+        this.creditsBtn.style.opacity = '0';
+        this.creditsBtn.style.pointerEvents = 'none';
+
         // Fade out everything
         this.title.style.opacity = '0';
         this.subtitle.style.opacity = '0';
