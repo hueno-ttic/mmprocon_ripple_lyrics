@@ -1,265 +1,126 @@
 import * as THREE from 'three';
 import { PhaseBase } from './PhaseBase.js';
-import { getGlowTexture } from './glowTexture.js';
-import { createSkyDome } from './SkyDome.js';
-import {
-    createBroadleafTree, createGrassTuft, createRock,
-    createMountainRange, swayItems,
-} from './NatureKit.js';
+import * as K from '../sceneKit.js';
 
-// Phase 3「水たまり」— the rain has just stopped. A brightening sky is
-// mirrored in puddles on the wet ground; the last drops still fall.
+// Phase 3「水たまり」— after the rain. A broad calm puddle mirrors a clearing
+// sky, with warm light shafts breaking through the cloud gap. (design scene3)
 export class PhasePuddles extends PhaseBase {
     constructor(scene, camera, renderer) {
         super(scene, camera, renderer);
-        this._buildSky();
-        this._buildGround();
-        this._buildResidualDrips();
-        this._buildLighting();
+        this.exposure = 0.92;
+        this.bloomParams = { strength: 0.34, radius: 0.6, threshold: 0.85 };
+        this.cameraRig = {
+            pos: [0, 9, 32], lookAt: [0, 1.2, -26],
+            drift: { ax: 2.0, fx: 0.09, ay: 0.25, fy: 0.15 },
+        };
+        this.dpr = Math.min(window.devicePixelRatio, 2);
+        this._build();
     }
 
-    _buildSky() {
-        this.sky = createSkyDome({
-            top: '#4A6580',
-            horizon: '#A8B5BE',
-            bottom: '#6E7A84',
-        });
-        this.group.add(this.sky);
+    _puffTex() {
+        const S = 256, cv = document.createElement('canvas'); cv.width = cv.height = S; const x = cv.getContext('2d');
+        for (let i = 0; i < 9; i++) { const ang = Math.random() * 6.28, rad = Math.random() * S * 0.2; const cx = S / 2 + Math.cos(ang) * rad, cy = S / 2 + Math.sin(ang) * rad * 0.7, r = S * (0.15 + Math.random() * 0.16);
+            const g = x.createRadialGradient(cx, cy, 0, cx, cy, r); g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(0.55, 'rgba(255,255,255,0.5)'); g.addColorStop(1, 'rgba(255,255,255,0)'); x.fillStyle = g; x.fillRect(0, 0, S, S); }
+        const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
     }
 
-    _buildGround() {
-        const geo = new THREE.PlaneGeometry(160, 160, 1, 1);
-        const mat = new THREE.MeshLambertMaterial({
-            color: 0x4A545C,
-        });
-        this.ground = new THREE.Mesh(geo, mat);
-        this.ground.rotation.x = -Math.PI / 2;
-        this.ground.position.y = -0.05;
-        this.group.add(this.ground);
-    }
-
-    _buildResidualDrips() {
-        // A few lingering drops still falling after the rain
-        const count = window.innerWidth < 768 ? 25 : 50;
-        const geo = new THREE.BufferGeometry();
-        const positions = new Float32Array(count * 3);
-        const seeds = new Float32Array(count);
-        for (let i = 0; i < count; i++) {
-            positions[i * 3] = (Math.random() - 0.5) * 18;
-            positions[i * 3 + 1] = Math.random() * 8;
-            positions[i * 3 + 2] = (Math.random() - 0.5) * 14;
-            seeds[i] = Math.random();
+    _makeCloud(cx, cy, cz, w) {
+        const g = new THREE.Group(); const baseCol = new THREE.Color(0x8898A6), topCol = new THREE.Color(0xD2D9DC);
+        const n = 7 + (Math.random() * 5 | 0);
+        for (let i = 0; i < n; i++) {
+            const ox = (Math.random() - 0.5) * w, oy = (Math.random() - 0.5) * w * 0.32, oz = (Math.random() - 0.5) * w * 0.4; const tt = THREE.MathUtils.clamp(oy / (w * 0.32) + 0.5, 0, 1);
+            const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this._puffTexes[(Math.random() * 4) | 0], color: baseCol.clone().lerp(topCol, tt), transparent: true, opacity: 0.55 + Math.random() * 0.25, depthWrite: false, fog: true }));
+            const s = w * (0.42 + Math.random() * 0.4); sp.scale.set(s, s * 0.82, 1); sp.position.set(ox, oy, oz); g.add(sp);
         }
-        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geo.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 1));
-
-        const mat = new THREE.ShaderMaterial({
-            transparent: true,
-            depthWrite: false,
-            uniforms: {
-                uTime: { value: 0 },
-                uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-            },
-            vertexShader: `
-                attribute float aSeed;
-                uniform float uTime;
-                uniform float uPixelRatio;
-                varying float vAlpha;
-                void main() {
-                    vec3 pos = position;
-                    float speed = 2.0 + aSeed * 2.0;
-                    pos.y = mod(pos.y - uTime * speed, 8.0);
-                    vAlpha = smoothstep(8.0, 6.5, pos.y) * 0.5;
-                    vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
-                    gl_PointSize = 2.5 * uPixelRatio;
-                    gl_Position = projectionMatrix * mvPos;
-                }
-            `,
-            fragmentShader: `
-                varying float vAlpha;
-                void main() {
-                    float d = length(gl_PointCoord - 0.5);
-                    gl_FragColor = vec4(0.75, 0.85, 0.95, smoothstep(0.5, 0.1, d) * vAlpha);
-                }
-            `,
-        });
-        this.drips = new THREE.Points(geo, mat);
-        this.group.add(this.drips);
+        g.position.set(cx, cy, cz); return g;
     }
 
-    _buildLighting() {
-        this.group.add(new THREE.HemisphereLight(0xC0CCD8, 0x3A4248, 1.0));
-        const dir = new THREE.DirectionalLight(0xD8E0E8, 0.5);
-        dir.position.set(6, 12, 4);
-        this.group.add(dir);
+    _build() {
+        const g = this.group;
+        K.addSky(g, 0x47657F, 0x788C9A, 0xAAB4B4);
+        const sun = K.addLights(g, { sunPos: [26, 50, -10], sunCol: 0xDED9C8, sunInt: 1.1, hemi: 0.62, groundCol: 0x3E4A40, amb: 0.18 });
+        this.sunDisc = K.addSunDisc(g, sun.position, { dist: 175, glow: 95, r: 8, inner: 'rgba(244,244,232,0.85)', outer: 'rgba(226,224,200,0.3)' });
+        const sunDir = sun.position.clone().normalize();
 
-        this.group.add(createMountainRange({
-            count: 6, distance: 55, spread: 100,
-            color: 0x5E7080, height: 12,
-        }));
+        // wet earth ground (the puddle sits in it)
+        const earthGeo = new THREE.PlaneGeometry(260, 260, 48, 48); earthGeo.rotateX(-Math.PI / 2);
+        { const p = earthGeo.attributes.position; for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i); p.setY(i, Math.sin(x * 0.12) * 0.35 + Math.cos(z * 0.14) * 0.3 + Math.sin((x + z) * 0.05) * 0.2 - 0.18); } earthGeo.computeVertexNormals(); }
+        const earth = new THREE.Mesh(earthGeo, new THREE.MeshStandardMaterial({ color: 0x3C4436, flatShading: true, roughness: 0.9, metalness: 0.12 }));
+        earth.position.set(0, 0, -30); earth.receiveShadow = true; g.add(earth);
 
-        // Rain-washed trees, glistening rocks and fresh grass
-        this.sway = [];
-        const spots = [[-7, -3], [-5.5, 3], [7, -2.5], [6, 3], [3.5, -6]];
-        spots.forEach(([x, z]) => {
-            const tree = createBroadleafTree(1.5 + Math.random() * 0.8, {
-                trunk: 0x3E3026, leaf: 0x2E5E40,
-            });
-            tree.position.set(x, 0, z);
-            this.group.add(tree);
-            this.sway.push({ obj: tree, seed: Math.random() * 10 });
+        // the puddle: broad calm reflector (the hero)
+        this.water = K.addWater(g, { w: 140, len: 96, cz: -14, y: 0.06, dpr: this.dpr, mirrorColor: 0x5e88ac, colors: [0x3f74ad, 0x73a6d2, 0xCFE6F4], opacity: 0.4, roughness: 0.08, metalness: 0.45, segW: 48, segL: 52 });
+
+        // wet earth banks framing the puddle
+        const earthMat = new THREE.MeshStandardMaterial({ color: 0x4E5A45, flatShading: true, roughness: 1 });
+        [[-1], [1]].forEach(([s]) => {
+            const bg = new THREE.PlaneGeometry(60, 200, 12, 26); bg.rotateX(-Math.PI / 2);
+            const p = bg.attributes.position; for (let i = 0; i < p.count; i++) { const lx = p.getX(i); const edge = (lx + 30) / 60; p.setY(i, Math.pow(edge, 0.85) * 6 + Math.sin(p.getZ(i) * 0.12) * 0.6); }
+            bg.computeVertexNormals(); const m = new THREE.Mesh(bg, earthMat); m.position.set(s * (40 + 30), 0, -40); m.receiveShadow = true; g.add(m);
         });
-        for (let i = 0; i < 7; i++) {
-            const rock = createRock(1.2, 0x5E6670);
-            rock.position.set((Math.random() - 0.5) * 15, 0.04, (Math.random() - 0.5) * 11);
-            this.group.add(rock);
+        // wet pebbles + grass tufts on the banks
+        const pebMat = new THREE.MeshStandardMaterial({ color: 0x787f86, flatShading: true, roughness: 0.7, metalness: 0.2 });
+        for (let i = 0; i < 30; i++) { const x = (Math.random() < 0.5 ? -1 : 1) * (34 + Math.random() * 22); const z = -90 + Math.random() * 120; const p = new THREE.Mesh(new THREE.IcosahedronGeometry(0.4 + Math.random() * 0.5, 0), pebMat); p.position.set(x, 0.1, z); p.scale.y = 0.6; p.rotation.set(Math.random(), Math.random(), 0); g.add(p); }
+        const grassMat = new THREE.MeshStandardMaterial({ color: 0x5C8B3E, flatShading: true, roughness: 1 });
+        for (let i = 0; i < 70; i++) { const side = Math.random() < 0.5 ? -1 : 1; const x = side * (33 + Math.random() * 26); const z = -90 + Math.random() * 120; const edge = (Math.abs(x) - 30) / 60; const gy = Math.pow(Math.max(edge, 0), 0.85) * 6; const bl = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.9, 4), grassMat); bl.position.set(x, gy + 0.35, z); bl.rotation.z = (Math.random() - 0.5) * 0.4; g.add(bl); }
+
+        // broken soft cumulus with a bright gap (reflected in the puddle)
+        this._puffTexes = [this._puffTex(), this._puffTex(), this._puffTex(), this._puffTex()];
+        this.cloudGroup = new THREE.Group(); g.add(this.cloudGroup);
+        [[-66, 30, -120, 30], [-100, 26, -95, 26], [-34, 42, -160, 34], [48, 44, -170, 30], [90, 30, -135, 26], [-120, 30, -90, 24], [26, 48, -190, 32]].forEach(([x, y, z, w]) => this.cloudGroup.add(this._makeCloud(x, y, z, w)));
+
+        // light shafts through the cloud gap (warm, volumetric)
+        this.shaftGroup = new THREE.Group(); g.add(this.shaftGroup);
+        const shaftMat = new THREE.MeshBasicMaterial({ color: 0xF2ECD6, transparent: true, opacity: 0.04, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, fog: false });
+        for (let i = 0; i < 9; i++) {
+            const cone = new THREE.Mesh(new THREE.ConeGeometry(2.0 + i * 0.55, 84, 6, 1, true), shaftMat.clone());
+            cone.position.copy(sunDir.clone().multiplyScalar(38)).add(new THREE.Vector3((i - 4) * 4.2, 0, 6));
+            cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), sunDir);
+            cone.userData = { ph: i * 0.7, base: 0.03 + Math.random() * 0.02 }; this.shaftGroup.add(cone);
         }
-        for (let i = 0; i < 20; i++) {
-            const tuft = createGrassTuft(1, 0x3E6E48);
-            const a = Math.random() * Math.PI * 2;
-            const r = 3 + Math.random() * 6;
-            tuft.position.set(Math.cos(a) * r, 0, Math.sin(a) * r * 0.8);
-            this.group.add(tuft);
-        }
+
+        // warm sun glint streaking on the puddle + scattered bright glints
+        this.glint = new THREE.Sprite(new THREE.SpriteMaterial({ map: K.glowTex('rgba(248,246,232,0.85)', 'rgba(232,228,200,0.26)'), color: 0xeee8d2, transparent: true, opacity: 0.34, depthWrite: false, blending: THREE.AdditiveBlending, fog: true }));
+        this.glint.position.set(10, 0.14, -18); this.glint.scale.set(6, 22, 1); g.add(this.glint);
+        this.waterGlints = [];
+        for (let i = 0; i < 18; i++) { const gl = new THREE.Sprite(new THREE.SpriteMaterial({ map: K.glowTex('rgba(255,255,255,0.95)', 'rgba(255,246,220,0.3)'), color: 0xfff4d8, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, fog: true })); gl.position.set(2 + Math.random() * 22, 0.13, -40 + Math.random() * 46); gl.scale.setScalar(0.5 + Math.random() * 0.7); gl.userData = { ph: Math.random() * 6.28, sp: 1.5 + Math.random() * 2 }; g.add(gl); this.waterGlints.push(gl); }
+
+        // reeds at the waterline (foreground interest)
+        const reedMat = new THREE.MeshStandardMaterial({ color: 0x4f7a3a, flatShading: true, roughness: 1 });
+        for (let c = 0; c < 8; c++) { const bx = (Math.random() < 0.5 ? -1 : 1) * (20 + Math.random() * 30), bz = -8 + Math.random() * 34; for (let k = 0; k < 5; k++) { const rd = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.06, 1.4 + Math.random() * 1.0, 4), reedMat); rd.position.set(bx + (Math.random() - 0.5) * 1.6, (rd.geometry.parameters.height) / 2 - 0.1, bz + (Math.random() - 0.5) * 1.6); rd.rotation.z = (Math.random() - 0.5) * 0.3; g.add(rd); } }
+
+        // last raindrop ripples on the puddle
+        this.rings = [];
+        for (let i = 0; i < 14; i++) { const r = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.78, 28), new THREE.MeshBasicMaterial({ color: 0xDCEEF8, transparent: true, opacity: 0, side: THREE.DoubleSide, fog: true, blending: THREE.AdditiveBlending })); r.rotation.x = -Math.PI / 2; r.position.set((Math.random() - 0.5) * 44, 0.07, -50 + Math.random() * 70); r.userData = { ph: Math.random() * Math.PI * 2, sp: 0.5 + Math.random() * 0.5 }; g.add(r); this.rings.push(r); }
+
+        this.motes = K.addSparkles(g, { count: 70, area: [120, 26, 120], zoff: -50, maxY: 28, size: 0.5, mix: 0.55, colorA: 0x9FF0E6, colorB: 0xFFF3C8 });
+        this.birds = K.addBirds(g, { count: 5, y: 34, z: -86 });
     }
 
     enter(prevPhaseIndex) {
         super.enter(prevPhaseIndex);
-        this.scene.background = new THREE.Color(0xA8B5BE);
-        this.scene.fog = new THREE.FogExp2(0x9AA7B0, 0.011);
-        this.camera.position.set(0, 4.4, 7.5);
-        this.camera.lookAt(0, 0, -0.5);
+        this.scene.background = new THREE.Color(0xB7C3C9);
+        this.scene.fog = new THREE.Fog(0xB7C3C9, 68, 225);
         return Promise.resolve();
     }
 
     createSongMarkers(songs) {
-        this.songMarkers = [];
-        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-
-        songs.forEach((song, i) => {
-            const theta = goldenAngle * i + 0.5;
-            const r = 2.2 + (i % 3) * 1.1;
-            const x = Math.cos(theta) * r;
-            const z = Math.sin(theta) * r * 0.8;
-
-            const markerGroup = new THREE.Group();
-            markerGroup.position.set(x, 0.01, z);
-
-            // Puddle mirror: reflects the brightening sky, tinted by the song
-            const puddleGeo = new THREE.CircleGeometry(0.95, 40);
-            const puddleMat = new THREE.ShaderMaterial({
-                uniforms: {
-                    uTime: { value: 0 },
-                    uColor: { value: new THREE.Color(song.color) },
-                    uSky: { value: new THREE.Color(0xA8B5BE) },
-                    uHover: { value: 0.0 },
-                },
-                vertexShader: `
-                    varying vec2 vUv;
-                    void main() {
-                        vUv = uv;
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                    }
-                `,
-                fragmentShader: `
-                    uniform float uTime;
-                    uniform vec3 uColor;
-                    uniform vec3 uSky;
-                    uniform float uHover;
-                    varying vec2 vUv;
-
-                    void main() {
-                        vec2 center = vUv - 0.5;
-                        float dist = length(center) * 2.0;
-
-                        // Sky reflection with slow shimmering
-                        float shimmer = sin(dist * 9.0 - uTime * 0.8) * 0.5 + 0.5;
-                        vec3 reflection = uSky * (0.75 + shimmer * 0.2);
-
-                        // Drop-impact rings
-                        float t = fract(uTime * (0.25 + uHover * 0.3));
-                        float ring = smoothstep(t + 0.05, t, dist) * smoothstep(t - 0.05, t, dist) * (1.0 - t);
-
-                        vec3 color = mix(reflection, uColor, 0.35 + uHover * 0.3);
-                        color += ring * 0.6;
-
-                        float edge = smoothstep(1.0, 0.82, dist);
-                        gl_FragColor = vec4(color, edge * (0.85 + uHover * 0.15));
-                    }
-                `,
-                transparent: true,
-                depthWrite: false,
-            });
-
-            const puddle = new THREE.Mesh(puddleGeo, puddleMat);
-            puddle.rotation.x = -Math.PI / 2;
-            puddle.position.y = 0.02;
-            markerGroup.add(puddle);
-
-            const glowMat = new THREE.SpriteMaterial({
-                map: getGlowTexture(),
-                color: new THREE.Color(song.color),
-                transparent: true,
-                opacity: 0.5,
-                blending: THREE.NormalBlending,
-                depthWrite: false,
-            });
-            const glow = new THREE.Sprite(glowMat);
-            glow.scale.set(0.8, 0.8, 1);
-            glow.position.y = 0.45;
-            markerGroup.add(glow);
-
-            markerGroup.userData = {
-                songId: song.id,
-                puddle,
-                puddleMat,
-                glow,
-                glowMat,
-            };
-
-            this.group.add(markerGroup);
-            this.songMarkers.push(markerGroup);
-        });
-    }
-
-    getSongPosition(index) {
-        if (this.songMarkers[index]) {
-            const m = this.songMarkers[index];
-            return new THREE.Vector3(m.position.x, 1.1, m.position.z);
-        }
-        return new THREE.Vector3(0, 1, 0);
-    }
-
-    onHover(index) {
-        const marker = this.songMarkers[index];
-        if (!marker) return;
-        marker.userData.puddleMat.uniforms.uHover.value = 1.0;
-        marker.userData.glowMat.opacity = 0.85;
-        marker.userData.glow.scale.set(1.1, 1.1, 1);
-    }
-
-    onUnhover(index) {
-        const marker = this.songMarkers[index];
-        if (!marker) return;
-        marker.userData.puddleMat.uniforms.uHover.value = 0.0;
-        marker.userData.glowMat.opacity = 0.5;
-        marker.userData.glow.scale.set(0.8, 0.8, 1);
-    }
-
-    onSelect(index) {
-        const marker = this.songMarkers[index];
-        if (!marker) return;
-        marker.userData.puddleMat.uniforms.uHover.value = 1.0;
-        marker.userData.glowMat.opacity = 1.0;
-        marker.userData.glow.scale.set(1.5, 1.5, 1);
+        const layout = [
+            { x: -12, z: -4 }, { x: 9, z: -8 }, { x: -1, z: 6 },
+            { x: 13, z: -2 }, { x: -9, z: -18 }, { x: 4, z: -28 },
+        ];
+        this.nodes = K.createSongNodes(this.group, layout, songs, { y: 0.05, orbY: 1.0 });
+        this.songMarkers = this.nodes.markers;
     }
 
     update(time) {
         if (this.disposed) return;
-        this.drips.material.uniforms.uTime.value = time;
-        swayItems(this.sway, time, 0.014, 0.7);
-        this.songMarkers.forEach((m) => {
-            m.userData.puddleMat.uniforms.uTime.value = time;
-        });
+        this.water.update(time, (x, z, tt) => Math.sin(x * 0.35 + tt * 0.9) * 0.05 + Math.cos(z * 0.3 + tt * 0.7) * 0.05);
+        this.cloudGroup.position.x = Math.sin(time * 0.04) * 2.0; this.motes.update(); this.nodes.update(time); this.birds.update(time);
+        this.shaftGroup.children.forEach(c => { c.material.opacity = c.userData.base + Math.sin(time * 0.7 + c.userData.ph) * 0.025; });
+        this.glint.material.opacity = 0.28 + Math.sin(time * 0.9) * 0.1;
+        this.waterGlints.forEach(gl => { gl.material.opacity = Math.max(0, Math.sin(time * gl.userData.sp + gl.userData.ph)) * 0.5; });
+        this.rings.forEach(r => { const k = ((time * r.userData.sp) + r.userData.ph) % 1; const s = 1 + k * 9; r.scale.set(s, s, 1); r.material.opacity = (1 - k) * 0.5; });
+        this.sunDisc.update(this.camera);
     }
 }

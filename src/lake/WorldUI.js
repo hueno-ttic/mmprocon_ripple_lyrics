@@ -1,4 +1,7 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { eventBus } from '../core/eventBus.js';
 import { SONGS } from '../config/songs.js';
 import { PHASES } from '../config/constants.js';
@@ -14,7 +17,21 @@ export class WorldUI {
 
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // Cinematic grading to match the redesign (湖のソナーレ scene art direction)
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.12;
+        this.renderer.shadowMap.enabled = true;
+        // PCFSoftShadowMap is deprecated in this three build (falls back to PCF)
+        this.renderer.shadowMap.type = THREE.PCFShadowMap;
         this.container.appendChild(this.renderer.domElement);
+
+        // Post-processing: subtle bloom for luminous water/sun/song-node highlights
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
+        this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.4, 0.5, 0.85);
+        this.composer.addPass(this.bloomPass);
+        this.composer.setSize(window.innerWidth, window.innerHeight);
 
         this.selectedIndex = 0;
         this.currentPhase = null;
@@ -61,12 +78,24 @@ export class WorldUI {
         const PhaseClass = PHASE_CLASSES[phaseIndex] || PHASE_CLASSES[0];
         this.currentPhase = new PhaseClass(this.scene, this.camera, this.renderer);
         this.currentPhase.enter(null);
-        // Base position for the gentle idle camera drift in animate()
-        this.cameraBasePos = this.camera.position.clone();
+        this._applyPhaseGrading(this.currentPhase);
         this.currentPhase.createSongMarkers(SONGS);
         this.currentPhaseIndex = phaseIndex;
         // Markers are freshly created — re-apply the selection highlight
         this.currentPhase.onHover(this.selectedIndex);
+    }
+
+    // Apply the phase's tone-mapping exposure + bloom grading to the shared
+    // renderer/composer. Each phase tunes these to its mood (bright meadow,
+    // brooding rain, luminous lake).
+    _applyPhaseGrading(phase) {
+        if (phase.exposure !== undefined) this.renderer.toneMappingExposure = phase.exposure;
+        const b = phase.bloomParams;
+        if (b && this.bloomPass) {
+            this.bloomPass.strength = b.strength;
+            this.bloomPass.radius = b.radius;
+            this.bloomPass.threshold = b.threshold;
+        }
     }
 
     _createLabels() {
@@ -401,6 +430,7 @@ export class WorldUI {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
+        if (this.composer) this.composer.setSize(window.innerWidth, window.innerHeight);
     }
 
     onClick(event) {
@@ -470,10 +500,20 @@ export class WorldUI {
 
         const time = (Date.now() - this._clockStart) * 0.001;
 
-        // Gentle idle drift — the world breathes even when nothing is touched
-        if (this.cameraBasePos) {
-            this.camera.position.x = this.cameraBasePos.x + Math.sin(time * 0.12) * 0.18;
-            this.camera.position.y = this.cameraBasePos.y + Math.sin(time * 0.17 + 1.3) * 0.09;
+        // Phase-driven camera parallax: drift around a base position and keep
+        // looking at the phase's focus point (recreates the redesign's gentle
+        // sweep). Falls back gracefully if a phase omits cameraRig.
+        const rig = this.currentPhase?.cameraRig;
+        if (rig) {
+            const d = rig.drift || {};
+            this.camera.position.set(
+                rig.pos[0] + Math.sin(time * (d.fx ?? 0.10)) * (d.ax ?? 2.0),
+                rig.pos[1] + Math.sin(time * (d.fy ?? 0.16) + 1.3) * (d.ay ?? 0.25),
+                rig.pos[2]
+            );
+            this.camera.lookAt(rig.lookAt[0], rig.lookAt[1], rig.lookAt[2]);
+            // Refresh matrices now so label projection / picking this frame are accurate
+            this.camera.updateMatrixWorld();
         }
 
         if (this.currentPhase) {
@@ -489,7 +529,7 @@ export class WorldUI {
         // Update label positions from phase
         this._updateLabelPositions();
 
-        this.renderer.render(this.scene, this.camera);
+        this.composer.render();
     }
 
     _updateLabelPositions() {
@@ -553,6 +593,8 @@ export class WorldUI {
             this.currentPhase.dispose();
         }
 
+        this.composer?.dispose?.();
+        this.bloomPass?.dispose?.();
         this.renderer.dispose();
 
         if (this.labelsContainer?.parentNode) {
