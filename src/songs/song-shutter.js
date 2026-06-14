@@ -2473,7 +2473,7 @@ export class SongShutter extends BaseSong {
             this.dirLight = null;
         }
 
-        if (this.renderer) this.renderer.dispose();
+        if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
 
         super.destroy();
     }

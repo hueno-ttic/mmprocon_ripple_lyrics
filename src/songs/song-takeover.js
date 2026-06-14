@@ -1192,7 +1192,7 @@ export class SongTakeover extends BaseSong {
 
         this.songWrapper.style.filter = '';
 
-        if (this.renderer) { this.renderer.dispose(); this.renderer = null; }
+        if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); this.renderer = null; }
 
         super.destroy();
     }

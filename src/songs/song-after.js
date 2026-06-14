@@ -165,6 +165,20 @@ export class SongAfter extends BaseSong {
         this.audienceLight.position.set(0, 2.5, 9);
         this.scene.add(this.audienceLight);
 
+        // 逆光リムライト: ミクの背後(カーテン側)からティールで縁を光らせ、暗闇の中で
+        // 「シルエット＋輪郭のグロー」として際立たせる。前へ長い影も落とす(公演後の孤独感)。
+        this.rimLight = new THREE.SpotLight(new THREE.Color(this.themeColor), 70);
+        this.rimLight.position.set(0, 4.2, -7.5);
+        this.rimLight.angle = Math.PI / 7;
+        this.rimLight.penumbra = 0.75;
+        this.rimLight.decay = 1.3;
+        this.rimLight.distance = 28;
+        this.rimLight.castShadow = !this.isMobile; // ミクの影をカメラ手前へ長く伸ばす
+        if (this.rimLight.shadow) { this.rimLight.shadow.mapSize.set(1024, 1024); this.rimLight.shadow.bias = -0.0005; }
+        this.rimLight.target.position.set(0, 1.2, -2);
+        this.scene.add(this.rimLight);
+        this.scene.add(this.rimLight.target);
+
         // The Curtain - backstage backdrop (Z = -5)
         const curtainGeo = new THREE.PlaneGeometry(40, 22);
         const curtainMat = new THREE.MeshStandardMaterial({
@@ -579,6 +593,13 @@ export class SongAfter extends BaseSong {
         const chest = vrm.humanoid.getNormalizedBoneNode('chest');
         if (chest) chest.rotation.x = breath * 0.02 - 0.01;
 
+        // 逆光リムを呼吸に合わせて静かに脈動させ、シルエットの輪郭を息づかせる。
+        // サビはオープンポーズで縁が広がるぶん少し強める。
+        if (this.rimLight) {
+            this.rimLight.intensity = 62 + breath * 16 + b * 22;
+            this.rimLight.target.position.set(vrm.scene.position.x, 1.2, vrm.scene.position.z);
+        }
+
         // 腕: 脱力 → サビで両腕を大きく広げる
         const lU = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
         const rU = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
@@ -952,7 +973,7 @@ export class SongAfter extends BaseSong {
         if (this.spotLight && this.spotLight.target) this.scene.remove(this.spotLight.target);
         if (this.mouseLight && this.mouseLight.target) this.scene.remove(this.mouseLight.target);
 
-        if (this.renderer) this.renderer.dispose();
+        if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
 
         if (this.customStyleElement && this.customStyleElement.parentNode) {
             this.customStyleElement.parentNode.removeChild(this.customStyleElement);

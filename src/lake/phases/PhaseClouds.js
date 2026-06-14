@@ -13,6 +13,9 @@ export class PhaseClouds extends PhaseBase {
             pos: [0, 13, 42], lookAt: [0, 9.5, -95],
             drift: { ax: 3.2, fx: 0.08, ay: 0.45, fy: 0.14 },
         };
+        // モバイルは雲スプライトの描画コール(全体で500超)が重いので、雲の数・
+        // 1雲あたりのパフ数・きらめき粒子を削減してフィルレートを抑える。
+        this.isMobile = window.innerWidth < 768;
         this._build();
     }
 
@@ -32,7 +35,7 @@ export class PhaseClouds extends PhaseBase {
         const g = new THREE.Group();
         const baseCol = dark ? new THREE.Color(0x707a86) : new THREE.Color(0x9aa4b0);
         const topCol = dark ? new THREE.Color(0xb6bdc8) : new THREE.Color(0xeef1f6);
-        const n = 7 + (Math.random() * 5 | 0);
+        const n = this.isMobile ? (4 + (Math.random() * 3 | 0)) : (7 + (Math.random() * 5 | 0));
         for (let i = 0; i < n; i++) {
             const ox = (Math.random() - 0.5) * w, oy = (Math.random() - 0.5) * w * 0.34, oz = (Math.random() - 0.5) * w * 0.4;
             const tt = THREE.MathUtils.clamp((oy / (w * 0.34)) + 0.5, 0, 1);
@@ -60,7 +63,8 @@ export class PhaseClouds extends PhaseBase {
 
         // cloud sea (soft puff clusters, a defined lower band)
         this.seaGroup = new THREE.Group(); g.add(this.seaGroup);
-        for (let i = 0; i < 60; i++) {
+        const seaCount = this.isMobile ? 30 : 60;
+        for (let i = 0; i < seaCount; i++) {
             const r = 10 + Math.random() * 195; const a = Math.random() * Math.PI * 2;
             const x = Math.cos(a) * r, z = -60 + Math.sin(a) * r * 0.95;
             const y = -1.0 - Math.min(r * 0.012, 3.2);
@@ -70,7 +74,7 @@ export class PhaseClouds extends PhaseBase {
         this.ceilGroup = new THREE.Group(); g.add(this.ceilGroup);
         [[-44, 26, -95, 30], [34, 30, -122, 34], [-88, 28, -150, 26], [14, 33, -165, 34]].forEach(([x, y, z, w]) => this.ceilGroup.add(this._makeCloud(x, y, z, w, true)));
 
-        this.vapor = K.addSparkles(g, { count: 110, area: [200, 46, 200], zoff: -100, maxY: 46, size: 0.5, mix: 0.4, colorA: 0x9FF0E6, colorB: 0xCFD8E0 });
+        this.vapor = K.addSparkles(g, { count: this.isMobile ? 60 : 110, area: [200, 46, 200], zoff: -100, maxY: 46, size: 0.5, mix: 0.4, colorA: 0x9FF0E6, colorB: 0xCFD8E0 });
         this.birds = K.addBirds(g, { count: 5, y: 5, z: -64 });
     }
 
