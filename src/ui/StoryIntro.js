@@ -38,25 +38,32 @@ export class StoryIntro {
         this.container.style.pointerEvents = 'auto';
         this.container.style.cursor = 'pointer';
 
-        const skipHint = document.createElement('div');
-        skipHint.textContent = 'タップでスキップ';
-        skipHint.style.cssText = `
-            position: absolute; bottom: 32px; left: 50%;
-            transform: translateX(-50%);
-            font-size: 11px; letter-spacing: 0.2em;
-            color: rgba(255,255,255,0.35);
-            pointer-events: none;
-            transition: opacity 1s ease;
-        `;
-        this.container.appendChild(skipHint);
-        setTimeout(() => { skipHint.style.opacity = '1'; }, 800);
-
         const skipPromise = new Promise(resolve => { this._skipResolve = resolve; });
         const onSkip = () => {
             this._skipped = true;
             if (this._skipResolve) this._skipResolve();
         };
         this.container.addEventListener('click', onSkip, { once: true });
+
+        // 明確な「曲を選ぶ」スキップボタン(画面全体クリックでのスキップも従来通り残す)
+        const skipBtn = document.createElement('button');
+        skipBtn.className = 'story-skip-btn';
+        skipBtn.textContent = '曲を選ぶ ▶';
+        skipBtn.style.cssText = `
+            position: absolute; right: 24px; bottom: 24px;
+            min-width: 132px; min-height: 44px; padding: 0 20px;
+            border-radius: 22px; border: 1px solid rgba(255,255,255,0.5);
+            background: rgba(10,16,30,0.55); backdrop-filter: blur(8px);
+            color: #fff; font-size: 13px; letter-spacing: 0.12em;
+            cursor: pointer; pointer-events: auto;
+            opacity: 0; transition: opacity 0.8s ease;
+        `;
+        skipBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            onSkip();
+        });
+        this.container.appendChild(skipBtn);
+        setTimeout(() => { skipBtn.style.opacity = '1'; }, 600);
 
         const raceOrText = (text, duration) => Promise.race([this.showText(text, duration), skipPromise]);
 
@@ -72,20 +79,20 @@ export class StoryIntro {
         ];
         const [line1, line2] = introTexts[phase] || introTexts[0];
 
-        await raceOrText(line1, 3000);
-        if (!this._skipped) await raceOrText(line2, 3500);
+        await raceOrText(line1, 2200);
+        if (!this._skipped) await raceOrText(line2, 2600);
 
-        this.container.style.transition = 'opacity 0.4s ease';
-        this.container.style.opacity = '0';
-        await new Promise(r => setTimeout(r, 400));
-
-        if (this.container.parentNode) {
-            this.container.parentNode.removeChild(this.container);
-        }
-
+        // Hand off to the app, which fades the screen curtain over this intro
+        // and builds the world behind it. Remove our overlay once it's covered
+        // so the cross-dissolve has no flash.
         if (this.onComplete) {
             this.onComplete();
         }
+        setTimeout(() => {
+            if (this.container.parentNode) {
+                this.container.parentNode.removeChild(this.container);
+            }
+        }, 520);
     }
 
     showText(text, duration) {
@@ -95,7 +102,7 @@ export class StoryIntro {
             
             setTimeout(() => {
                 this.textElement.style.opacity = '0';
-                setTimeout(resolve, 2000); // Wait for fade out to complete before next step
+                setTimeout(resolve, 1000); // Wait for fade out to complete before next step
             }, duration);
         });
     }

@@ -39,6 +39,11 @@ class AppState {
         return this.completedSongs.includes(songId);
     }
 
+    // 全曲(6/6)クリア済みかどうか。エンディング誘導の判定に使う
+    areAllSongsComplete() {
+        return this.completedSongs.length >= SONGS.length;
+    }
+
     getPhase() {
         return Math.min(this.completedSongs.length, PHASES.length - 1);
     }

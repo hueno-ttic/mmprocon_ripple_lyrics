@@ -72,8 +72,48 @@ export class BaseSong {
         }
     }
 
+    /**
+     * チュートリアル「スタート」相当の頭出し再生処理。
+     * Web Audio アンロック → seek(0) / fadeIn / play までを一括で行う。
+     * 初回(オーバーレイのスタート押下)と2回目以降(オーバーレイ非表示)の
+     * 両方から呼び出され、挙動を共通化する。
+     */
+    _autoStartPlayback() {
+        if (!playerManager.isTimerReady) return;
+        try {
+            const audioCtx = window.AudioContext || window.webkitAudioContext;
+            if (audioCtx) {
+                const dummyCtx = new audioCtx();
+                if (dummyCtx.state === 'suspended') {
+                    dummyCtx.resume();
+                }
+            }
+            if (playerManager.player && playerManager.player.audioContext) {
+                const ctx = playerManager.player.audioContext;
+                if (ctx.state === 'suspended') {
+                    ctx.resume();
+                }
+            }
+        } catch (err) {
+            console.warn('[Lake Sonare] Web Audio unlock failed safely: ', err);
+        }
+        playerManager.seek(0);
+        playerManager.fadeIn(1200); // 曲の頭出しをなめらかに
+        playerManager.play();
+    }
+
     showTutorial(songConfig) {
         const { tutorial, themeQuestion = '', color = '#7F77DD' } = songConfig;
+
+        // 曲ID(localStorage の既読判定キーに利用)
+        const songId = songConfig.id != null ? songConfig.id : this.songId;
+
+        // 同じ曲の2回目以降はチュートリアルを出さず、即・頭出し再生する
+        if (songId != null && localStorage.getItem(`mm_tut_${songId}`) === '1') {
+            this.isTutorialActive = false;
+            this._autoStartPlayback();
+            return;
+        }
 
         // チュートリアル表示フラグを有効化
         this.isTutorialActive = true;
@@ -119,29 +159,12 @@ export class BaseSong {
 
         overlay.querySelector('.song-tutorial-btn').addEventListener('click', () => {
             dismiss();
-            // Start song playback immediately upon tutorial dismiss (with Web Audio unlock)
-            if (playerManager.isTimerReady) {
-                try {
-                    const audioCtx = window.AudioContext || window.webkitAudioContext;
-                    if (audioCtx) {
-                        const dummyCtx = new audioCtx();
-                        if (dummyCtx.state === 'suspended') {
-                            dummyCtx.resume();
-                        }
-                    }
-                    if (playerManager.player && playerManager.player.audioContext) {
-                        const ctx = playerManager.player.audioContext;
-                        if (ctx.state === 'suspended') {
-                            ctx.resume();
-                        }
-                    }
-                } catch (err) {
-                    console.warn('[Lake Sonare] Web Audio unlock failed safely: ', err);
-                }
-                playerManager.seek(0);
-                playerManager.fadeIn(1200); // 曲の頭出しをなめらかに
-                playerManager.play();
+            // この曲のチュートリアルを既読として記録(次回以降は非表示)
+            if (songId != null) {
+                localStorage.setItem(`mm_tut_${songId}`, '1');
             }
+            // Start song playback immediately upon tutorial dismiss (with Web Audio unlock)
+            this._autoStartPlayback();
         });
         if (playerManager.managed) {
             this._tutorialDismissTimer = setTimeout(dismiss, 15000);

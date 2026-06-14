@@ -49,12 +49,25 @@ export class SongTakeover extends BaseSong {
         this._bgColorFrom = new THREE.Color(0x1a0028);
         this._bgColorTo = new THREE.Color(0x33000a);
 
+        // ── ミクの視覚アンカー（軽量ツインテール・シルエット） ──
+        // 他5曲はVRMミクが登場するが、TAKEOVERだけ不在で密度差が出るため、
+        // 中央に「ミクがそこにいる」象徴を1つだけ常設し、リズムで淡く脈動させる。
+        this.mikuAnchorSprite = null;       // CanvasTextureのスプライト
+        this.mikuAnchorTexture = null;
+        this.mikuAnchorMat = null;
+        this._mikuAnchorPhase = 0;          // 脈動位相
+        this._mikuColorCyan = new THREE.Color(0x00ffaa); // 解読色（シアン）
+        this._mikuColorRed = new THREE.Color(0xff3a3a);  // 侵食色（赤）
+        this._mikuAnchorColor = new THREE.Color(0x00ffaa);
+        this._mikuTakeRatio = 0;            // 直近の解読率（脈動の色補間に使用）
+
         this.boundOnResize = this.onResize.bind(this);
     }
 
     init() {
         this.initThree();
         this.initDebris();
+        this.initMikuAnchor();
         this.initUI();
         this._initCrypto(); // async, completes well before first phrase
         window.addEventListener('resize', this.boundOnResize);
@@ -106,6 +119,64 @@ export class SongTakeover extends BaseSong {
             this.scene.add(m);
             this.debris.push(m);
         }
+    }
+
+    // ── ミクの視覚アンカー: ツインテール風シルエットを canvas で描画し、
+    //    中央奥に常設する軽量スプライト（VRM不使用で密度差を埋める） ──
+    initMikuAnchor() {
+        const size = 256;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const cx = size / 2;
+
+        // 白でシルエットを塗り、色付けはスプライトのcolorで行う（=色補間が軽い）
+        ctx.fillStyle = 'rgba(255,255,255,1)';
+
+        // 頭部
+        ctx.beginPath();
+        ctx.arc(cx, 96, 34, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 肩〜体（台形）
+        ctx.beginPath();
+        ctx.moveTo(cx - 30, 124);
+        ctx.lineTo(cx + 30, 124);
+        ctx.lineTo(cx + 50, 220);
+        ctx.lineTo(cx - 50, 220);
+        ctx.closePath();
+        ctx.fill();
+
+        // 左右のツインテール（頭の左右から外へ大きく流れる曲線シルエット）
+        const tail = (dir) => {
+            ctx.beginPath();
+            ctx.moveTo(cx + dir * 26, 80);
+            ctx.quadraticCurveTo(cx + dir * 96, 96, cx + dir * 86, 188);
+            ctx.quadraticCurveTo(cx + dir * 80, 224, cx + dir * 58, 220);
+            ctx.quadraticCurveTo(cx + dir * 70, 150, cx + dir * 22, 104);
+            ctx.closePath();
+            ctx.fill();
+        };
+        tail(-1);
+        tail(1);
+
+        this.mikuAnchorTexture = new THREE.CanvasTexture(canvas);
+
+        this.mikuAnchorMat = new THREE.SpriteMaterial({
+            map: this.mikuAnchorTexture,
+            color: this._mikuColorCyan.clone(),
+            transparent: true,
+            opacity: 0.16,                 // 主張しすぎない淡い存在感
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+
+        this.mikuAnchorSprite = new THREE.Sprite(this.mikuAnchorMat);
+        this.mikuAnchorSprite.scale.set(7, 7, 1);
+        // 画面中央付近・デブリ層より少し手前の奥行き
+        this.mikuAnchorSprite.position.set(0, 0.5, -4);
+        this.scene.add(this.mikuAnchorSprite);
     }
 
     initUI() {
@@ -509,6 +580,9 @@ export class SongTakeover extends BaseSong {
 
     // ── 侵食演出: 解読率に応じて画面が段階的に赤く染まる ────────────────
     _applyErosion(ratio) {
+        // ミクのアンカー色補間用に解読率を保持（実際の色付けは毎フレームのupdateで）
+        this._mikuTakeRatio = ratio;
+
         // オーバーレイ不透明度（軽量: CSS opacityのみ、モバイルは控えめに）
         if (this.erosionEl) {
             const isMobile = window.innerWidth < 768;
@@ -992,6 +1066,26 @@ export class SongTakeover extends BaseSong {
             m.rotation.z += m.userData.rot.z;
         });
 
+        // ── ミクの視覚アンカー: リズムに合わせて淡く脈動 ──
+        // サビ(isClimax)で少し速く・強く、解読率に応じてシアン→赤へ寄せる。
+        if (this.mikuAnchorSprite && this.mikuAnchorMat) {
+            const speed = this.isClimax ? 0.085 : 0.05;
+            this._mikuAnchorPhase += speed;
+            const pulse = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
+            // 透明度は過剰にしない（サビでわずかに底上げ）
+            const base = this.isClimax ? 0.18 : 0.13;
+            const amp = this.isClimax ? 0.16 : 0.09;
+            this.mikuAnchorMat.opacity = base + pulse * amp;
+            // ごく僅かにスケールも呼吸させる
+            const s = 7 + pulse * (this.isClimax ? 0.5 : 0.25);
+            this.mikuAnchorSprite.scale.set(s, s, 1);
+            // 侵食が進むほど赤へ
+            this._mikuAnchorColor.lerpColors(
+                this._mikuColorCyan, this._mikuColorRed, this._mikuTakeRatio
+            );
+            this.mikuAnchorMat.color.copy(this._mikuAnchorColor);
+        }
+
         // At phrase boundary: expire remaining scrambled targets after a 2-second delay
         // to give the user more time to decrypt them.
         const phrase = playerManager.player.video.findPhrase(position);
@@ -1066,6 +1160,14 @@ export class SongTakeover extends BaseSong {
 
         if (this._debrisEdgesGeo) { this._debrisEdgesGeo.dispose(); this._debrisEdgesGeo = null; }
         if (this._debrisMat)      { this._debrisMat.dispose();      this._debrisMat = null; }
+
+        // ミクの視覚アンカーを除去・解放
+        if (this.mikuAnchorSprite) {
+            this.scene.remove(this.mikuAnchorSprite);
+            this.mikuAnchorSprite = null;
+        }
+        if (this.mikuAnchorMat)     { this.mikuAnchorMat.dispose();     this.mikuAnchorMat = null; }
+        if (this.mikuAnchorTexture) { this.mikuAnchorTexture.dispose(); this.mikuAnchorTexture = null; }
 
         const styleEl = document.getElementById('takeover-style');
         if (styleEl) styleEl.parentNode.removeChild(styleEl);
