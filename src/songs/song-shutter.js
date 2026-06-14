@@ -170,9 +170,13 @@ export class SongShutter extends BaseSong {
             this.targetZoom = parseFloat(e.target.value);
         };
 
-        // --- カメラ首振り（パン・チルト）ドラッグ操作システム ---
-        this.cameraRotation = new THREE.Vector2(0, 0); // 現在の角度 (x=ピッチ, y=ヨー)
+        // --- カメラ回り込み（被写体を中心にオービット）ドラッグ操作システム ---
+        // x=仰角(上下の回り込み), y=方位角(左右の回り込み)。被写体を常に画面中央に捉えたまま周回する。
+        this.cameraRotation = new THREE.Vector2(0, 0); // 現在の角度
         this.targetCameraRotation = new THREE.Vector2(0, 0); // 目標の角度
+        this.orbitPivot = new THREE.Vector3(0, 0, -16.5); // 周回の中心(=被写体ミクの位置。常に中央に保つ)
+        this.orbitRadius = 26.5;                          // カメラ初期位置(0,0,10)からの距離
+        this._lyricScratch = new THREE.Vector3();         // 歌詞ワールド追従の作業用
         this.isDragging = false;
         this.dragStartPos = new THREE.Vector2(0, 0);
         this.previousMousePosition = new THREE.Vector2(0, 0);
@@ -196,9 +200,9 @@ export class SongShutter extends BaseSong {
             const distFromStart = Math.sqrt(Math.pow(e.clientX - this.dragStartPos.x, 2) + Math.pow(e.clientY - this.dragStartPos.y, 2));
             this.draggedDistance = distFromStart;
 
-            // カメラの回転目標を更新（左右±0.45ラジアン(約25度)、上下±0.25ラジアン(約14度)に制御）
-            this.targetCameraRotation.y = Math.min(0.45, Math.max(-0.45, this.targetCameraRotation.y + dx * 0.002));
-            this.targetCameraRotation.x = Math.min(0.25, Math.max(-0.25, this.targetCameraRotation.x + dy * 0.002));
+            // 回り込み目標を更新（方位角±2.5rad≒143度まで側面〜やや背面へ / 仰角±0.5rad≒28度）
+            this.targetCameraRotation.y = Math.min(2.5, Math.max(-2.5, this.targetCameraRotation.y + dx * 0.005));
+            this.targetCameraRotation.x = Math.min(0.5, Math.max(-0.5, this.targetCameraRotation.x + dy * 0.004));
         };
 
         this.boundOnMouseUp = (e) => {
@@ -235,8 +239,8 @@ export class SongShutter extends BaseSong {
             const distFromStart = Math.sqrt(Math.pow(touch.clientX - this.dragStartPos.x, 2) + Math.pow(touch.clientY - this.dragStartPos.y, 2));
             this.draggedDistance = distFromStart;
 
-            this.targetCameraRotation.y = Math.min(0.45, Math.max(-0.45, this.targetCameraRotation.y + dx * 0.003));
-            this.targetCameraRotation.x = Math.min(0.25, Math.max(-0.25, this.targetCameraRotation.x + dy * 0.003));
+            this.targetCameraRotation.y = Math.min(2.5, Math.max(-2.5, this.targetCameraRotation.y + dx * 0.006));
+            this.targetCameraRotation.x = Math.min(0.5, Math.max(-0.5, this.targetCameraRotation.x + dy * 0.005));
         };
 
         this.boundOnTouchEndCam = (e) => {
@@ -454,11 +458,24 @@ export class SongShutter extends BaseSong {
         this.songWrapper.appendChild(this.renderer.domElement);
 
         // 被写体ミクVRM用ライティング（既存のワイヤーフレーム・スプライトは無灯影響なし）
-        this.ambientLight = new THREE.AmbientLight(0x554038, 1.6);
+        // 「撮影されるアイドル」として映えるよう三点照明にする。暗い背景に立体感と輪郭を出す。
+        this.ambientLight = new THREE.AmbientLight(0x40342e, 1.0); // コントラストのため控えめに
         this.scene.add(this.ambientLight);
-        this.dirLight = new THREE.DirectionalLight(0xffe8d0, 2.2);
+        // キーライト: 前・斜め上から顔と身体にモデリング(陰影)を作る
+        this.dirLight = new THREE.DirectionalLight(0xffe8d0, 2.0);
         this.dirLight.position.set(2, 5, 10);
         this.scene.add(this.dirLight);
+        this.keyLight = new THREE.SpotLight(0xfff4ea, 70, 60, Math.PI / 5, 0.55, 1.3);
+        this.keyLight.position.set(4.5, 4, -9);
+        this.keyLight.target.position.set(this.mikuBaseX, this.mikuBaseY + 1.2, this.mikuBaseZ);
+        this.scene.add(this.keyLight);
+        this.scene.add(this.keyLight.target);
+        // リムライト: 背後からティールで輪郭を光らせ、暗い背景から被写体を分離する
+        this.rimLight = new THREE.SpotLight(new THREE.Color(this.themeColor), 90, 55, Math.PI / 6, 0.6, 1.2);
+        this.rimLight.position.set(-4.5, 3.5, this.mikuBaseZ - 7);
+        this.rimLight.target.position.set(this.mikuBaseX, this.mikuBaseY + 1.2, this.mikuBaseZ);
+        this.scene.add(this.rimLight);
+        this.scene.add(this.rimLight.target);
     }
 
     updateFramePosition(frame) {
@@ -1005,9 +1022,20 @@ export class SongShutter extends BaseSong {
             this.camera.fov = 75 / this.zoomLevel;
             this.camera.updateProjectionMatrix();
             
-            // カメラのドラッグ首振りアングルを滑らかにイージング更新 (YXZオイラー角)
+            // 回り込み: 被写体(orbitPivot)を中心にカメラをオービットさせ、常に被写体を画面中央に捉える。
+            // ドラッグ角度を方位角(az)・仰角(el)として滑らかに反映する。
             this.cameraRotation.lerp(this.targetCameraRotation, 0.1);
-            this.camera.rotation.set(-this.cameraRotation.x, this.cameraRotation.y, 0, 'YXZ');
+            const az = this.cameraRotation.y;
+            const el = this.cameraRotation.x;
+            const P = this.orbitPivot, R = this.orbitRadius;
+            const ce = Math.cos(el);
+            this.camera.position.set(
+                P.x + R * Math.sin(az) * ce,
+                P.y + R * Math.sin(el),
+                P.z + R * Math.cos(az) * ce
+            );
+            this.camera.up.set(0, 1, 0);
+            this.camera.lookAt(P);
         }
 
         // スライダーのツマミを現在のズーム目標値に自動追随させる（双方向バインド）
@@ -1125,7 +1153,9 @@ export class SongShutter extends BaseSong {
             
             if (elapsed < holdDur) {
                 // 【フェーズ1：目前でのホールド表示 (一瞬大きく表示する提示機能)】
-                photo.position.set(0, 0, this.camera.position.z - 3);
+                // 回り込み中もカメラ前方3に出すため、視線方向に沿って配置する。
+                photo.position.copy(this.camera.position)
+                    .add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(3));
                 photo.quaternion.copy(this.camera.quaternion);
                 
                 // 出現時のわずかなズームアップ演出 (0.8から1.2倍へ) ＆ ズームレベルに反比例させて一定の見かけサイズに保つ
@@ -1243,12 +1273,17 @@ export class SongShutter extends BaseSong {
                 const dirX = s.userData.dirX;
                 const dirY = s.userData.dirY;
                 const speed = s.userData.scatterSpeed;
-                
-                // 方向ベクトル * 速度 * 経過時間分だけ外側へ移動
-                s.position.x = startPos.x + dirX * speed * elapsedSeconds;
-                s.position.y = startPos.y + dirY * speed * elapsedSeconds;
-                // Z座標もゆっくり手前に浮かび上がらせて奥行きのアニメーションを強化
-                s.position.z = startPos.z + elapsedSeconds * 0.2;
+                const P = this.orbitPivot;
+
+                // 散布レイアウトはピボット基準の「局所オフセット」として扱う(スコープ周りの広がり)。
+                const lx = (startPos.x - P.x) + dirX * speed * elapsedSeconds;
+                const ly = (startPos.y - P.y) + dirY * speed * elapsedSeconds;
+                const lz = (startPos.z - P.z) + elapsedSeconds * 0.2; // 手前へ浮かび上がる
+
+                // カメラの回り込みに合わせて局所オフセットを回転 → 歌詞は常にカメラ正面に居続ける。
+                // スプライトなので向きは自動でカメラ正面(ビルボード)。world座標のままなので写真描画も正しい。
+                this._lyricScratch.set(lx, ly, lz).applyQuaternion(this.camera.quaternion);
+                s.position.set(P.x + this._lyricScratch.x, P.y + this._lyricScratch.y, P.z + this._lyricScratch.z);
             }
             
             const fadeStart = birthTime - 600;
@@ -2353,8 +2388,9 @@ export class SongShutter extends BaseSong {
         const photoGeo = new THREE.PlaneGeometry(3.9, 2.9);
         const photoMesh = new THREE.Mesh(photoGeo, photoMat);
 
-        // 撮影の瞬間、カメラの正面に配置
-        photoMesh.position.set(0, 0, this.camera.position.z - 3);
+        // 撮影の瞬間、カメラの正面(視線方向3)に配置(回り込み対応)
+        photoMesh.position.copy(this.camera.position)
+            .add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(3));
         photoMesh.quaternion.copy(this.camera.quaternion);
         this.scene.add(photoMesh);
 
@@ -2473,7 +2509,7 @@ export class SongShutter extends BaseSong {
             this.dirLight = null;
         }
 
-        if (this.renderer) this.renderer.dispose();
+        if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
 
         super.destroy();
     }

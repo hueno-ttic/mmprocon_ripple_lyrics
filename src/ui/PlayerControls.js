@@ -143,21 +143,21 @@ export class PlayerControls {
         });
 
         eventBus.on('play', () => {
-            this.playPauseBtn.innerHTML = '<span style="font-size:16px">⏸</span> Pause (Space)';
+            this.playPauseBtn.innerHTML = '<span style="font-size:16px">⏸</span> Pause<span class="kbd-hint"> (Space)</span>';
             this.playPauseBtn.removeAttribute('disabled');
             this.playPauseBtn.style.opacity = '1';
             this.playPauseBtn.style.cursor = 'pointer';
         });
 
         eventBus.on('pause', () => {
-            this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play (Space)';
+            this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play<span class="kbd-hint"> (Space)</span>';
             this.playPauseBtn.removeAttribute('disabled');
             this.playPauseBtn.style.opacity = '1';
             this.playPauseBtn.style.cursor = 'pointer';
         });
 
         eventBus.on('stop', () => {
-            this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play (Space)';
+            this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play<span class="kbd-hint"> (Space)</span>';
             this.progressBar.style.width = '0%';
         });
 
@@ -192,7 +192,7 @@ export class PlayerControls {
         eventBus.on('timerReady', () => {
              // Activate player controls
              this.playPauseBtn.removeAttribute('disabled');
-             this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play (Space)';
+             this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play<span class="kbd-hint"> (Space)</span>';
              this.playPauseBtn.style.opacity = '1';
              this.playPauseBtn.style.cursor = 'pointer';
         });
@@ -205,7 +205,7 @@ export class PlayerControls {
              this.progressBar.style.width = '0%';
              // Reset controls
              this.playPauseBtn.removeAttribute('disabled');
-             this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play (Space)';
+             this.playPauseBtn.innerHTML = '<span style="font-size:16px">▶</span> Play<span class="kbd-hint"> (Space)</span>';
              this.playPauseBtn.style.opacity = '1';
              this.playPauseBtn.style.cursor = 'pointer';
         });

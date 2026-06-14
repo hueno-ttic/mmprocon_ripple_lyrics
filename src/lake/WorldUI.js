@@ -12,9 +12,12 @@ import { screenFade } from '../ui/ScreenFade.js';
 export class WorldUI {
     constructor(container) {
         this.container = container;
+        // 選曲ハブは滞在時間が最も長い画面なので、各曲シーンと同じ基準で
+        // モバイル時は重い表現(MSAA・影・bloom)を落として持続フレームレートを優先する。
+        this.isMobile = window.innerWidth < 768;
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true, preserveDrawingBuffer: true });
 
         this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -22,16 +25,22 @@ export class WorldUI {
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.12;
-        this.renderer.shadowMap.enabled = true;
+        // PCF影はモバイルGPUのfillrateを大きく消費するためデスクトップのみ
+        this.renderer.shadowMap.enabled = !this.isMobile;
         // PCFSoftShadowMap is deprecated in this three build (falls back to PCF)
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
         this.container.appendChild(this.renderer.domElement);
 
-        // Post-processing: subtle bloom for luminous water/sun/song-node highlights
+        // Post-processing: subtle bloom for luminous water/sun/song-node highlights.
+        // フルスクリーンのbloomはモバイルで重いので非モバイルのみ有効化し、
+        // モバイルでは composer を介さず renderer で直接描画する(animate参照)。
+        this.useBloom = !this.isMobile;
         this.composer = new EffectComposer(this.renderer);
         this.composer.addPass(new RenderPass(this.scene, this.camera));
-        this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.4, 0.5, 0.85);
-        this.composer.addPass(this.bloomPass);
+        if (this.useBloom) {
+            this.bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.4, 0.5, 0.85);
+            this.composer.addPass(this.bloomPass);
+        }
         this.composer.setSize(window.innerWidth, window.innerHeight);
 
         this.selectedIndex = 0;
@@ -562,7 +571,12 @@ export class WorldUI {
         // Update label positions from phase
         this._updateLabelPositions();
 
-        this.composer.render();
+        // モバイルは bloom 無効なので composer を介さず直接描画(余計なフルスクリーンパスを省く)
+        if (this.useBloom) {
+            this.composer.render();
+        } else {
+            this.renderer.render(this.scene, this.camera);
+        }
     }
 
     _updateLabelPositions() {
@@ -667,6 +681,9 @@ export class WorldUI {
         this.composer?.dispose?.();
         this.bloomPass?.dispose?.();
         this.renderer.dispose();
+        // ハブ+6曲で最大7つのWebGLコンテキストが生成されうる。曲↔湖の往復を繰り返しても
+        // ブラウザのコンテキスト上限に達しないよう、明示的に解放する。
+        this.renderer.forceContextLoss?.();
 
         if (this.labelsContainer?.parentNode) {
             this.labelsContainer.parentNode.removeChild(this.labelsContainer);

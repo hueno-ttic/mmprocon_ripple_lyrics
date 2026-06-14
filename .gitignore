@@ -63,3 +63,12 @@ eval_*.js
 # Claude Design 連携用(参照素材・下書き — アプリ本体に含めない)
 design_refs/
 design_drafts/
+
+# デザインキャプチャの生成物(webm/PNG — スクリプトのみ追跡し成果物は含めない)
+design/after/
+design/dance/
+design/verse/
+design/screenshots/
+
+# capture output (videos/frames) — keep scripts, ignore generated artifacts
+design/*/

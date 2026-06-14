@@ -1,7 +1,46 @@
 /* Responsive styles for mobile devices */
 @media (max-width: 768px) {
+    /* タッチ端末ではキーボードショートカット表記(Space/ESC)は無意味なので隠し、
+       ボタン幅を詰めてヘッダー/フッターの要素衝突を防ぐ */
+    .kbd-hint {
+        display: none;
+    }
+
+    /* 左右40pxのパディングは狭幅でタイトルと戻るボタンを衝突させるため縮める */
+    header, footer {
+        padding: 18px 16px;
+    }
+
     #song-title {
         font-size: 18px;
+        white-space: nowrap;
+    }
+
+    #song-info {
+        min-width: 0;
+        flex-shrink: 1;
+        overflow: hidden;
+    }
+
+    #back-to-lake {
+        flex-shrink: 0;
+        padding: 10px 14px;
+    }
+
+    /* フッターの再生コントロールが横に収まるよう間隔と時間表示を圧縮 */
+    #player-controls {
+        gap: 12px;
+    }
+
+    #play-pause-btn {
+        flex-shrink: 0;
+        padding: 10px 16px;
+    }
+
+    #time-label {
+        min-width: 0 !important;
+        margin-left: 8px !important;
+        font-size: 11px !important;
     }
 
     #song-artist {

@@ -1120,7 +1120,7 @@ export class SongTricktology extends BaseSong {
             this.styleEl.parentNode.removeChild(this.styleEl);
         }
 
-        if (this.renderer) this.renderer.dispose();
+        if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
 
         super.destroy();
     }

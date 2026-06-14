@@ -156,8 +156,24 @@ export class VolumeControl {
                 background: #fff;
             }
             @media (max-width: 600px) {
-                .app-volume-control { right: 8px; padding: 10px 6px; }
-                .app-volume-slider { height: 104px; }
+                /* モバイルでは中央右の本文・選曲ラベルに被るため、占有面積を小さくし
+                   通常時は半透明にして背後の内容を読めるようにする(操作中は不透明に戻す) */
+                .app-volume-control {
+                    right: 6px;
+                    padding: 8px 4px;
+                    gap: 6px;
+                    border-radius: 16px;
+                    opacity: 0.5;
+                    transition: opacity 0.25s ease;
+                }
+                .app-volume-control:active,
+                .app-volume-control:focus-within {
+                    opacity: 1;
+                }
+                .app-volume-mute { width: 24px; height: 24px; font-size: 14px; }
+                .app-volume-slider { width: 4px; height: 78px; }
+                .app-volume-slider::-webkit-slider-thumb { width: 13px; height: 13px; }
+                .app-volume-slider::-moz-range-thumb { width: 13px; height: 13px; }
             }
         `;
         document.head.appendChild(style);

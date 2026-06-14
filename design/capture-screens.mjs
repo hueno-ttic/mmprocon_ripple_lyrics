@@ -28,6 +28,9 @@ async function shot(page, name) {
 }
 
 async function enterLake(page) {
+  // 新規ユーザー(晴れフェーズ・0/6)の状態に揃える
+  await page.goto(BASE + '/');
+  await page.evaluate(() => { try { localStorage.clear(); } catch (e) {} });
   await page.goto(BASE + '/');
   await sleep(3200);                 // タイトルのフェードイン待ち
   await shot(page, '01-title');
@@ -45,6 +48,15 @@ async function enterLake(page) {
   await page.mouse.move(VW / 2, VH / 2); // 音量スライダーを畳む
   await sleep(600);
   await shot(page, '04-lake-selection');
+  // 曲をフォーカスして選曲パネル(「この曲をはじめる」CTA)を出した状態
+  const focus = page.locator('.song-label', { hasText: 'こたえて' });
+  if (await focus.count()) {
+    await focus.first().evaluate((el) => el.click());
+    await sleep(1800);
+    await page.mouse.move(VW / 2, VH / 2);
+    await sleep(400);
+    await shot(page, '04b-lake-selection-focused');
+  }
 }
 
 async function selectSong(page, title) {
@@ -73,13 +85,20 @@ async function captureSong(page, song) {
   }
   // 再生してイントロをスキップ
   const play = page.locator('#play-pause-btn');
-  if (await play.count()) await play.first().evaluate((b) => b.click());
-  await sleep(1500);
+  for (let i = 0; i < 3; i++) {
+    const playing = await page.evaluate(() => {
+      const pm = window.app && window.app.playerManager;
+      return !!(pm && pm.player && pm.player.isPlaying);
+    });
+    if (playing) break;
+    if (await play.count()) await play.first().evaluate((b) => b.click());
+    await sleep(1200);
+  }
   await page.evaluate((ms) => {
     const pm = window.app && window.app.playerManager;
     if (pm && pm.player) pm.player.requestMediaSeek(ms);
   }, song.seek);
-  await sleep(2500);
+  await sleep(3000);
   await page.mouse.move(VW / 2, VH / 2);
   await shot(page, song.file);
   // 湖へ戻る

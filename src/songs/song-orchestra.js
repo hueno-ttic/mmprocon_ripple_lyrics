@@ -1904,7 +1904,7 @@ export class SongOrchestra extends BaseSong {
 
         if (this.starGeometry) this.starGeometry.dispose();
         if (this.starMaterial) this.starMaterial.dispose();
-        if (this.renderer) this.renderer.dispose();
+        if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
         
         this.container.removeEventListener('click', this.boundOnClick);
         this.container.removeEventListener('mousemove', this._boundOnMouseMove);
