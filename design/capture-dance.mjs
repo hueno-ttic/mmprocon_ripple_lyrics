@@ -108,8 +108,8 @@ async function selectSong(page, title) {
       const sc = app && app.currentSongScene;
       const pm = window.playerManager;
       const p = pm && pm.player;
-      if (!sc || !sc.currentVRM || !p) return null;
-      const vrm = sc.currentVRM;
+      const vrm = sc && (sc.currentVRM || sc.mikuVRM);
+      if (!sc || !vrm || !p) return null;
       const h = vrm.humanoid;
       const b = (n) => { const node = h && h.getNormalizedBoneNode(n); return node ? node.rotation : null; };
       const pos = vrm.scene.position;
@@ -148,6 +148,14 @@ async function selectSong(page, title) {
       };
     });
     if (s) samples.push(s);
+    if (process.env.ZOOM) {
+      const z = parseFloat(process.env.ZOOM);
+      await page.evaluate((zv) => { const sc = window.app && window.app.currentSongScene; if (sc) sc.targetZoom = zv; }, z);
+    }
+    if (process.env.ORBIT_AZ || process.env.ORBIT_EL) {
+      const az = parseFloat(process.env.ORBIT_AZ || '0'), el = parseFloat(process.env.ORBIT_EL || '0');
+      await page.evaluate((v) => { const sc = window.app && window.app.currentSongScene; if (sc && sc.targetCameraRotation) sc.targetCameraRotation.set(v.el, v.az); }, { az, el });
+    }
     if (LIGHT && i % 4 === 0) {
       // スポットライトをミク(画面中央やや上)付近で緩く動かして照らし続ける
       const mx = VW / 2 + Math.sin(i * 0.2) * 80;

@@ -69,3 +69,6 @@ design/after/
 design/dance/
 design/verse/
 design/screenshots/
+
+# capture output (videos/frames) — keep scripts, ignore generated artifacts
+design/*/
