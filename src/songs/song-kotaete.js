@@ -351,14 +351,38 @@ export class SongKotaete extends BaseSong {
         const swayX = (Math.sin(t * 0.37) * 1.7 + Math.sin(t * 0.83) * 0.6) * nearK;
         vs.position.x += (swayX - vs.position.x) * 0.04;
 
-        // --- 上下: 浮遊のbob + サビで少し上昇 ---
-        const bobY = Math.sin(t * 1.25) * 0.35 + Math.sin(t * 0.47) * 0.12;
+        // --- グルーヴ用パルス: 拍頭で素早く立ち上がり、ゆっくり減衰(キレ+余韻) ---
+        // 立ち上がりを速くして拍との遅れ(後手)を詰める。bounce/applyGrooveで再利用。
+        this._groove = (this._groove || 0);
+        {
+            const atk = beatPulse > this._groove ? deltaSec * 45 : deltaSec * 9;
+            this._groove += (beatPulse - this._groove) * Math.min(1, atk);
+        }
+        // 縦ノリ: 拍内位相のレイズドコサインで「拍の瞬間に底」を作る。
+        // 0.5(1+cos2πp) は p=0(拍頭)で1=最も沈み、拍間で滑らかに戻る → 遅延ゼロ・段差なし。
+        const phase = (this._beatFrac != null) ? this._beatFrac : 0.5;
+        const bounceEnv = 0.5 * (1 + Math.cos(2 * Math.PI * phase));
+        // 微小ジッタ除去に軽く平滑化(位相ベースなので遅れはほぼ出ない)
+        this._bounce = (this._bounce || 0);
+        this._bounce += (bounceEnv - this._bounce) * Math.min(1, deltaSec * 40);
+
+        // --- 上下: 拍で沈んで跳ね返る「縦ノリ」を主役に + 浮遊bob + サビで上昇 ---
+        // 従来は時間sineのみで拍と無相関だった。拍位相エンベロープで縦バウンスを作る。
+        const bobY = Math.sin(t * 1.25) * 0.07 + Math.sin(t * 0.47) * 0.04; // 浮遊は控えめに
+        const bounce = this._bounce * (this.isClimax ? 0.60 : 0.44);        // 拍頭で下へ沈む
         const riseTarget = this.isClimax ? 0.7 : 0.0;
         this._mikuRise += (riseTarget - this._mikuRise) * Math.min(1, deltaSec * 1.2);
-        vs.position.y = 1.5 + bobY + this._mikuRise + beatPulse * 0.1;
+        vs.position.y = 1.5 + bobY + this._mikuRise - bounce;
 
         // ちょくちょく振り返って手を振る挨拶(選択・フィナーレ中は本来の演出を優先)
         this.updateGreet(deltaSec);
+
+        // サビは正面寄り(3/4)を向いて主役化。挨拶・フィナーレ中は専用演出を優先。
+        // 通常時は背中向きで先導(選択中は選択側の向き指定に任せる)。
+        if (!this.greetActive && !this.finaleActive) {
+            if (this.isClimax) this.mikuFacingTarget = Math.PI * 0.26;
+            else if (!this.choiceActive) this.mikuFacingTarget = Math.PI;
+        }
 
         // 向きの補間(問いが届くと振り返る)
         this.mikuRotY += (this.mikuFacingTarget - this.mikuRotY) * Math.min(1, deltaSec * 2.6);
@@ -419,10 +443,118 @@ export class SongKotaete extends BaseSong {
         }
         this.mikuGlowPulse = Math.max(0, this.mikuGlowPulse - deltaSec * 1.8);
 
+        // ビートに乗って腰・背骨・頭で踊る(移動ではなくボーンの律動)
+        this.applyGroove(t, beatPulse, deltaSec);
+
         // 表情(まばたき・リップシンク・感情)を毎フレーム更新
         this.updateMikuFace(positionMs, beatPulse);
 
         this.currentVRM.update(deltaSec);
+    }
+
+    // ビート同期のグルーヴ: モデル全体を動かすのではなく、胴体ボーンに
+    // 拍のアクセント(沈み込み)と2拍周期の体重移動を与えて「踊っている」感を出す。
+    // 強度は this.grooveConfig で曲ごとに調整可能。毎フレーム絶対値で代入し累積を防ぐ。
+    applyGroove(t, beatPulse, deltaSec) {
+        const vrm = this.currentVRM;
+        if (!vrm || !vrm.humanoid) return;
+        const cfg = this.grooveConfig || (this.grooveConfig = {
+            gain: 1.0,       // 全体の効き
+            climaxGain: 1.0, // サビでの追加倍率(gainに乗算)
+            punch: 0.18,     // 拍頭で胴を前に沈める量(rad)
+            sway: 0.12,      // 体重移動の振り幅(rad)
+            headNod: 0.14,   // 頭の頷き量(rad)
+            armSwing: 0.30,  // サビで腕を振る量(rad)
+            kneeBeat: 0.45,  // 拍ごとに膝を抱える量(rad)
+            legLift: 0.40,   // 体重移動に合わせた脚の上げ量(rad)
+        });
+        const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
+        const hips  = get('hips');
+        const spine = get('spine');
+        const chest = get('upperChest') || get('chest');
+        const head  = get('head');
+        if (!spine && !hips) return;
+
+        const gain = cfg.gain * (this.isClimax ? cfg.climaxGain * 1.6 : 1.0);
+
+        // グルーヴ用パルスは updateMiku で更新済み(拍頭で素早く立ち上がる版)を再利用
+        const g = this._groove || 0;
+
+        // 拍頭で胴を前に沈めて跳ね返す(スクワッシュ&ストレッチ)。
+        // 小節頭は_barAccentを上乗せして「踏み込み」を強調(縦ノリには触れない)。
+        const punch = (g + (this._barAccent || 0) * 0.5) * cfg.punch * gain;
+        if (spine) spine.rotation.x = punch;
+        if (chest) chest.rotation.x = -punch * 0.5;
+
+        // 体重移動: 拍ごとに左右へ振る振り子(_beatStepで向き反転)
+        const swayTarget = (this._beatStep || 1) * cfg.sway * gain;
+        this._swayCur = (this._swayCur || 0);
+        this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
+        const s = this._swayCur;
+        if (hips)  hips.rotation.z  = s;
+        if (spine) spine.rotation.z = -s * 0.6; // 上半身を逆に=自然なSカーブ
+
+        // 頭: 拍で頷き＋ゆっくりした揺れ＋体重移動に追従
+        if (head) {
+            head.rotation.x = g * cfg.headNod * gain + Math.sin(t * 1.2) * 0.03;
+            head.rotation.z = s * 0.5;
+        }
+
+        // 脚: 拍ごとに膝を抱え、体重移動に合わせて片脚を上げる(置物感の解消)。
+        // setupGlidePoseの基準ポーズ(滑空)に拍の動きを重ねて毎フレーム絶対値で代入。
+        const lUL = get('leftUpperLeg'), rUL = get('rightUpperLeg');
+        const lLL = get('leftLowerLeg'), rLL = get('rightLowerLeg');
+        const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
+        const knee = g * cfg.kneeBeat * gain;
+        // 体重が乗る側(swayの向き)の逆脚を持ち上げる=マーチ/ステップ感
+        const liftL = Math.max(0, -swayN) * cfg.legLift * gain;
+        const liftR = Math.max(0,  swayN) * cfg.legLift * gain;
+        if (lUL) { lUL.rotation.z = Math.PI / 26;  lUL.rotation.x = Math.PI / 14 + liftL; }
+        if (rUL) { rUL.rotation.z = -Math.PI / 26; rUL.rotation.x = Math.PI / 18 + liftR; }
+        if (lLL) lLL.rotation.x = -Math.PI / 10 - knee - liftL * 0.6;
+        if (rLL) rLL.rotation.x = -Math.PI / 12 - knee - liftR * 0.6;
+
+        // 小節頭アクセント: 1拍目で発火→減衰。光輪を一押しして拍節感を可視化
+        this._barAccent = Math.max(0, (this._barAccent || 0) - deltaSec * 2.2);
+        if (this._barAccent > 0) {
+            this.mikuGlowPulse = Math.max(this.mikuGlowPulse, this._barAccent * 0.45 * gain);
+        }
+
+        // サビの腕は「コード進行で切替わる振付けの型」に従う(reach/greet中は触らない)。
+        // 縦ノリ・脚・同期には一切触れず、腕/肘の型だけを変えて単調さを解消する。
+        if (this.isClimax && this.reachBlend < 0.05 && this.greetWave <= 0) {
+            const lu = get('leftUpperArm'),  ru = get('rightUpperArm');
+            const ll = get('leftLowerArm'),  rl = get('rightLowerArm');
+            const beat = (g + (this._barAccent || 0) * 0.6) * gain; // 拍/小節頭の押し出し
+            const side = this._danceSide || 1;
+            const mv = this._danceMove || 0;
+            // 型ごとの腕ターゲット(肩z=上下, 肩x=前後, 肘y=曲げ, 前腕x=拍スイング)
+            let luZ, ruZ, luX, ruX, llY, rlY, swing = 0;
+            if (mv === 1) {            // アップ・スウェイ: 両腕を上げて体重移動で左右に振る
+                luZ = Math.PI / 9 + s * 0.5;  ruZ = -Math.PI / 9 + s * 0.5;
+                luX = -0.35 - beat * 0.25;    ruX = -0.35 - beat * 0.25;
+                llY = Math.PI / 9;            rlY = -Math.PI / 9;
+            } else if (mv === 2) {     // リーチ: 片手を前へ差し出す(コードごとに左右交替)
+                luZ = Math.PI / 4;  ruZ = -Math.PI / 4;  luX = 0;  ruX = 0;
+                llY = Math.PI / 12; rlY = -Math.PI / 12;
+                if (side > 0) { ruZ = -Math.PI / 10; ruX = -0.55 - beat * 0.2; }
+                else          { luZ =  Math.PI / 10; luX = -0.55 - beat * 0.2; }
+            } else if (mv === 3) {     // 内省(短調): 手を胸元へ小さくたたむ
+                luZ = Math.PI / 3.0; ruZ = -Math.PI / 3.0; luX = -0.15; ruX = -0.15;
+                llY = Math.PI / 3;   rlY = -Math.PI / 3;
+            } else {                   // 0: サイド・スウィング(控えめ・前腕を拍で振る)
+                luZ = Math.PI / 4.2; ruZ = -Math.PI / 4.2; luX = 0; ruX = 0;
+                llY = Math.PI / 14;  rlY = -Math.PI / 14;  swing = beat * 0.5;
+            }
+            // 型の切替を滑らかに(腕状態を保持してターゲットへ補間)
+            const k = Math.min(1, deltaSec * 4);
+            const A = this._armS || (this._armS = {});
+            const L = (key, val) => (A[key] = (A[key] == null ? val : A[key] + (val - A[key]) * k));
+            if (lu) { lu.rotation.z = L('luZ', luZ); lu.rotation.x = L('luX', luX); }
+            if (ru) { ru.rotation.z = L('ruZ', ruZ); ru.rotation.x = L('ruX', ruX); }
+            if (ll) { ll.rotation.y = L('llY', llY); ll.rotation.x = L('llX', -swing); }
+            if (rl) { rl.rotation.y = L('rlY', rlY); rl.rotation.x = L('rlX',  swing); }
+        }
     }
 
     // ミクの表情を細かく動かす: まばたき・歌唱に合わせた口形(母音)・感情の補間。
@@ -583,7 +715,10 @@ export class SongKotaete extends BaseSong {
         // 中央を流れる読みやすい配置(横は控えめ、縦は重ならないよう散らす)
         const z = this.camera.position.z - 17 - Math.random() * 5;
         const x = (Math.random() - 0.5) * 3.0;
-        const y = 1.4 + (Math.random() - 0.5) * 3.2;
+        // サビはミクが正面・手前で主役になるので、歌詞は下方へ退避させ顔/体を隠さない
+        const y = this.isClimax
+            ? -2.5 + (Math.random() - 0.5) * 1.0
+            : 1.4 + (Math.random() - 0.5) * 3.2;
         sprite.position.set(x, y, z);
 
         // 画面内に必ず収める: 可視幅の82%を上限に、近づいて大きく見える分も考慮
@@ -1055,6 +1190,19 @@ export class SongKotaete extends BaseSong {
         const isClimax = !!chorus;
         this.isClimax = isClimax; // updateMiku / spawnText から参照(サビ演出)
 
+        // ---- コード進行で振付け(腕の型)を切替える ----
+        // コードが変わるたびに踊りの型を進める。短調(minor)は内省的な型へ寄せる音楽的対応。
+        if (typeof playerManager.player.findChord === 'function') {
+            const chord = playerManager.player.findChord(position);
+            if (chord && chord.index !== this._chordIndex) {
+                this._chordIndex = chord.index;
+                const minor = /m(?!aj)/i.test(chord.name || '');
+                this._danceMove = minor ? 3 : (((this._danceMove || 0) % 3) + 1) % 3;
+                this._danceSide = -(this._danceSide || -1); // 片手系の左右交替
+            }
+            this._chordName = chord ? chord.name : null;
+        }
+
         if (chorus && this.choicesMade < this.maxChoices && !this.choiceActive
             && !this.consumedChoruses.has(chorus.startTime)) {
             this.consumedChoruses.add(chorus.startTime);
@@ -1067,13 +1215,22 @@ export class SongKotaete extends BaseSong {
             this.dismissChoice(false);
         }
 
-        // ---- ビート脈動 ----
+        // ---- ビート脈動 & 小節構造 ----
         let beatPulse = 0;
         if (typeof playerManager.player.findBeat === 'function') {
             const beat = playerManager.player.findBeat(position);
             if (beat && beat.duration > 0) {
                 const p = Math.min(1, Math.max(0, (position - beat.startTime) / beat.duration));
                 beatPulse = Math.pow(1 - p, 2.2); // 拍頭で跳ねて減衰
+                this._beatFrac = p;               // 拍内位相(0=拍頭) 縦バウンス用
+                // ダンス用: 小節内の拍位置(1始まり)・拍子・通し拍番号を保持
+                this._beatInBar = beat.position || 1;
+                this._barLen = beat.length || 4;
+                if (beat.index !== this._beatIndex) {
+                    this._beatIndex = beat.index;      // 拍が進んだ瞬間
+                    this._beatStep = -(this._beatStep || -1); // 体重移動の向きを反転
+                    if (this._beatInBar === 1) this._barAccent = 1; // 小節頭でアクセント発火
+                }
             }
         }
 
@@ -1107,7 +1264,15 @@ export class SongKotaete extends BaseSong {
         let speed = isClimax ? 0.15 : 0.05;
         if (this.finaleActive) speed = 0.20;
         this.camera.position.z -= speed;
-        this.camera.position.y = 2 + beatPulse * 0.05; // ビートの微かな脈動
+        // サビは少し見上げる構図(主役を大きく)+ ビートの微かな脈動
+        const camYTarget = (isClimax ? 1.65 : 2) + beatPulse * 0.05;
+        this.camera.position.y += (camYTarget - this.camera.position.y) * Math.min(1, deltaSec * 2);
+        // サビ: 拍でFOVをわずかに詰めるズームパンチ(高揚感)。基準75へ戻る。
+        const fovTarget = 75 - (isClimax ? beatPulse * 2.2 : 0);
+        if (Math.abs(this.camera.fov - fovTarget) > 0.01) {
+            this.camera.fov += (fovTarget - this.camera.fov) * Math.min(1, deltaSec * 12);
+            this.camera.updateProjectionMatrix();
+        }
         this.paths.forEach(line => {
             if (this.camera.position.z - line.position.z < -25) {
                 line.position.z -= 50;

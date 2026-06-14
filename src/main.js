@@ -310,4 +310,5 @@ const app = new Application();
 window.app = app;
 window.appState = appState;
 window.eventBus = eventBus;
+window.playerManager = playerManager; // 計測/デバッグ用にプレイヤーを公開
 app.init();
