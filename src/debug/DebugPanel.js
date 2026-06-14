@@ -13,7 +13,7 @@ export function initDebugPanel() {
     const panel = document.createElement('div');
     panel.id = 'debug-panel';
     panel.style.cssText = `
-        position: fixed; bottom: 12px; left: 12px;
+        position: fixed; top: 12px; left: 12px;
         z-index: 99999;
         background: rgba(20, 8, 8, 0.88);
         border: 1px solid rgba(255, 120, 120, 0.6);

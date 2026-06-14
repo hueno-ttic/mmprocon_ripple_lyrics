@@ -15,6 +15,7 @@ import { SongTakeover } from './songs/song-takeover.js';
 import { CompletionScreen } from './ui/CompletionScreen.js';
 import { TitleScreen } from './ui/TitleScreen.js';
 import { StoryIntro } from './ui/StoryIntro.js';
+import { screenFade } from './ui/ScreenFade.js';
 // Global resilience handlers for media interruptions & API loading races
 window.addEventListener('unhandledrejection', (event) => {
     if (!event.reason) return;
@@ -60,17 +61,40 @@ class Application {
         const mediaElement = document.getElementById('media');
         playerManager.init(mediaElement);
 
+        // プロローグ完了後に湖の世界(WorldUI)を生成する共通処理。
+        // 初回・スキップどちらの経路からも呼ばれる。
+        const initWorld = () => {
+            // Intro finished — fade through the curtain into the lake world
+            // so the 3D scene cross-dissolves in instead of popping.
+            console.log("Intro finished. Initializing LakeUI...");
+            screenFade.cover(() => {
+                this.lakeUI = new WorldUI(this.sceneContainer);
+                if (uiContainer) uiContainer.style.pointerEvents = 'none'; // Keep none so clicks pass through to canvas
+                this.lakeUI.container.style.pointerEvents = 'auto'; // allow canvas interaction
+            }, { out: 500, in: 800 });
+        };
+
+        // 再訪(視聴済み)または ?skipIntro=1 のときはプロローグを丸ごと飛ばす。
+        const seenIntro = localStorage.getItem('mm_seen_intro') === '1';
+        const skipParam = new URLSearchParams(location.search).get('skipIntro') === '1';
+
         // Start Entry Sequence
         const titleScreen = new TitleScreen(() => {
             // タイトル通過後から音量コントロールを表示
             this.volumeControl.show();
+
+            if (seenIntro || skipParam) {
+                // プロローグをスキップして即・選曲画面へ
+                initWorld();
+                return;
+            }
+
+            // 初回はプロローグを流し、完了時に視聴済みフラグを立てる
             const storyIntro = new StoryIntro(() => {
-                // Intro finished, allow interaction & initialize LakeUI now!
-                console.log("Intro finished. Initializing LakeUI...");
-                this.lakeUI = new WorldUI(this.sceneContainer);
-                
-                if (uiContainer) uiContainer.style.pointerEvents = 'none'; // Keep none so clicks pass through to canvas
-                this.lakeUI.container.style.pointerEvents = 'auto'; // allow canvas interaction
+                try {
+                    localStorage.setItem('mm_seen_intro', '1');
+                } catch (e) { /* storage失敗は致命的でない */ }
+                initWorld();
             });
             storyIntro.start();
         });
@@ -85,10 +109,27 @@ class Application {
 
     bindEvents() {
         eventBus.on('loadingStateChange', (isLoading) => {
-            document.getElementById('loading-screen').style.display = isLoading ? 'flex' : 'none';
+            const ls = document.getElementById('loading-screen');
+            if (!ls) return;
+            if (isLoading) {
+                ls.style.display = 'flex';
+                void ls.offsetWidth; // commit display/opacity:0 so the fade animates
+                ls.style.opacity = '1';
+            } else {
+                ls.style.opacity = '0';
+                setTimeout(() => { if (!appState.isLoading) ls.style.display = 'none'; }, 450);
+                // A song finished loading behind the curtain — reveal the scene.
+                if (this._revealOnLoad) {
+                    this._revealOnLoad = false;
+                    screenFade.fadeIn(550);
+                }
+            }
         });
 
         eventBus.on('loadSong', (song) => {
+            // The world has already faded to the curtain (see WorldUI.selectSong);
+            // reveal the scene once loading completes.
+            this._revealOnLoad = true;
             playerManager.loadSong(song);
         });
 
@@ -124,20 +165,23 @@ class Application {
         });
 
         eventBus.on('backToLake', ({ markComplete = false } = {}) => {
-            if (markComplete && appState.currentSongId) {
-                appState.markSongComplete(appState.currentSongId);
-            }
-            appState.setCurrentSong(null);
-            appState.setLoading(false);
-            
-            if (this.currentSongScene) {
-                this.currentSongScene.destroy();
-                this.currentSongScene = null;
-            }
-            
-            document.body.style.backgroundImage = '';
-            document.body.style.backgroundColor = '';
-            this.lakeUI.show();
+            // Fade to the curtain, swap the song scene out for the world, fade back.
+            screenFade.cover(() => {
+                if (markComplete && appState.currentSongId) {
+                    appState.markSongComplete(appState.currentSongId);
+                }
+                appState.setCurrentSong(null);
+                appState.setLoading(false);
+
+                if (this.currentSongScene) {
+                    this.currentSongScene.destroy();
+                    this.currentSongScene = null;
+                }
+
+                document.body.style.backgroundImage = '';
+                document.body.style.backgroundColor = '';
+                this.lakeUI.show();
+            }, { out: 450, in: 650 });
         });
     }
 
@@ -228,11 +272,12 @@ class Application {
         });
 
         setTimeout(() => {
-            overlay.style.opacity = '0';
+            // Hand off to backToLake, whose curtain fades over this overlay;
+            // remove the overlay once it's hidden behind the curtain.
+            onDone();
             setTimeout(() => {
                 if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-                onDone();
-            }, 800);
+            }, 500);
         }, 2800);
     }
 

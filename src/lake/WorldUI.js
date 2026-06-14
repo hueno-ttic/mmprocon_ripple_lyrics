@@ -7,6 +7,7 @@ import { SONGS } from '../config/songs.js';
 import { PHASES } from '../config/constants.js';
 import { appState } from '../core/appState.js';
 import { PHASE_CLASSES } from './phases/index.js';
+import { screenFade } from '../ui/ScreenFade.js';
 
 export class WorldUI {
     constructor(container) {
@@ -61,6 +62,7 @@ export class WorldUI {
         this._updateProgressCounter();
         this._setSelected(0);
         this._maybeShowOnboarding();
+        this._maybeShowEnding();
 
         this.bindEvents();
         // Relative clock: Date.now()*0.001 (~1.8e9) exceeds float32
@@ -113,7 +115,7 @@ export class WorldUI {
             const label = document.createElement('div');
             label.className = 'song-label';
             label.innerHTML = `
-                <div class="song-title" style="text-shadow: 0 0 15px ${song.color}, 0 1px 2px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.7);">
+                <div class="song-title" style="text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 1px 3px rgba(0,0,0,0.95), 0 0 14px ${song.color}99;">
                     ${song.title}${completeMark}
                 </div>
                 <div class="song-artist">${song.artist}</div>
@@ -278,6 +280,30 @@ export class WorldUI {
         setTimeout(dismiss, 9000);
     }
 
+    // 全曲(6/6)制覇したときの控えめな達成テキスト。湖面UIに一度だけ表示する。
+    // 既に出していれば何もしない(冪等)。過剰演出はせず、静かな完成の合図のみ。
+    _maybeShowEnding() {
+        if (!appState.areAllSongsComplete()) return;
+        if (this._endingShown) return;
+        this._endingShown = true;
+
+        const ending = document.createElement('div');
+        ending.className = 'world-ending';
+        ending.style.cssText = `
+            position: fixed; left: 50%; top: 64px; transform: translateX(-50%);
+            color: rgba(255,255,255,0.92); z-index: 480; pointer-events: none;
+            font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
+            font-size: clamp(13px, 3.2vw, 18px); font-weight: 300; letter-spacing: 0.18em;
+            text-align: center; white-space: nowrap;
+            text-shadow: 0 0 6px rgba(0,0,0,0.85), 0 0 18px rgba(212,175,55,0.5);
+            opacity: 0; transition: opacity 1.4s ease;
+        `;
+        ending.textContent = 'ソナーレ完成 — すべての水をめぐった';
+        this.container.appendChild(ending);
+        // ふわっと浮かび上がらせる
+        requestAnimationFrame(() => { ending.style.opacity = '1'; });
+    }
+
     _updateProgressCounter() {
         if (!this.progressCounter) return;
         const completed = SONGS.filter(s => appState.isSongComplete(s.id)).length;
@@ -297,17 +323,23 @@ export class WorldUI {
 
     selectSong(song, index) {
         if (this.isTransitioning) return;
+        this.isTransitioning = true;
 
         if (this.currentPhase) {
             this.currentPhase.onSelect(index);
         }
 
-        appState.setCurrentSong(song.id);
-        this.renderer.domElement.style.display = 'none';
-        this.labelsContainer.style.display = 'none';
-        if (this.selectionPanel) this.selectionPanel.style.display = 'none';
-        if (this.thumbCard) this.thumbCard.style.display = 'none';
-        eventBus.emit('loadSong', song);
+        // Fade the world out to the curtain, then hand off to the song scene.
+        // main.js reveals the scene (fadeIn) once it finishes loading.
+        screenFade.fadeOut(450).then(() => {
+            appState.setCurrentSong(song.id);
+            this.renderer.domElement.style.display = 'none';
+            this.labelsContainer.style.display = 'none';
+            if (this.selectionPanel) this.selectionPanel.style.display = 'none';
+            if (this.thumbCard) this.thumbCard.style.display = 'none';
+            eventBus.emit('loadSong', song);
+            this.isTransitioning = false;
+        });
     }
 
     show() {
@@ -329,6 +361,7 @@ export class WorldUI {
         this._refreshLabels();
         this._updateProgressCounter();
         this._updateSelectionPanel();
+        this._maybeShowEnding();
     }
 
     _refreshLabels() {
@@ -535,50 +568,88 @@ export class WorldUI {
     _updateLabelPositions() {
         if (!this.currentPhase) return;
 
-        const widthHalf = window.innerWidth / 2;
-        const heightHalf = window.innerHeight / 2;
-        const N = SONGS.length;
+        const W = window.innerWidth, H = window.innerHeight;
+        const widthHalf = W / 2, heightHalf = H / 2;
+        const padTop = 70;
+        const padBot = 200; // keep labels clear of the selection panel
 
-        this.labels.forEach((labelData, i) => {
-            const worldPos = this.currentPhase.getSongPosition(i);
-            const projected = worldPos.clone().project(this.camera);
+        // Thumbnail card box (centered, foreground) that labels must avoid.
+        const tc = this.thumbCard;
+        let card = null;
+        if (tc && tc.style.display !== 'none' && tc.offsetWidth) {
+            const margin = 18;
+            card = {
+                cx: W / 2,
+                cy: H - (W <= 480 ? 196 : 184) - tc.offsetHeight / 2, // matches CSS bottom
+                hw: tc.offsetWidth / 2 + margin,
+                hh: tc.offsetHeight / 2 + margin,
+            };
+        }
 
-            if (projected.z < 1) {
-                const x = (projected.x * widthHalf) + widthHalf;
-                const y = -(projected.y * heightHalf) + heightHalf;
+        const clampX = (v, hw) => Math.max(hw + 8, Math.min(W - hw - 8, v));
+        const clampY = (v) => Math.max(padTop, Math.min(H - padBot, v));
 
-                // Clamp by the label's actual half-width so long titles
-                // never get cut off at the screen edges
-                const halfW = labelData.element.offsetWidth / 2 + 8;
-                const padTop = 70;
-                const padBot = 200; // keep labels clear of the selection panel
-                const cx = Math.max(halfW, Math.min(window.innerWidth - halfW, x));
-                const cy = Math.max(padTop, Math.min(window.innerHeight - padBot, y));
-
-                // Depth-based scale/opacity — keep a readable floor so
-                // far-away songs are still legible for first-time users
-                const depth = projected.z;
-                const depthScale = 0.6 + (1 - depth) * 0.5;
-                const depthOpacity = 0.55 + (1 - depth) * 0.45;
-
-                const isSelected = i === this.selectedIndex;
-                const isHovered = labelData._hovered;
-                const scale = depthScale * (isHovered ? 1.12 : 1.0) * (isSelected ? 1.1 : 1.0);
-
-                labelData.element.style.left = `${cx}px`;
-                labelData.element.style.top = `${cy}px`;
-                labelData.element.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
-                labelData.element.style.opacity = Math.min(1, depthOpacity).toFixed(3);
-
-                if (isSelected) {
-                    labelData.element.classList.add('song-label--front');
-                } else {
-                    labelData.element.classList.remove('song-label--front');
-                }
-            } else {
-                labelData.element.style.opacity = '0';
+        // Push a label box out of the card (least-penetration axis; never
+        // downward, where the selection panel lives).
+        const avoidCard = (p) => {
+            if (!card) return;
+            const dx = p.cx - card.cx, dy = p.cy - card.cy;
+            const exX = card.hw + p.hw, exY = card.hh + p.hh;
+            const ox = exX - Math.abs(dx), oy = exY - Math.abs(dy);
+            if (ox > 0 && oy > 0) {
+                if (ox <= oy) p.cx += dx >= 0 ? ox : -ox;
+                else if (dy < 0) p.cy -= oy;
+                else p.cy = card.cy - exY;
             }
+        };
+
+        // Pass 1 — project each visible label to its node and seed a position.
+        const items = [];
+        this.labels.forEach((labelData, i) => {
+            const projected = this.currentPhase.getSongPosition(i).project(this.camera);
+            if (projected.z >= 1) { labelData.element.style.opacity = '0'; return; }
+            const lw = labelData.element.offsetWidth, lh = labelData.element.offsetHeight;
+            const depth = projected.z;
+            items.push({
+                labelData, i, lw, lh, hw: lw / 2, hh: lh / 2,
+                cx: clampX((projected.x * widthHalf) + widthHalf, lw / 2),
+                cy: clampY(-(projected.y * heightHalf) + heightHalf),
+                depthScale: 0.6 + (1 - depth) * 0.5,
+                depthOpacity: 0.55 + (1 - depth) * 0.45,
+                isSelected: i === this.selectedIndex,
+                isHovered: labelData._hovered,
+            });
         });
+
+        // Pass 2 — relax: separate labels from each other and from the card so
+        // names stay legible and never sit over the jacket art.
+        for (let iter = 0; iter < 6; iter++) {
+            for (let a = 0; a < items.length; a++) {
+                for (let b = a + 1; b < items.length; b++) {
+                    const A = items[a], B = items[b];
+                    let dx = B.cx - A.cx, dy = B.cy - A.cy;
+                    if (dx === 0 && dy === 0) { dy = 1; }
+                    const minX = A.hw + B.hw + 14, minY = A.hh + B.hh + 8;
+                    const ox = minX - Math.abs(dx), oy = minY - Math.abs(dy);
+                    if (ox > 0 && oy > 0) {
+                        if (oy <= ox) { const s = oy / 2; if (dy >= 0) { A.cy -= s; B.cy += s; } else { A.cy += s; B.cy -= s; } }
+                        else { const s = ox / 2; if (dx >= 0) { A.cx -= s; B.cx += s; } else { A.cx += s; B.cx -= s; } }
+                    }
+                }
+            }
+            for (const p of items) { avoidCard(p); p.cx = clampX(p.cx, p.hw); p.cy = clampY(p.cy); }
+        }
+
+        // Pass 3 — commit styles.
+        for (const p of items) {
+            const scale = p.depthScale * (p.isHovered ? 1.12 : 1.0) * (p.isSelected ? 1.1 : 1.0);
+            const el = p.labelData.element;
+            el.style.left = `${p.cx}px`;
+            el.style.top = `${p.cy}px`;
+            el.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
+            el.style.opacity = Math.min(1, p.depthOpacity).toFixed(3);
+            el.classList.toggle('song-label--front', p.isSelected);
+        }
     }
 
     destroy() {

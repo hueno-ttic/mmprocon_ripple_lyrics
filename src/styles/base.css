@@ -159,10 +159,19 @@ button:active {
     font-weight: 300;
     letter-spacing: 4px;
     color: #fff;
-    animation: pulseText 2s infinite ease-in-out;
+}
+
+/* Loading screen: hidden until a song loads, fades in/out, and sits above the
+   screen-fade curtain so its message stays visible while the scene loads. */
+#loading-screen {
+    display: none;
+    opacity: 0;
+    z-index: 3200;
+    transition: opacity 0.5s ease;
+    animation: pulseText 2.4s infinite ease-in-out;
 }
 
 @keyframes pulseText {
-    0%, 100% { opacity: 0.5; }
-    50% { opacity: 1; text-shadow: 0 0 20px rgba(255,255,255,0.8); }
+    0%, 100% { text-shadow: 0 0 6px rgba(255,255,255,0.15); }
+    50% { text-shadow: 0 0 20px rgba(255,255,255,0.85); }
 }

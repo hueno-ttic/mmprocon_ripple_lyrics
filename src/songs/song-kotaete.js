@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
+import { addRipple, getRipples } from '../lake/lakeMemory.js';
 
 /**
  * こたえて (imie / 初音ミク) — 「問いの回廊」
@@ -93,6 +94,18 @@ export class SongKotaete extends BaseSong {
         this.finaleActive = false;
         this.finaleOverlay = null;
 
+        // ---- 湖の循環: 過去に流した「問い」の波紋(エコー) ----
+        // 自分が以前フィナーレで綴った問いが、回廊に淡い波紋として再来する。
+        // 触れると「過去の問いに応える」= 自分の創作が次の体験の入力になる。
+        this.pastRipples = [];        // localStorageから読み込んだ過去の問い
+        this.echoRipples = [];        // いま漂っているエコー(スプライト群)
+        this._echoCursor = 0;         // 次に出す過去問いのインデックス
+        this._echoTimer = 6000;       // 最初のエコーまでの待ち(ms相当, 実時間で減算)
+        this.answeredEchoes = 0;      // 過去の問いに応えた回数
+        this.askActive = false;       // フィナーレの「問いを書く」UI表示中
+        this.askEl = null;
+        this.savedRipple = null;      // 今回フィナーレで湖に流した波紋
+
         // ---- DOM ----
         this.customStyleElement = null;
         this.paletteEl = null;
@@ -116,6 +129,11 @@ export class SongKotaete extends BaseSong {
         this.createGlowTexture();
         this.loadMiku();
         this.createPaletteUI();
+
+        // 過去に湖へ流した「問い」を読み込む(古い順)。回廊にエコーとして再来させる。
+        this.pastRipples = getRipples({ songId: 'kotaete', type: 'question' });
+        this._echoCursor = 0;
+        this.updateLakeCount();
 
         window.addEventListener('resize', this.boundOnResize);
         // click はBaseSongの汎用リップル用に残し、レイキャストはpointerdownで両対応
@@ -635,7 +653,7 @@ export class SongKotaete extends BaseSong {
         if (!this.isActive || !this.camera || this.isTutorialActive) return;
         // 選択UIなどのボタン操作は素通しする
         if (event.target && event.target.closest &&
-            event.target.closest('.kotaete-choice-container, .song-tutorial-overlay')) {
+            event.target.closest('.kotaete-choice-container, .song-tutorial-overlay, .kotaete-ask')) {
             return;
         }
 
@@ -661,7 +679,11 @@ export class SongKotaete extends BaseSong {
             const d = Math.hypot(event.clientX - sx, event.clientY - sy);
             if (d < threshold && d < bestDist) { bestDist = d; best = s; }
         }
-        if (best) this.resonate(best, event.clientX, event.clientY);
+        if (best) { this.resonate(best, event.clientX, event.clientY); return; }
+
+        // 現在の歌詞に当たらなければ、過去の問い(エコー)への応答を判定
+        const echo = this._pickEcho(event.clientX, event.clientY);
+        if (echo) this.resonateEcho(echo, event.clientX, event.clientY);
     }
 
     resonate(sprite, clientX, clientY) {
@@ -806,6 +828,208 @@ export class SongKotaete extends BaseSong {
                 p.material.dispose();
                 this.flyingParticles.splice(i, 1);
             }
+        }
+    }
+
+    // =====================================================================
+    // 湖の循環: 過去の問い(エコー)
+    // =====================================================================
+    // 過去にフィナーレで綴った問いを、淡い波紋テキストとして回廊奥から流す。
+    // 自分の創作が次のプレイの入力として戻ってくる(ローカル完結の擬似循環)。
+    spawnEchoRipple(ripple) {
+        if (!ripple || !ripple.text) return;
+        const colorStr = ripple.color || this.themeColor;
+        const { texture, aspect } = this.createTextTexture(ripple.text, colorStr);
+        const material = new THREE.SpriteMaterial({
+            map: texture, transparent: true, opacity: 0, depthWrite: false,
+            color: new THREE.Color(colorStr).lerp(new THREE.Color(0xffffff), 0.25),
+        });
+        const sprite = new THREE.Sprite(material);
+        const side = (this._echoCursor % 2 === 0) ? -1 : 1;
+        const z = this.camera.position.z - 26 - Math.random() * 6;
+        const x = side * (3.4 + Math.random() * 1.4);
+        const y = 0.4 + Math.random() * 3.4;
+        sprite.position.set(x, y, z);
+        const height = 1.5 + Math.random() * 0.3;
+        sprite.scale.set(height * aspect, height, 1);
+
+        // 「過去の問い」を象徴する淡い光輪
+        const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.glowTexture, color: new THREE.Color(colorStr),
+            transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+        }));
+        halo.scale.set(height * aspect * 1.5, height * 2.4, 1);
+        halo.position.copy(sprite.position);
+        halo.renderOrder = -1;
+        this.scene.add(halo);
+        this.scene.add(sprite);
+
+        this.echoRipples.push({
+            sprite, halo, color: colorStr,
+            baseW: height * aspect, baseH: height,
+            ph: Math.random() * 6.28, resonated: false, life: 0, text: ripple.text,
+        });
+    }
+
+    updateEchoes(deltaSec, now) {
+        // 出すタイミング: 選択/フィナーレ/チュートリアル中は出さない。
+        // 過去の問いがあれば一定間隔で1つずつ、画面に最大3つまで。
+        if (!this.choiceActive && !this.finaleActive && !this.isTutorialActive
+            && this.pastRipples.length > 0 && this.echoRipples.length < 3) {
+            this._echoTimer -= deltaSec * 1000;
+            if (this._echoTimer <= 0) {
+                const r = this.pastRipples[this._echoCursor % this.pastRipples.length];
+                this._echoCursor++;
+                this.spawnEchoRipple(r);
+                this._echoTimer = 9000 + Math.random() * 6000;
+            }
+        }
+
+        for (let i = this.echoRipples.length - 1; i >= 0; i--) {
+            const e = this.echoRipples[i];
+            e.life += deltaSec;
+            // ゆっくり手前へ漂い、上下に揺れる
+            e.sprite.position.z += deltaSec * 1.1;
+            e.sprite.position.y += Math.sin(now * 0.0012 + e.ph) * 0.004;
+            e.halo.position.copy(e.sprite.position);
+
+            const breathe = 0.5 + 0.5 * Math.sin(now * 0.0025 + e.ph);
+            const baseOp = e.resonated ? 0.85 : 0.42;       // 応えると明るく
+            const fadeIn = Math.min(1, e.life / 1.2);
+            let op = baseOp * fadeIn;
+            const distToCam = e.sprite.position.z - this.camera.position.z;
+            if (distToCam > -5) op *= Math.max(0, (-distToCam) / 5); // 近づくと消える
+            e.sprite.material.opacity = op;
+            e.halo.material.opacity = (e.resonated ? 0.35 : 0.16) * fadeIn * (0.7 + breathe * 0.3);
+
+            if (e.sprite.position.z > this.camera.position.z - 2) {
+                this.scene.remove(e.sprite);
+                if (e.sprite.material.map) e.sprite.material.map.dispose();
+                e.sprite.material.dispose();
+                this.scene.remove(e.halo); e.halo.material.dispose();
+                this.echoRipples.splice(i, 1);
+            }
+        }
+    }
+
+    _pickEcho(clientX, clientY) {
+        if (this.echoRipples.length === 0) return null;
+        const widthHalf = window.innerWidth / 2;
+        const heightHalf = window.innerHeight / 2;
+        const v = new THREE.Vector3();
+        let best = null, bestD = Infinity;
+        const threshold = Math.max(90, window.innerWidth * 0.09);
+        for (const e of this.echoRipples) {
+            if (e.resonated) continue;
+            v.copy(e.sprite.position).project(this.camera);
+            if (v.z >= 1) continue;
+            const x = v.x * widthHalf + widthHalf;
+            const y = -v.y * heightHalf + heightHalf;
+            const d = Math.hypot(clientX - x, clientY - y);
+            if (d < threshold && d < bestD) { bestD = d; best = e; }
+        }
+        return best;
+    }
+
+    resonateEcho(echo, clientX, clientY) {
+        echo.resonated = true;
+        echo.life = Math.min(echo.life, 0.3);
+        this.answeredEchoes++;
+        // 手応え: 衝撃波 + ミクへ光の粒 + 表情がほころぶ
+        this.spawnShockwave(echo.sprite.position.clone(), Math.max(echo.baseW, echo.baseH) * 1.4);
+        this.spawnFlyingParticles(echo.sprite.position.clone());
+        this._contactJoy = 0.9;
+        // 「過去の問いに応えた」ことを伝える小さな浮遊ラベル
+        const tag = document.createElement('div');
+        tag.className = 'kotaete-echo-tag';
+        tag.textContent = '過去の問いに、応えた';
+        tag.style.left = `${clientX}px`;
+        tag.style.top = `${clientY}px`;
+        tag.style.color = echo.color;
+        this.songWrapper.appendChild(tag);
+        this._domTimers.push(setTimeout(() => { if (tag.parentNode) tag.parentNode.removeChild(tag); }, 1600));
+    }
+
+    // 湖に積もった問いの数を再集計してUIへ反映
+    updateLakeCount() {
+        this.lakeCount = getRipples({ songId: 'kotaete', type: 'question' }).length;
+        if (this.lakeCountEl) {
+            this.lakeCountEl.textContent = this.lakeCount > 0 ? `湖の問い ${this.lakeCount}` : '';
+            this.lakeCountEl.style.opacity = this.lakeCount > 0 ? '1' : '0';
+        }
+    }
+
+    // =====================================================================
+    // フィナーレの「問いを書く」 — 創作を湖へ流す
+    // =====================================================================
+    showAskPanel(answerHex) {
+        if (this.askEl) return;
+        this.askActive = true;
+        const el = document.createElement('div');
+        el.className = 'kotaete-ask';
+        el.style.setProperty('--kotaete-answer-color', answerHex);
+        el.innerHTML = `
+            <div class="kotaete-ask-title">この色は、どんな問いへの答え？</div>
+            <div class="kotaete-ask-hint">あなたの問いを綴ると、湖に波紋として残る</div>
+            <input class="kotaete-ask-input" type="text" maxlength="40" placeholder="あなたの問いを書く…" />
+            <div class="kotaete-ask-actions">
+                <button class="kotaete-ask-submit">湖に流す</button>
+                <button class="kotaete-ask-skip">いまはしない</button>
+            </div>
+        `;
+        this.songWrapper.appendChild(el);
+        this.askEl = el;
+        const input = el.querySelector('.kotaete-ask-input');
+        const doSubmit = () => {
+            const text = (input.value || '').trim();
+            if (!text) { try { input.focus(); } catch (e) {} return; }
+            this.saveUserQuestion(text, answerHex);
+            this.closeAskPanel('湖に、あなたの問いが積もった');
+        };
+        // 入力中のキーがプレイヤー操作(スペース=一時停止等)へ漏れないようにする
+        input.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') { e.preventDefault(); doSubmit(); }
+        });
+        el.querySelector('.kotaete-ask-submit').addEventListener('click', doSubmit);
+        el.querySelector('.kotaete-ask-skip').addEventListener('click', () => this.closeAskPanel(null));
+        this._domTimers.push(setTimeout(() => el.classList.add('visible'), 200));
+        this._domTimers.push(setTimeout(() => { try { input.focus(); } catch (e) {} }, 700));
+    }
+
+    saveUserQuestion(text, answerHex) {
+        this.savedRipple = addRipple({
+            songId: 'kotaete', type: 'question', text, color: answerHex,
+            meta: { resonance: this.resonanceCount, answeredEchoes: this.answeredEchoes },
+        });
+        this.updateLakeCount();
+        // エンドカードに反映(自分の問いと、湖の堆積数)
+        this.setResultSummary({
+            accentColor: answerHex,
+            swatch: this.finalAnswerColor ? answerHex : null,
+            lines: [
+                `あなたの問い: 「${text}」`,
+                `湖に積もった問い ${this.lakeCount}`,
+            ],
+        });
+    }
+
+    closeAskPanel(message) {
+        if (this.askEl) {
+            this.askEl.classList.remove('visible');
+            const el = this.askEl;
+            this.askEl = null;
+            this._domTimers.push(setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 600));
+        }
+        this.askActive = false;
+        if (message) {
+            const note = document.createElement('div');
+            note.className = 'kotaete-ask-note';
+            note.textContent = message;
+            this.songWrapper.appendChild(note);
+            this._domTimers.push(setTimeout(() => note.classList.add('visible'), 60));
+            this._domTimers.push(setTimeout(() => note.classList.remove('visible'), 4000));
+            this._domTimers.push(setTimeout(() => { if (note.parentNode) note.parentNode.removeChild(note); }, 4800));
         }
     }
 
@@ -1054,6 +1278,7 @@ export class SongKotaete extends BaseSong {
         this.updateFlyingParticles(deltaSec);
         this.updateShockwaves(deltaSec);
         this.updateChoiceOrbs(now);
+        this.updateEchoes(deltaSec, now);
 
         this._lastFrameReal = now;
     }
@@ -1334,6 +1559,12 @@ export class SongKotaete extends BaseSong {
         this.gaugeFillEl = this.gaugeEl.querySelector('.kotaete-gauge-fill');
         this.songWrapper.appendChild(this.gaugeEl);
         this._updateGauge();
+
+        // 湖に積もった「問い」の数(過去の自分の創作の堆積)を控えめに表示
+        this.lakeCountEl = document.createElement('div');
+        this.lakeCountEl.className = 'kotaete-lake-count';
+        this.lakeCountEl.style.opacity = '0';
+        this.songWrapper.appendChild(this.lakeCountEl);
     }
 
     _updateGauge() {
@@ -1430,7 +1661,7 @@ export class SongKotaete extends BaseSong {
             if (this.finaleOverlay) this.finaleOverlay.classList.add('visible');
         }, 100));
 
-        // エンドカードへ成果を登録
+        // エンドカードへ成果を登録(問いを書けば saveUserQuestion が上書きする)
         this.setResultSummary({
             accentColor: hex,
             swatch: this.finalAnswerColor ? hex : null,
@@ -1439,6 +1670,12 @@ export class SongKotaete extends BaseSong {
                 `歌詞との共鳴 ${this.resonanceCount}`,
             ],
         });
+
+        // 「問いを立てる」— この色を答えとする問いをユーザーが綴り、湖へ流す。
+        // 少し間を置いてから差し出す(色が満ちる演出を見せてから)。
+        this._domTimers.push(setTimeout(() => {
+            if (this.isActive && this.finaleActive) this.showAskPanel(hex);
+        }, 3200));
     }
 
     // =====================================================================
@@ -1673,10 +1910,138 @@ export class SongKotaete extends BaseSong {
                 0%   { transform: translateY(24px); opacity: 0; }
                 100% { transform: translateY(0);    opacity: 1; }
             }
+            /* 過去の問いに応えたときの浮遊ラベル */
+            .kotaete-echo-tag {
+                position: absolute;
+                transform: translate(-50%, -50%);
+                font-size: 13px;
+                font-weight: 700;
+                letter-spacing: 2px;
+                white-space: nowrap;
+                pointer-events: none;
+                z-index: 32;
+                text-shadow: 0 0 10px currentColor;
+                animation: kotaete-echo-tag 1.6s ease-out forwards;
+            }
+            @keyframes kotaete-echo-tag {
+                0%   { opacity: 0; transform: translate(-50%, -40%) scale(0.9); }
+                20%  { opacity: 1; }
+                100% { opacity: 0; transform: translate(-50%, -160%) scale(1.05); }
+            }
+            /* 湖に積もった問いの数(常設・控えめ) */
+            .kotaete-lake-count {
+                position: absolute;
+                left: 50%;
+                bottom: 84px;
+                transform: translateX(-50%);
+                font-size: 11px;
+                letter-spacing: 3px;
+                color: rgba(255, 255, 255, 0.6);
+                text-shadow: 0 0 8px rgba(127, 119, 221, 0.7);
+                font-family: 'Noto Serif JP', serif;
+                pointer-events: none;
+                z-index: 25;
+                transition: opacity 1s ease;
+            }
+            /* フィナーレ「問いを書く」パネル */
+            .kotaete-ask {
+                position: absolute;
+                left: 50%;
+                bottom: 14vh;
+                transform: translate(-50%, 18px);
+                width: min(86vw, 460px);
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 10px;
+                padding: 22px 24px;
+                background: rgba(6, 6, 20, 0.78);
+                border: 1px solid var(--kotaete-answer-color, #7F77DD);
+                border-radius: 18px;
+                backdrop-filter: blur(8px);
+                box-shadow: 0 0 34px -6px var(--kotaete-answer-color, #7F77DD);
+                z-index: 60;
+                opacity: 0;
+                transition: opacity 0.8s ease, transform 0.8s ease;
+            }
+            .kotaete-ask.visible { opacity: 1; transform: translate(-50%, 0); }
+            .kotaete-ask-title {
+                font-size: clamp(15px, 2.4vw, 19px);
+                font-weight: 700;
+                letter-spacing: 2px;
+                color: #fff;
+                text-align: center;
+                text-shadow: 0 0 14px var(--kotaete-answer-color, #7F77DD);
+            }
+            .kotaete-ask-hint {
+                font-size: 11px;
+                letter-spacing: 1px;
+                color: rgba(255, 255, 255, 0.6);
+                text-align: center;
+            }
+            .kotaete-ask-input {
+                width: 100%;
+                margin-top: 4px;
+                padding: 11px 14px;
+                font-size: 15px;
+                color: #fff;
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.35);
+                border-radius: 10px;
+                outline: none;
+                text-align: center;
+                transition: border-color 0.3s ease, box-shadow 0.3s ease;
+            }
+            .kotaete-ask-input:focus {
+                border-color: var(--kotaete-answer-color, #7F77DD);
+                box-shadow: 0 0 16px -3px var(--kotaete-answer-color, #7F77DD);
+            }
+            .kotaete-ask-input::placeholder { color: rgba(255, 255, 255, 0.4); }
+            .kotaete-ask-actions { display: flex; gap: 12px; margin-top: 2px; }
+            .kotaete-ask-submit, .kotaete-ask-skip {
+                padding: 9px 22px;
+                font-size: 13px;
+                letter-spacing: 2px;
+                border-radius: 20px;
+                cursor: pointer;
+                transition: transform 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
+            }
+            .kotaete-ask-submit {
+                color: #0a0a18;
+                font-weight: 700;
+                background: var(--kotaete-answer-color, #7F77DD);
+                border: none;
+                box-shadow: 0 0 18px -4px var(--kotaete-answer-color, #7F77DD);
+            }
+            .kotaete-ask-submit:hover { transform: translateY(-2px); }
+            .kotaete-ask-skip {
+                color: rgba(255, 255, 255, 0.75);
+                background: transparent;
+                border: 1px solid rgba(255, 255, 255, 0.3);
+            }
+            .kotaete-ask-skip:hover { background: rgba(255, 255, 255, 0.08); }
+            /* 流したあとの確認メッセージ */
+            .kotaete-ask-note {
+                position: absolute;
+                left: 50%;
+                bottom: 16vh;
+                transform: translateX(-50%);
+                font-size: clamp(13px, 2vw, 16px);
+                letter-spacing: 4px;
+                color: #fff;
+                text-shadow: 0 0 14px rgba(127, 119, 221, 0.9);
+                pointer-events: none;
+                opacity: 0;
+                z-index: 60;
+                transition: opacity 0.8s ease;
+            }
+            .kotaete-ask-note.visible { opacity: 1; }
             @media (max-width: 767px) {
                 .kotaete-palette { right: 8px; padding: 10px 6px; }
                 .kotaete-palette-slot { width: 15px; height: 22px; }
                 .kotaete-palette-swatch { width: 22px; height: 22px; }
+                .kotaete-lake-count { bottom: 70px; }
+                .kotaete-ask { bottom: 10vh; padding: 18px 18px; }
             }
         `;
         document.head.appendChild(this.customStyleElement);
@@ -1743,6 +2108,16 @@ export class SongKotaete extends BaseSong {
         });
         this.flyingParticles = [];
 
+        // エコー(過去の問い)スプライト
+        this.echoRipples.forEach(e => {
+            this.scene.remove(e.sprite);
+            if (e.sprite.material.map) e.sprite.material.map.dispose();
+            e.sprite.material.dispose();
+            this.scene.remove(e.halo);
+            e.halo.material.dispose();
+        });
+        this.echoRipples = [];
+
         // グリッド
         this.paths.forEach(line => {
             this.scene.remove(line);
@@ -1798,6 +2173,12 @@ export class SongKotaete extends BaseSong {
         }
         if (this.gaugeEl && this.gaugeEl.parentNode) {
             this.gaugeEl.parentNode.removeChild(this.gaugeEl);
+        }
+        if (this.lakeCountEl && this.lakeCountEl.parentNode) {
+            this.lakeCountEl.parentNode.removeChild(this.lakeCountEl);
+        }
+        if (this.askEl && this.askEl.parentNode) {
+            this.askEl.parentNode.removeChild(this.askEl);
         }
         if (this.finaleOverlay && this.finaleOverlay.parentNode) {
             this.finaleOverlay.parentNode.removeChild(this.finaleOverlay);
