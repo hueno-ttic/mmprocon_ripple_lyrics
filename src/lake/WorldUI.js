@@ -133,7 +133,9 @@ export class WorldUI {
 
             const labelData = {
                 element: label,
+                titleEl: label.querySelector('.song-title'),
                 _hovered: false,
+                _styleKey: '',
             };
             this.labels.push(labelData);
 
@@ -587,6 +589,14 @@ export class WorldUI {
         const padTop = 70;
         const padBot = 200; // keep labels clear of the selection panel
 
+        // モバイルは画面が狭く、6曲ぶんの文字を背景に散らすと潰れ合うので、
+        // 背景には選択中の曲名だけを残し、他は3Dの光(マーカー)に名前付けを委ねる。
+        const mobile = W < 768;
+        // 各フェーズが scene.fog / scene.background に設定している大気色。
+        // これを「奥行きで溶け込む先の色」として遠いラベルに馴染ませる(空気遠近法)。
+        const atmCol = this.scene.fog?.color || this.scene.background;
+        const atmStyle = (atmCol && atmCol.getStyle) ? atmCol.getStyle() : 'rgb(205,215,225)';
+
         // Thumbnail card box (centered, foreground) that labels must avoid.
         const tc = this.thumbCard;
         let card = null;
@@ -620,17 +630,27 @@ export class WorldUI {
         // Pass 1 — project each visible label to its node and seed a position.
         const items = [];
         this.labels.forEach((labelData, i) => {
+            const isSelected = i === this.selectedIndex;
+            // モバイル: 選択中以外の曲名は背景から消す(光だけ残す)
+            if (mobile && !isSelected) {
+                labelData.element.style.opacity = '0';
+                labelData.element.style.pointerEvents = 'none';
+                labelData.element.classList.remove('song-label--front');
+                return;
+            }
             const projected = this.currentPhase.getSongPosition(i).project(this.camera);
             if (projected.z >= 1) { labelData.element.style.opacity = '0'; return; }
+            labelData.element.style.pointerEvents = 'auto';
             const lw = labelData.element.offsetWidth, lh = labelData.element.offsetHeight;
             const depth = projected.z;
             items.push({
                 labelData, i, lw, lh, hw: lw / 2, hh: lh / 2,
+                depth,
                 cx: clampX((projected.x * widthHalf) + widthHalf, lw / 2),
                 cy: clampY(-(projected.y * heightHalf) + heightHalf),
                 depthScale: 0.6 + (1 - depth) * 0.5,
                 depthOpacity: 0.55 + (1 - depth) * 0.45,
-                isSelected: i === this.selectedIndex,
+                isSelected,
                 isHovered: labelData._hovered,
             });
         });
@@ -654,6 +674,13 @@ export class WorldUI {
             for (const p of items) { avoidCard(p); p.cx = clampX(p.cx, p.hw); p.cy = clampY(p.cy); }
         }
 
+        // Normalize depth across the currently-visible labels so the nearest
+        // reads as crisp/present and the farthest recedes into the haze —
+        // relative aerial perspective that holds regardless of camera distance.
+        let minD = Infinity, maxD = -Infinity;
+        for (const p of items) { if (p.depth < minD) minD = p.depth; if (p.depth > maxD) maxD = p.depth; }
+        const dRange = maxD - minD;
+
         // Pass 3 — commit styles.
         for (const p of items) {
             const scale = p.depthScale * (p.isHovered ? 1.12 : 1.0) * (p.isSelected ? 1.1 : 1.0);
@@ -661,9 +688,55 @@ export class WorldUI {
             el.style.left = `${p.cx}px`;
             el.style.top = `${p.cy}px`;
             el.style.transform = `translate(-50%, -50%) scale(${scale.toFixed(3)})`;
-            el.style.opacity = Math.min(1, p.depthOpacity).toFixed(3);
+            // 選択中は奥行きに関わらず前面へ引き出す(特にモバイルは唯一の見出し)
+            const opacity = p.isSelected ? Math.max(0.94, p.depthOpacity) : p.depthOpacity;
+            el.style.opacity = Math.min(1, opacity).toFixed(3);
             el.classList.toggle('song-label--front', p.isSelected);
+            const haze = dRange > 0 ? (p.depth - minD) / dRange : 0;
+            this._blendLabelWithBackground(p, haze, atmStyle);
         }
+    }
+
+    // Tone-blend a label into the phase's atmosphere color by its normalized
+    // depth (haze: 0 = nearest/crisp, 1 = farthest). Distant names lighten
+    // toward the background, lose their dark halo and pick up a soft haze glow
+    // so they sit *in* the scene instead of floating over it. The selected
+    // label is always pulled fully forward (crisp white + readable halo).
+    // Cached by a coarse style key so we only repaint when the look changes.
+    _blendLabelWithBackground(p, haze, atmStyle) {
+        const titleEl = p.labelData.titleEl;
+        if (!titleEl) return;
+        const song = SONGS[p.i];
+
+        if (p.isSelected) {
+            if (p.labelData._styleKey === 'sel') return;
+            p.labelData._styleKey = 'sel';
+            titleEl.style.color = '#ffffff';
+            titleEl.style.removeProperty('filter');
+            titleEl.style.setProperty('text-shadow',
+                `0 0 4px rgba(0,0,0,0.82), 0 1px 4px rgba(0,0,0,0.9), `
+                + `0 0 20px rgba(255,255,255,0.6), 0 0 30px ${song.color}aa`,
+                'important');
+            return;
+        }
+
+        // Hover lifts a label partway out of the haze toward the foreground.
+        const h = p.isHovered ? haze * 0.35 : haze;
+        const bucket = Math.round(h * 10);
+        const key = `${atmStyle}|${bucket}`;
+        if (p.labelData._styleKey === key) return;
+        p.labelData._styleKey = key;
+
+        const tint = Math.round(h * 42);          // % blended toward atmosphere
+        const darkA = (0.9 * (1 - h * 0.72)).toFixed(2);
+        const darkB = (0.95 * (1 - h * 0.72)).toFixed(2);
+        const atmGlow = (10 + h * 16).toFixed(0);  // haze halo grows with distance
+        titleEl.style.color = `color-mix(in srgb, ${atmStyle} ${tint}%, #ffffff)`;
+        titleEl.style.setProperty('text-shadow',
+            `0 0 4px rgba(0,0,0,${darkA}), 0 1px 3px rgba(0,0,0,${darkB}), `
+            + `0 0 14px ${song.color}99, 0 0 ${atmGlow}px ${atmStyle}`,
+            '');
+        titleEl.style.filter = h > 0.04 ? `blur(${(h * 0.9).toFixed(2)}px)` : '';
     }
 
     destroy() {
