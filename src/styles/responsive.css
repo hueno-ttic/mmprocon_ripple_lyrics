@@ -51,6 +51,16 @@
         max-width: calc(44vw - 8px);
     }
 
+    /* モバイルでは選択中の曲名のみを背景に残すので、唯一の見出しが
+       省略されないよう幅を広げ、最長タイトルでも収まる字面で強調する */
+    .song-label--front {
+        max-width: 90vw;
+    }
+
+    .song-label--front .song-title {
+        font-size: 21px;
+    }
+
     .song-title {
         font-size: 18px;
         letter-spacing: 1px;
