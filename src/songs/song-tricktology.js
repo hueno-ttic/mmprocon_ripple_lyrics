@@ -315,13 +315,14 @@ export class SongTricktology extends BaseSong {
     }
 
     // ───────────────────────── VRM 2体 ─────────────────────────
+    // 「トリツクロジー」は鏡音リンのソロ曲。被写体(実像・水鏡像)はリンを使用。
 
     loadMikus() {
         const loadOne = (onLoaded) => {
             const loader = new GLTFLoader();
             loader.register((parser) => new VRMLoaderPlugin(parser));
             loader.load(
-                import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
+                import.meta.env.BASE_URL + 'assets/models/model_rin.vrm',
                 (gltf) => onLoaded(gltf.userData.vrm),
                 undefined,
                 (err) => console.error('[TRICKTOLOGY] Failed to load VRM:', err)

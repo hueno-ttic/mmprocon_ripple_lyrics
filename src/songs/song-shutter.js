@@ -128,12 +128,27 @@ export class SongShutter extends BaseSong {
         this.filmStripVisible = false;
         this.filmStripEl = null;
 
-        // --- 被写体ミクVRM ---
-        this.mikuVRM = null;
+        // --- 被写体VRM（「シャッターチャンス」はミク&リンのデュエット曲。2体を並べる） ---
+        this.mikuVRM = null;         // 主役(ミク)。ライティング/破棄の後方互換参照
+        this.subjects = [];          // 被写体ランタイム配列 { key, vrm, baseX, baseRotY, poseIndex, forward }
         this.mikuBaseY = -4.2;
-        this.mikuBaseX = 0;
+        this.mikuBaseX = 0;          // ライト/AFスコープの中心（2体の中間）
         this.mikuBaseZ = -16.5;      // AFターゲットスコープ(z=-15)のすぐ奥のステージ位置
-        this.mikuPoseIndex = 0;
+        // ツーショット（横並び）は等身差で違和感が出るため採用しない。
+        // 両者をセンターステージの同じ位置に重ねて配置し、歌唱パートに応じて
+        // どちらか1体だけを表示する（カメラが被写体を切り替えるイメージ）。
+        // 1体ずつ映すので頭身の違いは並んで見えず、身長を揃えてフレーミングを統一する
+        // （ミク native≈1.27 / リン(VRoid) native≈1.96 → 画面身長が揃うようスケール調整）。
+        // baseRotY=π: このVRM群は素のrotation.y=0だとカメラ(+Z)に背を向けるため、
+        // 180°回してカメラ(撮影者)に正面を向ける。
+        this.subjectLayout = [
+            { key: 'miku', model: 'model_miku.vrm', baseX: 0, baseRotY: Math.PI, scale: 6.0 },
+            { key: 'rin',  model: 'model_rin.vrm',  baseX: 0, baseRotY: Math.PI, scale: 3.9 },
+        ];
+        this.activeVocal = 'none';   // 歌唱中パート（表示する被写体の切替に使用）
+        this.shownKey = 'miku';      // 現在表示中の被写体
+        this.swap = null;            // 被写体の切替トランジション { from, to, t }
+        this.swapDuration = 0.42;    // 光りながら消える/出てくる演出の長さ（秒）
         this.lastPhraseStartTime = -1;
         this.lastPoseBeatStart = -1;
         this.poseBeatCounter = 0;
@@ -258,7 +273,7 @@ export class SongShutter extends BaseSong {
     init() {
         this.initThree();
         this.initEnvironment();
-        this.loadMiku();
+        this.loadSubjects();
         this.injectCustomStyles();
         this.createViewfinderUI();
         
@@ -312,39 +327,49 @@ export class SongShutter extends BaseSong {
         });
     }
 
-    // 被写体ミクVRMをステージ奥にロード（orchestraの実績パターンを踏襲）
-    loadMiku() {
-        const loader = new GLTFLoader();
-        loader.register((parser) => new VRMLoaderPlugin(parser));
-        loader.load(
-            import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
-            (gltf) => {
-                if (!this.isActive) {
-                    this.disposeVRM(gltf.userData.vrm);
-                    return;
-                }
-                const vrm = gltf.userData.vrm;
-                this.mikuVRM = vrm;
-                this.scene.add(vrm.scene);
-                vrm.scene.position.set(this.mikuBaseX, this.mikuBaseY, this.mikuBaseZ);
-                vrm.scene.rotation.y = 0; // カメラ（撮影者）の方を向かせる
-                vrm.scene.scale.set(6.0, 6.0, 6.0);
+    // 被写体VRM（ミク&リン）をステージ奥にロードして横並びに配置（orchestraの実績パターンを踏襲）
+    loadSubjects() {
+        this.subjectLayout.forEach((def) => {
+            const loader = new GLTFLoader();
+            loader.register((parser) => new VRMLoaderPlugin(parser));
+            loader.load(
+                import.meta.env.BASE_URL + 'assets/models/' + def.model,
+                (gltf) => {
+                    if (!this.isActive) {
+                        this.disposeVRM(gltf.userData.vrm);
+                        return;
+                    }
+                    const vrm = gltf.userData.vrm;
+                    this.scene.add(vrm.scene);
+                    vrm.scene.position.set(def.baseX, this.mikuBaseY, this.mikuBaseZ);
+                    vrm.scene.rotation.y = def.baseRotY; // カメラ正面
+                    vrm.scene.scale.setScalar(def.scale);
+                    vrm.scene.visible = (def.key === this.shownKey); // 表示中の1体だけ可視
 
-                // 初期ポーズ（リラックス）を即適用
-                this.applyMikuPoseImmediate(SHUTTER_MIKU_POSES[0]);
-                console.log('[SHUTTER] Miku VRM loaded successfully.');
-            },
-            undefined,
-            (error) => {
-                console.error('[SHUTTER] Failed to load VRM:', error);
-            }
-        );
+                    const subject = {
+                        key: def.key, vrm, baseX: def.baseX, baseRotY: def.baseRotY,
+                        poseIndex: 0,
+                        smile: 0, smileTimer: 0,      // にっこり（happy表情）のエンベロープ
+                        matCache: this.buildSubjectMatCache(vrm), // フェード/発光復元用
+                    };
+                    // 初期ポーズ（リラックス）を即適用
+                    this.applySubjectPoseImmediate(subject, SHUTTER_MIKU_POSES[0]);
+                    this.subjects.push(subject);
+                    if (def.key === 'miku') this.mikuVRM = vrm; // ライト/破棄の後方互換参照
+                    console.log(`[SHUTTER] ${def.key} VRM loaded successfully.`);
+                },
+                undefined,
+                (error) => {
+                    console.error(`[SHUTTER] Failed to load ${def.key} VRM:`, error);
+                }
+            );
+        });
     }
 
-    applyMikuPoseImmediate(pose) {
-        if (!this.mikuVRM || !this.mikuVRM.humanoid) return;
+    applySubjectPoseImmediate(subject, pose) {
+        if (!subject.vrm || !subject.vrm.humanoid) return;
         Object.keys(pose).forEach(boneName => {
-            const bone = this.mikuVRM.humanoid.getNormalizedBoneNode(boneName);
+            const bone = subject.vrm.humanoid.getNormalizedBoneNode(boneName);
             if (bone) {
                 bone.rotation.set(pose[boneName].x, pose[boneName].y, pose[boneName].z);
             }
@@ -352,10 +377,10 @@ export class SongShutter extends BaseSong {
     }
 
     // 目標ポーズへ毎フレーム滑らかにイージング補間
-    lerpMikuPose(pose, t) {
-        if (!this.mikuVRM || !this.mikuVRM.humanoid) return;
+    lerpSubjectPose(subject, pose, t) {
+        if (!subject.vrm || !subject.vrm.humanoid) return;
         Object.keys(pose).forEach(boneName => {
-            const bone = this.mikuVRM.humanoid.getNormalizedBoneNode(boneName);
+            const bone = subject.vrm.humanoid.getNormalizedBoneNode(boneName);
             if (!bone) return;
             bone.rotation.x += (pose[boneName].x - bone.rotation.x) * t;
             bone.rotation.y += (pose[boneName].y - bone.rotation.y) * t;
@@ -363,17 +388,67 @@ export class SongShutter extends BaseSong {
         });
     }
 
-    advanceMikuPose() {
-        if (!this.mikuVRM) return;
-        // 同じポーズの連続を避けつつ次のポーズへ
-        let next = Math.floor(Math.random() * SHUTTER_MIKU_POSES.length);
-        if (next === this.mikuPoseIndex) {
+    // 切替トランジション用に各マテリアルの基準値（不透明度・発光色）を記録
+    buildSubjectMatCache(vrm) {
+        const cache = [];
+        vrm.scene.traverse((o) => {
+            if (!o.material) return;
+            const mats = Array.isArray(o.material) ? o.material : [o.material];
+            mats.forEach((m) => {
+                cache.push({
+                    material: m,
+                    baseOpacity: m.opacity,
+                    baseTransparent: m.transparent,
+                    baseDepthWrite: m.depthWrite,
+                    baseEmissive: m.emissive ? m.emissive.clone() : null,
+                });
+            });
+        });
+        return cache;
+    }
+
+    // opacity(0..1) と glow(0..1) を適用。glowで白く発光させながらフェードさせる
+    applyFadeGlow(subject, opacity, glow) {
+        const fading = opacity < 0.999;
+        subject.matCache.forEach((c) => {
+            const m = c.material;
+            m.transparent = fading ? true : c.baseTransparent;
+            m.depthWrite = fading ? false : c.baseDepthWrite;
+            m.opacity = c.baseOpacity * opacity;
+            if (c.baseEmissive && m.emissive) {
+                m.emissive.setRGB(
+                    Math.min(1, c.baseEmissive.r + glow),
+                    Math.min(1, c.baseEmissive.g + glow),
+                    Math.min(1, c.baseEmissive.b + glow)
+                );
+            }
+        });
+    }
+
+    // マテリアルを基準値へ戻す（トランジション終了時）
+    restoreSubjectMaterials(subject) {
+        subject.matCache.forEach((c) => {
+            const m = c.material;
+            m.transparent = c.baseTransparent;
+            m.depthWrite = c.baseDepthWrite;
+            m.opacity = c.baseOpacity;
+            if (c.baseEmissive && m.emissive) m.emissive.copy(c.baseEmissive);
+        });
+    }
+
+    advanceSubjectPose(subject) {
+        // 歌っている側は表情豊かなポーズ(1..4)、スタンバイ側は控えめ(0..2)
+        const isSinging = this.activeVocal === 'duet' || this.activeVocal === subject.key;
+        let next = isSinging
+            ? 1 + Math.floor(Math.random() * (SHUTTER_MIKU_POSES.length - 1))
+            : Math.floor(Math.random() * 3);
+        if (next === subject.poseIndex) {
             next = (next + 1) % SHUTTER_MIKU_POSES.length;
         }
-        this.mikuPoseIndex = next;
+        subject.poseIndex = next;
         // ポーズ切替時に髪の物理が暴れないようリセット
-        if (this.mikuVRM.springBoneManager) {
-            this.mikuVRM.springBoneManager.reset();
+        if (subject.vrm.springBoneManager) {
+            subject.vrm.springBoneManager.reset();
         }
     }
 
@@ -1094,6 +1169,7 @@ export class SongShutter extends BaseSong {
             activeVocal = 'duet';
         }
         
+        this.activeVocal = activeVocal; // 被写体ポーズの強調に使用
         this.animateVocalMeters(activeVocal, position);
 
         // 1. 動いている赤い背景ワイヤーフレームのアニメーション
@@ -1340,8 +1416,8 @@ export class SongShutter extends BaseSong {
             this.targetScope.rotation.z += 0.01;
         }
 
-        // --- 被写体ミクVRMのポーズ切替＆アイドルアニメーション ---
-        if (this.mikuVRM) {
+        // --- 被写体VRM（ミク&リン）のポーズ切替＆アイドルアニメーション ---
+        if (this.subjects.length > 0) {
             const nowReal = performance.now();
             if (this.lastVrmRealTime === undefined) this.lastVrmRealTime = nowReal;
             const deltaTime = Math.min(0.05, (nowReal - this.lastVrmRealTime) / 1000);
@@ -1349,9 +1425,10 @@ export class SongShutter extends BaseSong {
 
             // フレーズ切替でポーズチェンジ
             const currentPhrase = playerManager.player.video.findPhrase(position);
+            let poseChanged = false;
             if (currentPhrase && currentPhrase.startTime !== this.lastPhraseStartTime) {
                 this.lastPhraseStartTime = currentPhrase.startTime;
-                this.advanceMikuPose();
+                poseChanged = true;
             }
 
             // ビート4拍ごとにもポーズチェンジ（間奏などフレーズが無い区間用）
@@ -1360,41 +1437,102 @@ export class SongShutter extends BaseSong {
                 this.lastPoseBeatStart = poseBeat.startTime;
                 this.poseBeatCounter++;
                 if (!currentPhrase && this.poseBeatCounter % 4 === 0) {
-                    this.advanceMikuPose();
+                    poseChanged = true;
                 }
             }
 
-            // サビ突入の瞬間は両手チアーポーズへ
-            if (this.isClimax && this.mikuPoseIndex !== 3 && currentPhrase &&
-                currentPhrase.startTime === this.lastPhraseStartTime &&
-                position - currentPhrase.startTime < 200) {
-                this.mikuPoseIndex = 3;
-            }
-
-            // 目標ポーズへ滑らかに補間
-            this.lerpMikuPose(SHUTTER_MIKU_POSES[this.mikuPoseIndex], 0.08);
-
-            // ビート同期の浮遊バウンス＆ゆれ（シーン生成からの相対時刻ベース）
+            // ビート同期の浮遊バウンス（シーン生成からの相対時刻ベース）
             const floatT = position / 1000;
             let bounce = 0;
             if (poseBeat) {
                 const beatProg = Math.min(1.0, (position - poseBeat.startTime) / poseBeat.duration);
                 bounce = 0.12 * Math.exp(-beatProg * 5.0);
             }
-            this.mikuVRM.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.06 + bounce;
-            this.mikuVRM.scene.rotation.y = Math.sin(floatT * 0.5) * 0.08;
-            this.mikuVRM.scene.rotation.z = Math.sin(floatT * 0.7) * 0.015;
 
             // VRM内部更新（スプリングボーン等）。モバイルは約30fpsに間引いて負荷削減
+            let runVrmUpdate = true;
+            let vrmStep = deltaTime;
             if (this.isMobile) {
                 this.vrmUpdateAccum += deltaTime;
                 if (this.vrmUpdateAccum >= 1 / 30) {
-                    this.mikuVRM.update(this.vrmUpdateAccum);
+                    vrmStep = this.vrmUpdateAccum;
                     this.vrmUpdateAccum = 0;
+                } else {
+                    runVrmUpdate = false;
                 }
-            } else {
-                this.mikuVRM.update(deltaTime);
             }
+
+            // --- 表示する被写体を歌唱パートに応じて切り替える（ツーショットにせず1体ずつ） ---
+            let desired = this.shownKey;
+            if (this.activeVocal === 'miku' || this.activeVocal === 'rin') {
+                desired = this.activeVocal;                            // 歌っている方を映す
+            } else if (this.activeVocal === 'duet' && poseChanged) {
+                desired = this.shownKey === 'miku' ? 'rin' : 'miku';   // デュエットは交互にカット
+            }
+            // 切替が必要なら「光りながら消えて/出てくる」トランジションを開始
+            if (desired !== this.shownKey && (!this.swap || this.swap.to !== desired)) {
+                this.swap = { from: this.shownKey, to: desired, t: 0 };
+                this.shownKey = desired;
+                const ns = this.subjects.find(s => s.key === desired);
+                if (ns && ns.vrm.springBoneManager) ns.vrm.springBoneManager.reset();
+            }
+
+            // トランジションの進行と発光フェードの適用
+            if (this.swap) {
+                this.swap.t += deltaTime / this.swapDuration;
+                const fromSub = this.subjects.find(s => s.key === this.swap.from);
+                const toSub = this.subjects.find(s => s.key === this.swap.to);
+                if (this.swap.t >= 1) {
+                    // 終了: 出てきた方を基準へ戻し、消えた方を非表示に
+                    if (fromSub) { this.restoreSubjectMaterials(fromSub); fromSub.vrm.scene.visible = false; }
+                    if (toSub) this.restoreSubjectMaterials(toSub);
+                    this.swap = null;
+                } else {
+                    const glow = Math.sin(Math.min(1, this.swap.t) * Math.PI); // 中間でピークの発光
+                    if (fromSub) { fromSub.vrm.scene.visible = true; this.applyFadeGlow(fromSub, 1 - this.swap.t, glow); }
+                    if (toSub) { toSub.vrm.scene.visible = true; this.applyFadeGlow(toSub, this.swap.t, glow); }
+                }
+            }
+            if (!this.swap) {
+                this.subjects.forEach(s => { s.vrm.scene.visible = (s.key === this.shownKey); });
+            }
+
+            // 表示中の被写体（トランジション中は両方）をアニメーション
+            const animateList = this.subjects.filter(s => s.vrm.scene.visible);
+            animateList.forEach((subject) => {
+                const isShown = subject.key === this.shownKey;
+                if (poseChanged && isShown) {
+                    this.advanceSubjectPose(subject);
+                }
+
+                // サビ突入の瞬間は両手チアーポーズへ
+                if (isShown && this.isClimax && subject.poseIndex !== 3 && currentPhrase &&
+                    currentPhrase.startTime === this.lastPhraseStartTime &&
+                    position - currentPhrase.startTime < 200) {
+                    subject.poseIndex = 3;
+                }
+
+                // 目標ポーズへ滑らかに補間
+                this.lerpSubjectPose(subject, SHUTTER_MIKU_POSES[subject.poseIndex], 0.08);
+
+                // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
+                if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
+                const smileTarget = subject.smileTimer > 0 ? 1 : 0;
+                subject.smile += (smileTarget - subject.smile) * 0.25;
+                if (subject.vrm.expressionManager) {
+                    subject.vrm.expressionManager.setValue('happy', subject.smile);
+                }
+
+                // センターステージ。基本は正面を向き、ビート同期で軽く浮遊
+                subject.vrm.scene.position.x = subject.baseX;
+                subject.vrm.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.06 + bounce;
+                subject.vrm.scene.position.z = this.mikuBaseZ;
+                subject.vrm.scene.rotation.y = subject.baseRotY; // 正面固定
+                subject.vrm.scene.rotation.z = Math.sin(floatT * 0.7) * 0.012;
+
+                // VRM内部更新（表情・スプリングボーン等）
+                if (runVrmUpdate) subject.vrm.update(vrmStep);
+            });
         }
 
         // --- 曲終了12秒前: フィルムストリップ（撮影成果の回収演出）を表示 ---
@@ -1751,6 +1889,12 @@ export class SongShutter extends BaseSong {
                     isBeatSynced = true;
                 }
             }
+        }
+
+        // ビートにタイミングよく撮れたら、表示中の被写体がにっこり笑う
+        if (isBeatSynced && this.subjects && this.subjects.length) {
+            const shown = this.subjects.find(s => s.key === this.shownKey);
+            if (shown) shown.smileTimer = 900; // 約0.9秒の笑顔
         }
 
         // 【フォトスポット ＆ Beat同期のカラー台紙マージ判定】
@@ -2492,12 +2636,15 @@ export class SongShutter extends BaseSong {
         this.filmStripEl = null;
         this.photoLog = [];
 
-        // 被写体ミクVRMの完全解放
-        if (this.mikuVRM) {
-            this.scene.remove(this.mikuVRM.scene);
-            this.disposeVRM(this.mikuVRM);
-            this.mikuVRM = null;
-        }
+        // 被写体VRM（ミク&リン）の完全解放
+        this.subjects.forEach((subject) => {
+            if (subject.vrm) {
+                this.scene.remove(subject.vrm.scene);
+                this.disposeVRM(subject.vrm);
+            }
+        });
+        this.subjects = [];
+        this.mikuVRM = null;
 
         // ライトの解放
         if (this.ambientLight) {
