@@ -131,7 +131,7 @@ export class SongTricktology extends BaseSong {
 
         this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.5 : 2));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
         this.renderer.domElement.style.touchAction = 'none'; // モバイルでドラッグを奪われない
         this.songWrapper.appendChild(this.renderer.domElement);
 
@@ -776,11 +776,14 @@ export class SongTricktology extends BaseSong {
             this._starColA = new THREE.Color(0x9a90e8);
             this._starColB = new THREE.Color(0xCFE8FF);
             this._sectionBlend = 0;
+            // 毎フレームの色補間用スクラッチ(clone割り当てを避けGCを減らす)
+            this._waterColMix = new THREE.Color();
+            this._starColMix = new THREE.Color();
         }
         this._sectionBlend += ((this.isClimax ? 1 : 0) - this._sectionBlend) * Math.min(1, delta * 1.8);
-        const wc = this._waterColA.clone().lerp(this._waterColB, this._sectionBlend);
+        const wc = this._waterColMix.copy(this._waterColA).lerp(this._waterColB, this._sectionBlend);
         this.waterUniforms.uColor.value.set(wc.r, wc.g, wc.b);
-        this.starMaterial.color.copy(this._starColA.clone().lerp(this._starColB, this._sectionBlend));
+        this.starMaterial.color.copy(this._starColMix.copy(this._starColA).lerp(this._starColB, this._sectionBlend));
         this.starMaterial.opacity = 0.55 + this._sectionBlend * 0.35;
         const swapTarget = THREE.MathUtils.smoothstep(this.waveEnergy, 0.55, 1.1);
         this.swapSmooth += (swapTarget - this.swapSmooth) * 0.12;

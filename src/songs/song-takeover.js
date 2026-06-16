@@ -98,7 +98,7 @@ export class SongTakeover extends BaseSong {
 
         this.renderer = new THREE.WebGLRenderer({ antialias: false });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.innerWidth < 768 ? 1.25 : 1.5));
         this.renderer.domElement.style.cssText = 'position:absolute;top:0;left:0;z-index:1;';
         this.songWrapper.appendChild(this.renderer.domElement);
     }

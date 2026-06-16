@@ -17,10 +17,12 @@ export class WorldUI {
         this.isMobile = window.innerWidth < 768;
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true, preserveDrawingBuffer: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
 
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // Retina/高DPIでは描画ピクセルがdpr²倍になりfillrate律速になるため上限を抑える。
+        // 1.5(モバイル1.25)で見た目の劣化はほぼ無く、塗りコストが約半分になる。
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
         // Cinematic grading to match the redesign (湖のソナーレ scene art direction)
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;

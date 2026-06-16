@@ -103,7 +103,7 @@ export class SongAfter extends BaseSong {
 
         this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.5 : 2));
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
 
         this.renderer.shadowMap.enabled = !this.isMobile;
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -785,10 +785,11 @@ export class SongAfter extends BaseSong {
             const age = Math.max(0, position - ud.birth);
 
             const spotTarget = this.mouseLight.target.position;
-            const distToSpot = mesh.position.distanceTo(spotTarget);
+            // sqrtを避け2乗距離で比較(4.2 → 4.2²)。毎フレーム×全スプライトの平方根を削減。
+            const distToSpotSq = mesh.position.distanceToSquared(spotTarget);
             // サビは舞台全体が照らされ、すべての歌詞が浮かび上がる
             // (受動的に聴いていても楽曲の見せ場が伝わる)
-            const isIlluminated = (distToSpot < 4.2 || this.isClimax) && f < 0.3;
+            const isIlluminated = (distToSpotSq < 4.2 * 4.2 || this.isClimax) && f < 0.3;
             const targetProgress = isIlluminated ? 1.0 : 0.0;
             ud.hoverProgress += (targetProgress - ud.hoverProgress) * 0.08;
             const p = ud.hoverProgress;
