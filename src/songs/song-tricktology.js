@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
@@ -129,9 +130,10 @@ export class SongTricktology extends BaseSong {
         this.camera.position.set(0, 1.4, 13);
         // 注意: BaseSong.animate がパララックスで rotation を上書きするため lookAt は使わない
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.renderer.domElement.style.touchAction = 'none'; // モバイルでドラッグを奪われない
         this.songWrapper.appendChild(this.renderer.domElement);
 

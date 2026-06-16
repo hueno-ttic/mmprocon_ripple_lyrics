@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
@@ -154,9 +155,10 @@ export class SongKotaete extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.set(0, 2, 10);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
         // ミクと回廊を照らすライト群(色は世界の色に追従)

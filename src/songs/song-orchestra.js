@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
@@ -143,9 +144,10 @@ export class SongOrchestra extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.z = 10;
         
-        this.renderer = new THREE.WebGLRenderer({ antialias: window.innerWidth >= 768, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.innerWidth < 768 ? 1.25 : 1.5));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
         // Add ambient light for character details

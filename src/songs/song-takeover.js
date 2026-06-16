@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
@@ -96,9 +97,10 @@ export class SongTakeover extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
         this.camera.position.set(0, 0, 10);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: false });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, window.innerWidth < 768 ? 1.25 : 1.5));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.renderer.domElement.style.cssText = 'position:absolute;top:0;left:0;z-index:1;';
         this.songWrapper.appendChild(this.renderer.domElement);
     }

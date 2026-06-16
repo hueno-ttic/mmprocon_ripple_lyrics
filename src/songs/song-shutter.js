@@ -1,9 +1,11 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
+import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
 
 // 被写体ミクのポーズプリセット（正規化ヒューマノイドボーンのオイラー回転）
 // 新VRMモデルは上腕/前腕のロール軸(z)が旧モデルと逆。
@@ -35,6 +37,40 @@ const SHUTTER_MIKU_POSES = [
         head: { x: 0, y: -0.1, z: 0.18 }, spine: { x: 0, y: 0, z: -0.05 }
     }
 ];
+
+// 腕の基調(armStyle)→ 腕の型。ダンスプリセットが参照する。
+// relaxed/wave/appeal/cheer/peace は上の SHUTTER_MIKU_POSES を再利用。
+const ARM_GESTURES = {
+    relaxed: SHUTTER_MIKU_POSES[0],
+    wave: SHUTTER_MIKU_POSES[1],
+    appeal: SHUTTER_MIKU_POSES[2],
+    cheer: SHUTTER_MIKU_POSES[3],
+    peace: SHUTTER_MIKU_POSES[4],
+    // 両手を顔/胸の前へ（はにかみ・きゅるん）
+    faceHands: {
+        leftUpperArm: { x: -0.2, y: 0, z: 0.7 }, rightUpperArm: { x: -0.2, y: 0, z: -0.7 },
+        leftLowerArm: { x: 0, y: 0.1, z: -1.3 }, rightLowerArm: { x: 0, y: -0.1, z: 1.3 },
+        head: { x: 0.05, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }
+    },
+    // 腰に手を当てる（お澄まし）
+    handsOnHips: {
+        leftUpperArm: { x: 0, y: 0, z: 1.0 }, rightUpperArm: { x: 0, y: 0, z: -1.0 },
+        leftLowerArm: { x: 0, y: 0.6, z: -0.6 }, rightLowerArm: { x: 0, y: -0.6, z: 0.6 },
+        head: { x: 0, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }
+    },
+    // 右手を上げて指さし、左手は腰そえ（キメ）
+    point: {
+        leftUpperArm: { x: 0, y: 0, z: 1.05 }, rightUpperArm: { x: -0.35, y: 0, z: 0.1 },
+        leftLowerArm: { x: 0, y: 0.4, z: -0.3 }, rightLowerArm: { x: 0, y: 0, z: 0.1 },
+        head: { x: 0, y: -0.12, z: -0.08 }, spine: { x: 0, y: -0.05, z: 0 }
+    },
+    // 頭上で両手ハート風（ぶりっ子）
+    heart: {
+        leftUpperArm: { x: -0.1, y: 0, z: -0.45 }, rightUpperArm: { x: -0.1, y: 0, z: 0.45 },
+        leftLowerArm: { x: 0, y: 0, z: -1.45 }, rightLowerArm: { x: 0, y: 0, z: 1.45 },
+        head: { x: -0.05, y: 0, z: 0 }, spine: { x: -0.03, y: 0, z: 0 }
+    },
+};
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
 const SHUTTER_VOCAL_MAP = {
@@ -156,12 +192,17 @@ export class SongShutter extends BaseSong {
             gain: 1.0,        // 全体の効き
             climaxGain: 1.0,  // サビでの追加倍率(gainに乗算)
             punch: 0.16,      // 拍頭で胴を前に沈める量(rad)
-            sway: 0.16,       // 体重移動の振り幅(rad)
+            sway: 0.17,       // 体重移動の振り幅(rad)
+            twist: 0.34,      // 体重移動に合わせた胴のひねり量(swayに対する比)
             headNod: 0.13,    // 頭の頷き量(rad)
-            kneeBounce: 0.22, // 拍ごとの膝の屈伸量(rad・左右対称＝接地を保つ)
+            kneeBounce: 0.20, // 拍ごとの膝の屈伸量(rad・左右対称＝接地を保つ)
+            step: 0.16,       // ステップ(足踏み)で浮く脚側の持ち上げ量(rad)
             hipDrop: 0.06,    // 拍頭で腰を落とす量(ワールド単位)
-            armSway: 0.18,    // 体重移動に合わせた腕の振り(rad)
+            hop: 0.10,        // 小節頭の軽いホップ量(ワールド単位・サビ強調)
+            armSway: 0.22,    // 体重移動に合わせた腕の振り(rad)
+            armBob: 0.14,     // 拍ごとに腕を弾ませる量(rad)
             armPump: 0.5,     // サビの腕振り上げ量(rad)
+            shoulder: 0.06,   // 拍ごとの肩の上下(rad)
         };
         this._groove = 0;     // 拍頭で素早く立ち上がるパルス(0..1)
         this._beatStep = 1;   // 体重移動の向き(±1。拍ごとに反転)
@@ -169,6 +210,11 @@ export class SongShutter extends BaseSong {
         this._beatFrac = 0;   // 拍内位相(0=拍頭)
         this._barAccent = 0;  // 小節頭アクセント(発火→減衰)
         this._swayCur = 0;    // 体重移動の平滑値
+
+        // 「可愛い動き」ストックから既定プリセットを適用（grooveConfig と armStyle を設定）
+        this.armStyle = 'cheer';
+        this.dancePresetName = SHUTTER_DANCE_DEFAULT;
+        this.applyDancePreset(SHUTTER_DANCE_DEFAULT);
         this.lastPhraseStartTime = -1;
         this.lastPoseBeatStart = -1;
         this.poseBeatCounter = 0;
@@ -197,6 +243,12 @@ export class SongShutter extends BaseSong {
                 e.preventDefault();
             } else if (e.code === 'KeyS' || e.code === 'ArrowDown') {
                 this.targetZoom = Math.max(0.6, this.targetZoom - 0.15);
+                e.preventDefault();
+            } else if (e.code === 'BracketRight') {
+                this.cycleDancePreset(1);   // ] 次のダンス（ストックをブラウズ）
+                e.preventDefault();
+            } else if (e.code === 'BracketLeft') {
+                this.cycleDancePreset(-1);  // [ 前のダンス
                 e.preventDefault();
             }
         };
@@ -540,8 +592,46 @@ export class SongShutter extends BaseSong {
         }
     }
 
+    // 「可愛い動き」ストックからプリセットを適用（grooveConfig と armStyle を切替）
+    applyDancePreset(name) {
+        const preset = SHUTTER_DANCE_PRESETS.find(p => p.name === name) || SHUTTER_DANCE_PRESETS[0];
+        this.grooveConfig = { ...preset.config };
+        this.armStyle = preset.armStyle;
+        this.dancePresetName = preset.name;
+        return preset;
+    }
+
+    // 次/前のプリセットへ切替（ストックのブラウズ用）。delta=+1/-1
+    cycleDancePreset(delta) {
+        const idx = SHUTTER_DANCE_PRESETS.findIndex(p => p.name === this.dancePresetName);
+        const n = SHUTTER_DANCE_PRESETS.length;
+        const next = SHUTTER_DANCE_PRESETS[((idx + delta) % n + n) % n];
+        const preset = this.applyDancePreset(next.name);
+        this.showDanceToast(preset.label);
+        return preset;
+    }
+
+    // 切替時に現在のプリセット名を一瞬表示
+    showDanceToast(label) {
+        let el = document.getElementById('shutter-dance-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'shutter-dance-toast';
+            el.style.cssText = `position:absolute; top:96px; left:50%; transform:translateX(-50%);
+                z-index:40; font-family:'Shippori Mincho',serif; font-size:16px; color:#fff;
+                background:rgba(8,4,3,0.7); border:1px solid ${this.themeColor}; border-radius:8px;
+                padding:6px 16px; text-shadow:0 0 8px ${this.themeColor}; pointer-events:none;
+                transition:opacity .3s; opacity:0;`;
+            this.songWrapper.appendChild(el);
+        }
+        el.textContent = `♪ ${label}`;
+        el.style.opacity = '1';
+        clearTimeout(this._danceToastTimer);
+        this._danceToastTimer = setTimeout(() => { if (el) el.style.opacity = '0'; }, 1400);
+    }
+
     // ビート同期グルーヴ: 腰の体重移動・拍の沈み込み・膝バウンス・頭ノリ・腕振りを
-    // 腕の型(SHUTTER_MIKU_POSES)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
+    // 腕の型(armStyle)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
     // （song-kotaete.js の applyGroove を被写体1体構成向けに移植・調整）
     applySubjectGroove(subject, t, deltaSec, beatPulse) {
         const vrm = subject.vrm;
@@ -558,38 +648,54 @@ export class SongShutter extends BaseSong {
         if (spine) spine.rotation.x = punch;
         if (chest) chest.rotation.x = -punch * 0.5;
 
-        // 体重移動: 拍ごとに左右へ振る振り子（_beatStepで反転）。腰と上半身で自然なSカーブ
+        // 体重移動: 拍ごとに左右へ振る振り子（_beatStepで反転）。腰・胴でSカーブ＋ひねり
         const swayTarget = this._beatStep * cfg.sway * gain;
         this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
         const s = this._swayCur;
-        if (hips) hips.rotation.z = s;
-        if (spine) spine.rotation.z = -s * 0.6;
+        const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
+        if (hips) { hips.rotation.z = s; hips.rotation.y = swayN * cfg.twist * 0.4; }
+        if (spine) { spine.rotation.z = -s * 0.6; spine.rotation.y = swayN * cfg.twist; } // 上半身をひねる
+        if (chest) chest.rotation.y = swayN * cfg.twist * 0.5;
 
-        // 頭: 拍で頷き＋体重移動に追従した傾き
+        // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
         if (head) {
             head.rotation.x = g * cfg.headNod * gain + Math.sin(t * 1.2) * 0.03;
             head.rotation.z = s * 0.5;
+            head.rotation.y = -swayN * 0.12;
         }
 
-        // 脚: 拍ごとに両膝を屈伸（左右対称＝接地を保ったままビートで弾む）
+        // 脚: 両膝の屈伸（接地を保つ）＋ステップ(足踏み)で体重が抜けた側の足を軽く上げる
         const lUL = get('leftUpperLeg'), rUL = get('rightUpperLeg');
         const lLL = get('leftLowerLeg'), rLL = get('rightLowerLeg');
         const knee = g * cfg.kneeBounce * gain;
-        if (lUL) { lUL.rotation.z = Math.PI / 40; lUL.rotation.x = knee * 0.5; }
-        if (rUL) { rUL.rotation.z = -Math.PI / 40; rUL.rotation.x = knee * 0.5; }
-        if (lLL) lLL.rotation.x = -knee;
-        if (rLL) rLL.rotation.x = -knee;
+        const stepL = Math.max(0, -swayN) * cfg.step * gain; // 左に体重→右足が上がる…の対で交互に
+        const stepR = Math.max(0, swayN) * cfg.step * gain;
+        if (lUL) { lUL.rotation.z = Math.PI / 40; lUL.rotation.x = knee * 0.5 + stepR; }
+        if (rUL) { rUL.rotation.z = -Math.PI / 40; rUL.rotation.x = knee * 0.5 + stepL; }
+        if (lLL) lLL.rotation.x = -knee - stepR * 1.2;
+        if (rLL) rLL.rotation.x = -knee - stepL * 1.2;
 
-        // 腕: サビは拍に合わせて振り上げ（アイドル感）。それ以外は体重移動に合わせて軽く振る。
+        // 肩: 拍ごとに軽く上下させて弾み感
+        const lSh = get('leftShoulder'), rSh = get('rightShoulder');
+        if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
+        if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
+
+        // 腕: 型(SHUTTER_MIKU_POSES)に重ねてビートで動かす。サビは振り上げ＋左右ウェーブ。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
+        const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
         if (this.isClimax) {
             const pump = g * cfg.armPump * gain;
-            if (lUA) lUA.rotation.x = -pump;   // 前～上へ振り上げ
-            if (rUA) rUA.rotation.x = -pump;
+            if (lUA) { lUA.rotation.x = -pump; lUA.rotation.z += -s * 0.6; }   // 振り上げ＋左右に振る
+            if (rUA) { rUA.rotation.x = -pump; rUA.rotation.z += -s * 0.6; }
+            if (lLA) lLA.rotation.x += -g * 0.2;                               // 肘も弾ませる
+            if (rLA) rLA.rotation.x += -g * 0.2;
         } else {
-            const swing = (s / Math.max(0.001, cfg.sway)) * cfg.armSway; // 体重移動に同期した振り
-            if (lUA) lUA.rotation.x += swing;  // 腕の型に少し重ねる
-            if (rUA) rUA.rotation.x += -swing;
+            const swing = swayN * cfg.armSway;       // 体重移動に同期した前後の振り
+            const bob = g * cfg.armBob * gain;       // 拍ごとの弾み
+            if (lUA) lUA.rotation.x += swing - bob;
+            if (rUA) rUA.rotation.x += -swing - bob;
+            if (lLA) lLA.rotation.x += -bob * 0.8;   // 肘の弾み
+            if (rLA) rLA.rotation.x += -bob * 0.8;
         }
 
         // 小節頭アクセントの減衰
@@ -667,9 +773,10 @@ export class SongShutter extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.set(0, 0, 10);
         
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.renderer.domElement.style.position = 'absolute';
         this.renderer.domElement.style.top = '0';
         this.renderer.domElement.style.left = '0';
@@ -1627,19 +1734,13 @@ export class SongShutter extends BaseSong {
             const animateList = this.subjects.filter(s => s.vrm.scene.visible);
             animateList.forEach((subject) => {
                 const isShown = subject.key === this.shownKey;
-                if (poseChanged && isShown) {
-                    this.advanceSubjectPose(subject);
-                }
 
-                // サビ突入の瞬間は両手チアーポーズへ
-                if (isShown && this.isClimax && subject.poseIndex !== 3 && currentPhrase &&
-                    currentPhrase.startTime === this.lastPhraseStartTime &&
-                    position - currentPhrase.startTime < 200) {
-                    subject.poseIndex = 3;
-                }
-
-                // 腕の型（SHUTTER_MIKU_POSES）へ補間 → その上にビートグルーヴ（腰・脚・頭・腕振り）を重ねて踊らせる
-                this.lerpSubjectPose(subject, SHUTTER_MIKU_POSES[subject.poseIndex], 0.08);
+                // 腕の型: プリセットの armStyle を基調に。穏やか系はサビで cheer へ切替えて盛り上げる
+                const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
+                const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
+                const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                // 腕の型へ補間 → その上にビートグルーヴ（腰・脚・頭・腕振り）を重ねて踊らせる
+                this.lerpSubjectPose(subject, gesture, 0.08);
                 if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
 
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
@@ -1656,9 +1757,10 @@ export class SongShutter extends BaseSong {
                 const px = subject.baseX + sx;
                 const pz = this.mikuBaseZ + sz;
                 subject.vrm.scene.position.x = px;
-                // 浮遊bob ＋ 拍頭で腰を落とす沈み込み（膝バウンスと連動した接地ノリ）
+                // 浮遊bob ＋ 拍頭で腰を落とす沈み込み（膝バウンス連動）＋ 小節頭の軽いホップ
                 subject.vrm.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.05
-                    - beatPulse * this.grooveConfig.hipDrop * (this.isClimax ? 1.4 : 1.0);
+                    - beatPulse * this.grooveConfig.hipDrop * (this.isClimax ? 1.4 : 1.0)
+                    + this._barAccent * this.grooveConfig.hop * (this.isClimax ? 1.4 : 0.6);
                 subject.vrm.scene.position.z = pz;
                 // 常にカメラ（撮影者）の方へ正面を向ける（既定カメラでは π=正面。回り込んでも正面を維持）
                 subject.vrm.scene.rotation.y =

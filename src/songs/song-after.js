@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -101,11 +102,12 @@ export class SongAfter extends BaseSong {
         this.camera.position.set(0, 5, 15);
         this.camera.lookAt(0, 2, 0);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.25 : 1.5));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
 
-        this.renderer.shadowMap.enabled = !this.isMobile;
+        this.renderer.shadowMap.enabled = quality.useShadows;
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
         // タッチドラッグでスポットライトを動かせるよう、ブラウザ既定のスクロール/ズームを無効化
