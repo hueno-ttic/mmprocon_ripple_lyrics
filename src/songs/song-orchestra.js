@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
@@ -143,9 +144,10 @@ export class SongOrchestra extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.z = 10;
         
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
         // Add ambient light for character details
@@ -1012,19 +1014,24 @@ export class SongOrchestra extends BaseSong {
             });
 
             // Deduplicate activeGroups by text if their startTimes are extremely close (duet/unison overlaps within 200ms)
-            const seenTextAndTimes = [];
+            // Single-pass O(n): group accepted startTimes by text. A group is a duplicate
+            // only if a previously-accepted group with identical text has a startTime within 200ms.
+            const acceptedTimesByText = new Map();
             activeGroups = activeGroups.filter(g => {
                 const cleanText = g.text.trim();
                 if (!cleanText) return false;
-                
-                const isDuplicate = seenTextAndTimes.some(seen => 
-                    seen.text === cleanText && Math.abs(seen.startTime - g.startTime) < 200
-                );
-                
-                if (isDuplicate) {
-                    return false;
+
+                let times = acceptedTimesByText.get(cleanText);
+                if (times) {
+                    for (let t = 0; t < times.length; t++) {
+                        if (Math.abs(times[t] - g.startTime) < 200) {
+                            return false;
+                        }
+                    }
+                    times.push(g.startTime);
+                } else {
+                    acceptedTimesByText.set(cleanText, [g.startTime]);
                 }
-                seenTextAndTimes.push({ text: cleanText, startTime: g.startTime });
                 return true;
             });
 
@@ -1246,9 +1253,19 @@ export class SongOrchestra extends BaseSong {
                     );
 
                     // 飛翔用の光の尾 (Trail) メッシュを生成
+                    // 2点固定の尾なので、位置バッファを一度だけ確保し以後は中身のみ更新する(毎フレームの再確保を回避)
                     const trailGeo = new THREE.BufferGeometry();
-                    const trailPts = [orb.position.clone(), orb.position.clone()];
-                    trailGeo.setFromPoints(trailPts);
+                    const trailPositions = new Float32Array(6);
+                    trailPositions[0] = orb.position.x;
+                    trailPositions[1] = orb.position.y;
+                    trailPositions[2] = orb.position.z;
+                    trailPositions[3] = orb.position.x;
+                    trailPositions[4] = orb.position.y;
+                    trailPositions[5] = orb.position.z;
+                    const trailPosAttr = new THREE.BufferAttribute(trailPositions, 3);
+                    trailPosAttr.setUsage(THREE.DynamicDrawUsage);
+                    trailGeo.setAttribute('position', trailPosAttr);
+                    orb.userData.trailPosAttr = trailPosAttr;
                     const trailMat = new THREE.LineBasicMaterial({
                         color: orb.userData.color,
                         transparent: true,
@@ -1268,10 +1285,18 @@ export class SongOrchestra extends BaseSong {
 
                     orb.position.lerpVectors(orb.userData.startLaunchPos, orb.userData.targetLaunchPos, ease);
 
-                    // トレイル更新
+                    // トレイル更新 (確保済みバッファの中身のみ更新。毎フレームのジオメトリ再確保とVector3生成を回避)
                     if (orb.userData.trail) {
-                        const pts = [orb.userData.startLaunchPos, orb.position.clone()];
-                        orb.userData.trail.geometry.setFromPoints(pts);
+                        const attr = orb.userData.trailPosAttr;
+                        const arr = attr.array;
+                        const sp = orb.userData.startLaunchPos;
+                        arr[0] = sp.x;
+                        arr[1] = sp.y;
+                        arr[2] = sp.z;
+                        arr[3] = orb.position.x;
+                        arr[4] = orb.position.y;
+                        arr[5] = orb.position.z;
+                        attr.needsUpdate = true;
                         orb.userData.trail.material.opacity = 0.8 * (1.0 - t);
                     }
 

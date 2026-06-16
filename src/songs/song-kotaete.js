@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
@@ -90,6 +91,10 @@ export class SongKotaete extends BaseSong {
         // ---- 世界の色 ----
         this.worldColor = new THREE.Color(this.themeColor);        // 現在表示中の色(毎フレーム補間)
         this.worldColorTarget = new THREE.Color(this.themeColor);  // 目標色(選択で更新)
+        // 毎フレームの色計算で使い回すスクラッチ(GC削減・clone回避)
+        this._scratchColBg = new THREE.Color();    // 背景/フォグ用
+        this._scratchColKey = new THREE.Color();   // キーライト用
+        this._scratchColAmb = new THREE.Color();   // 環境光用
         this.finalAnswerColor = null;                              // 3回選び終えた混色
         this.finaleActive = false;
         this.finaleOverlay = null;
@@ -150,9 +155,10 @@ export class SongKotaete extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.set(0, 2, 10);
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
         // ミクと回廊を照らすライト群(色は世界の色に追従)
@@ -1242,7 +1248,7 @@ export class SongKotaete extends BaseSong {
 
         // ---- 世界の色を補間して全体へ適用 ----
         this.worldColor.lerp(this.worldColorTarget, Math.min(1, deltaSec * 1.2));
-        const darkBg = this.worldColor.clone().multiplyScalar(this.finaleActive ? 0.22 : 0.07);
+        const darkBg = this._scratchColBg.copy(this.worldColor).multiplyScalar(this.finaleActive ? 0.22 : 0.07);
         this.scene.background.copy(darkBg);
         this.scene.fog.color.copy(darkBg);
         this.scene.fog.density = this.finaleActive ? 0.010 : 0.016;
@@ -1253,11 +1259,11 @@ export class SongKotaete extends BaseSong {
             this.starField.material.opacity = 0.5 + beatPulse * 0.35;
         }
         if (this.keyLight) {
-            this.keyLight.color.copy(new THREE.Color('#ffffff').lerp(this.worldColor, 0.35));
+            this.keyLight.color.copy(this._scratchColKey.set('#ffffff').lerp(this.worldColor, 0.35));
             this.keyLight.intensity = 2.0 + beatPulse * 0.5 + (this.finaleActive ? 1.2 : 0);
         }
         if (this.ambientLight) {
-            this.ambientLight.color.copy(this.worldColor.clone().multiplyScalar(0.5));
+            this.ambientLight.color.copy(this._scratchColAmb.copy(this.worldColor).multiplyScalar(0.5));
         }
 
         // ---- カメラ前進 + グリッドループ ----
@@ -1333,7 +1339,7 @@ export class SongKotaete extends BaseSong {
                 if (Math.abs(s.position.z - mp.z) < 1.3) {
                     const dx = s.position.x - mp.x;
                     const dy = s.position.y - (mp.y + 1.1); // 胸〜頭のあたり
-                    if (Math.hypot(dx, dy) < 1.9) {
+                    if (dx * dx + dy * dy < 1.9 * 1.9) {
                         ud.passedMiku = true;
                         ud.contactFlash = 1.0;                 // 言葉が一瞬きらめく
                         this.mikuGlowPulse = Math.min(1.5, this.mikuGlowPulse + 0.5); // ミクが受け取って輝く

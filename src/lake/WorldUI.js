@@ -8,6 +8,7 @@ import { PHASES } from '../config/constants.js';
 import { appState } from '../core/appState.js';
 import { PHASE_CLASSES } from './phases/index.js';
 import { screenFade } from '../ui/ScreenFade.js';
+import { quality } from '../core/quality.js';
 
 export class WorldUI {
     constructor(container) {
@@ -17,24 +18,27 @@ export class WorldUI {
         this.isMobile = window.innerWidth < 768;
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true, preserveDrawingBuffer: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
 
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        // 解像度は品質マネージャ(端末性能+実FPSで自動調整)に委ねる。
+        // Retina/高DPIでは塗りピクセルがdpr²倍になりfillrate律速になるため上限を抑える。
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         // Cinematic grading to match the redesign (湖のソナーレ scene art direction)
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.12;
-        // PCF影はモバイルGPUのfillrateを大きく消費するためデスクトップのみ
-        this.renderer.shadowMap.enabled = !this.isMobile;
+        // PCF影はGPUのfillrateを大きく消費するため品質ティアで制御(低スペックは無効)
+        this.renderer.shadowMap.enabled = quality.useShadows;
         // PCFSoftShadowMap is deprecated in this three build (falls back to PCF)
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
         this.container.appendChild(this.renderer.domElement);
 
         // Post-processing: subtle bloom for luminous water/sun/song-node highlights.
-        // フルスクリーンのbloomはモバイルで重いので非モバイルのみ有効化し、
-        // モバイルでは composer を介さず renderer で直接描画する(animate参照)。
-        this.useBloom = !this.isMobile;
+        // フルスクリーンのbloomは重いので品質ティアで制御。無効時は composer を
+        // 介さず renderer で直接描画する(animate参照)。
+        this.useBloom = quality.useBloom;
         this.composer = new EffectComposer(this.renderer);
         this.composer.addPass(new RenderPass(this.scene, this.camera));
         if (this.useBloom) {
@@ -573,7 +577,10 @@ export class WorldUI {
         // Update label positions from phase
         this._updateLabelPositions();
 
-        // モバイルは bloom 無効なので composer を介さず直接描画(余計なフルスクリーンパスを省く)
+        // 実FPSに応じて解像度を自動調整(値が変わった時だけ反映されるので軽い)
+        quality.maybeApply(this.renderer, this.useBloom ? this.composer : null);
+
+        // bloom 無効時は composer を介さず直接描画(余計なフルスクリーンパスを省く)
         if (this.useBloom) {
             this.composer.render();
         } else {

@@ -41,7 +41,8 @@ export class PhaseMist extends PhaseBase {
     }
 
     _buildMeadow() {
-        const groundGeo = new THREE.PlaneGeometry(340, 300, 80, 70); groundGeo.rotateX(-Math.PI / 2);
+        // 草原の地面。セグメントを80×70→56×48に削減(約5.7k→2.7k頂点)。見た目の差はほぼ無い。
+        const groundGeo = new THREE.PlaneGeometry(340, 300, 56, 48); groundGeo.rotateX(-Math.PI / 2);
         const p = groundGeo.attributes.position; const cols = new Float32Array(p.count * 3);
         const lo = new THREE.Color(0x3C7A2E), hi = new THREE.Color(0x6CB04A), dry = new THREE.Color(0x86B84E);
         for (let i = 0; i < p.count; i++) {

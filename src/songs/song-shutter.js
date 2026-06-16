@@ -1,9 +1,11 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
+import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
 
 // 被写体ミクのポーズプリセット（正規化ヒューマノイドボーンのオイラー回転）
 // 新VRMモデルは上腕/前腕のロール軸(z)が旧モデルと逆。
@@ -35,6 +37,40 @@ const SHUTTER_MIKU_POSES = [
         head: { x: 0, y: -0.1, z: 0.18 }, spine: { x: 0, y: 0, z: -0.05 }
     }
 ];
+
+// 腕の基調(armStyle)→ 腕の型。ダンスプリセットが参照する。
+// relaxed/wave/appeal/cheer/peace は上の SHUTTER_MIKU_POSES を再利用。
+const ARM_GESTURES = {
+    relaxed: SHUTTER_MIKU_POSES[0],
+    wave: SHUTTER_MIKU_POSES[1],
+    appeal: SHUTTER_MIKU_POSES[2],
+    cheer: SHUTTER_MIKU_POSES[3],
+    peace: SHUTTER_MIKU_POSES[4],
+    // 両手を顔/胸の前へ（はにかみ・きゅるん）
+    faceHands: {
+        leftUpperArm: { x: -0.2, y: 0, z: 0.7 }, rightUpperArm: { x: -0.2, y: 0, z: -0.7 },
+        leftLowerArm: { x: 0, y: 0.1, z: -1.3 }, rightLowerArm: { x: 0, y: -0.1, z: 1.3 },
+        head: { x: 0.05, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }
+    },
+    // 腰に手を当てる（お澄まし）
+    handsOnHips: {
+        leftUpperArm: { x: 0, y: 0, z: 1.0 }, rightUpperArm: { x: 0, y: 0, z: -1.0 },
+        leftLowerArm: { x: 0, y: 0.6, z: -0.6 }, rightLowerArm: { x: 0, y: -0.6, z: 0.6 },
+        head: { x: 0, y: 0, z: 0 }, spine: { x: 0, y: 0, z: 0 }
+    },
+    // 右手を上げて指さし、左手は腰そえ（キメ）
+    point: {
+        leftUpperArm: { x: 0, y: 0, z: 1.05 }, rightUpperArm: { x: -0.35, y: 0, z: 0.1 },
+        leftLowerArm: { x: 0, y: 0.4, z: -0.3 }, rightLowerArm: { x: 0, y: 0, z: 0.1 },
+        head: { x: 0, y: -0.12, z: -0.08 }, spine: { x: 0, y: -0.05, z: 0 }
+    },
+    // 頭上で両手ハート風（ぶりっ子）
+    heart: {
+        leftUpperArm: { x: -0.1, y: 0, z: -0.45 }, rightUpperArm: { x: -0.1, y: 0, z: 0.45 },
+        leftLowerArm: { x: 0, y: 0, z: -1.45 }, rightLowerArm: { x: 0, y: 0, z: 1.45 },
+        head: { x: -0.05, y: 0, z: 0 }, spine: { x: -0.03, y: 0, z: 0 }
+    },
+};
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
 const SHUTTER_VOCAL_MAP = {
@@ -145,10 +181,40 @@ export class SongShutter extends BaseSong {
             { key: 'miku', model: 'model_miku.vrm', baseX: 0, baseRotY: Math.PI, scale: 6.0 },
             { key: 'rin',  model: 'model_rin.vrm',  baseX: 0, baseRotY: Math.PI, scale: 3.9 },
         ];
-        this.activeVocal = 'none';   // 歌唱中パート（表示する被写体の切替に使用）
+        this.activeVocal = 'none';   // 歌唱中パート（メーター表示などに使用）
         this.shownKey = 'miku';      // 現在表示中の被写体
+        this.selectedKey = null;     // 曲開始前に選んだ被写体（ミク/リン）。選択後は曲中固定
         this.swap = null;            // 被写体の切替トランジション { from, to, t }
         this.swapDuration = 0.42;    // 光りながら消える/出てくる演出の長さ（秒）
+
+        // --- ビート同期グルーヴ（こたえての applyGroove を踏襲。被写体を曲に合わせて踊らせる） ---
+        this.grooveConfig = {
+            gain: 1.0,        // 全体の効き
+            climaxGain: 1.0,  // サビでの追加倍率(gainに乗算)
+            punch: 0.16,      // 拍頭で胴を前に沈める量(rad)
+            sway: 0.17,       // 体重移動の振り幅(rad)
+            twist: 0.34,      // 体重移動に合わせた胴のひねり量(swayに対する比)
+            headNod: 0.13,    // 頭の頷き量(rad)
+            kneeBounce: 0.20, // 拍ごとの膝の屈伸量(rad・左右対称＝接地を保つ)
+            step: 0.16,       // ステップ(足踏み)で浮く脚側の持ち上げ量(rad)
+            hipDrop: 0.06,    // 拍頭で腰を落とす量(ワールド単位)
+            hop: 0.10,        // 小節頭の軽いホップ量(ワールド単位・サビ強調)
+            armSway: 0.22,    // 体重移動に合わせた腕の振り(rad)
+            armBob: 0.14,     // 拍ごとに腕を弾ませる量(rad)
+            armPump: 0.5,     // サビの腕振り上げ量(rad)
+            shoulder: 0.06,   // 拍ごとの肩の上下(rad)
+        };
+        this._groove = 0;     // 拍頭で素早く立ち上がるパルス(0..1)
+        this._beatStep = 1;   // 体重移動の向き(±1。拍ごとに反転)
+        this._beatIndex = -1; // 直近の拍インデックス(進んだ瞬間の検出)
+        this._beatFrac = 0;   // 拍内位相(0=拍頭)
+        this._barAccent = 0;  // 小節頭アクセント(発火→減衰)
+        this._swayCur = 0;    // 体重移動の平滑値
+
+        // 「可愛い動き」ストックから既定プリセットを適用（grooveConfig と armStyle を設定）
+        this.armStyle = 'cheer';
+        this.dancePresetName = SHUTTER_DANCE_DEFAULT;
+        this.applyDancePreset(SHUTTER_DANCE_DEFAULT);
         this.lastPhraseStartTime = -1;
         this.lastPoseBeatStart = -1;
         this.poseBeatCounter = 0;
@@ -178,6 +244,12 @@ export class SongShutter extends BaseSong {
             } else if (e.code === 'KeyS' || e.code === 'ArrowDown') {
                 this.targetZoom = Math.max(0.6, this.targetZoom - 0.15);
                 e.preventDefault();
+            } else if (e.code === 'BracketRight') {
+                this.cycleDancePreset(1);   // ] 次のダンス（ストックをブラウズ）
+                e.preventDefault();
+            } else if (e.code === 'BracketLeft') {
+                this.cycleDancePreset(-1);  // [ 前のダンス
+                e.preventDefault();
             }
         };
 
@@ -192,6 +264,9 @@ export class SongShutter extends BaseSong {
         this.orbitPivot = new THREE.Vector3(0, 0, -16.5); // 周回の中心(=被写体ミクの位置。常に中央に保つ)
         this.orbitRadius = 26.5;                          // カメラ初期位置(0,0,10)からの距離
         this._lyricScratch = new THREE.Vector3();         // 歌詞ワールド追従の作業用
+        this._scratchVec = new THREE.Vector3();           // 毎フレームの一時計算用（写真トランジション等）
+        this._activeGroupsScratch = [];                   // 表示中ワードグループの再利用バッファ（毎フレーム再構築）
+        this._seenTextScratch = new Set();                // 歌詞重複排除用の再利用Set（毎フレームclear）
         this.isDragging = false;
         this.dragStartPos = new THREE.Vector2(0, 0);
         this.previousMousePosition = new THREE.Vector2(0, 0);
@@ -327,6 +402,71 @@ export class SongShutter extends BaseSong {
         });
     }
 
+    // 再生開始の直前に被写体（ミク/リン）を選ばせる。選択が終わるまで曲は始めない。
+    _autoStartPlayback() {
+        if (this.selectedKey) {
+            super._autoStartPlayback();
+            return;
+        }
+        // 選択中は誤って再生されないよう一時停止
+        if (playerManager.player && playerManager.player.isPlaying) playerManager.pause();
+        this.showCastSelection((key) => {
+            this.selectedKey = key;
+            this.shownKey = key;
+            // 選んだ1体だけ表示し、曲中の切替は行わない
+            if (this.swap) this.swap = null;
+            this.subjects.forEach((s) => {
+                if (s.key !== key) this.restoreSubjectMaterials(s);
+                s.vrm.scene.visible = (s.key === key);
+            });
+            super._autoStartPlayback();
+        });
+    }
+
+    // 被写体セレクト画面。ミク or リン を選んでから曲がスタートする。
+    showCastSelection(onChosen) {
+        this.isSelectingCast = true;
+        const overlay = document.createElement('div');
+        overlay.className = 'shutter-cast-overlay';
+        overlay.style.cssText = `
+            position:absolute; inset:0; z-index:60; display:flex; flex-direction:column;
+            align-items:center; justify-content:center; gap:26px;
+            background:rgba(8,4,3,0.84); backdrop-filter:blur(5px);
+            opacity:0; transition:opacity .4s ease; pointer-events:auto;`;
+        const castBtn = (key, label, color) => `
+            <button class="shutter-cast-btn" data-key="${key}" style="
+                min-width:160px; padding:22px 26px; cursor:pointer;
+                background:rgba(0,0,0,0.55); color:#fff;
+                border:2px solid ${color}; border-radius:12px;
+                font-family:'Shippori Mincho',serif; font-size:22px; letter-spacing:.08em;
+                box-shadow:0 0 14px ${color}55; text-shadow:0 0 8px ${color};
+                transition:transform .15s ease, box-shadow .15s ease, background .15s ease;">
+                <div style="font-family:monospace; font-size:10px; letter-spacing:.2em; opacity:.7; margin-bottom:8px;">${key.toUpperCase()}_CH</div>
+                ${label}
+            </button>`;
+        overlay.innerHTML = `
+            <div style="font-family:monospace; color:#fff; letter-spacing:.25em; font-size:13px; opacity:.8;">SELECT YOUR SUBJECT</div>
+            <div style="font-family:'Shippori Mincho',serif; color:#fff; font-size:21px;">どちらを撮影しますか？</div>
+            <div style="display:flex; gap:24px; flex-wrap:wrap; justify-content:center;">
+                ${castBtn('miku', '初音ミク', '#39C5BB')}
+                ${castBtn('rin', '鏡音リン', '#FFEE11')}
+            </div>`;
+        this.songWrapper.appendChild(overlay);
+        requestAnimationFrame(() => { overlay.style.opacity = '1'; });
+
+        overlay.querySelectorAll('.shutter-cast-btn').forEach((btn) => {
+            btn.addEventListener('mouseenter', () => { btn.style.transform = 'translateY(-3px)'; });
+            btn.addEventListener('mouseleave', () => { btn.style.transform = 'none'; });
+            btn.addEventListener('click', () => {
+                const key = btn.getAttribute('data-key');
+                this.isSelectingCast = false;
+                overlay.style.opacity = '0';
+                setTimeout(() => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 400);
+                onChosen(key);
+            });
+        });
+    }
+
     // 被写体VRM（ミク&リン）をステージ奥にロードして横並びに配置（orchestraの実績パターンを踏襲）
     loadSubjects() {
         this.subjectLayout.forEach((def) => {
@@ -452,6 +592,116 @@ export class SongShutter extends BaseSong {
         }
     }
 
+    // 「可愛い動き」ストックからプリセットを適用（grooveConfig と armStyle を切替）
+    applyDancePreset(name) {
+        const preset = SHUTTER_DANCE_PRESETS.find(p => p.name === name) || SHUTTER_DANCE_PRESETS[0];
+        this.grooveConfig = { ...preset.config };
+        this.armStyle = preset.armStyle;
+        this.dancePresetName = preset.name;
+        return preset;
+    }
+
+    // 次/前のプリセットへ切替（ストックのブラウズ用）。delta=+1/-1
+    cycleDancePreset(delta) {
+        const idx = SHUTTER_DANCE_PRESETS.findIndex(p => p.name === this.dancePresetName);
+        const n = SHUTTER_DANCE_PRESETS.length;
+        const next = SHUTTER_DANCE_PRESETS[((idx + delta) % n + n) % n];
+        const preset = this.applyDancePreset(next.name);
+        this.showDanceToast(preset.label);
+        return preset;
+    }
+
+    // 切替時に現在のプリセット名を一瞬表示
+    showDanceToast(label) {
+        let el = document.getElementById('shutter-dance-toast');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'shutter-dance-toast';
+            el.style.cssText = `position:absolute; top:96px; left:50%; transform:translateX(-50%);
+                z-index:40; font-family:'Shippori Mincho',serif; font-size:16px; color:#fff;
+                background:rgba(8,4,3,0.7); border:1px solid ${this.themeColor}; border-radius:8px;
+                padding:6px 16px; text-shadow:0 0 8px ${this.themeColor}; pointer-events:none;
+                transition:opacity .3s; opacity:0;`;
+            this.songWrapper.appendChild(el);
+        }
+        el.textContent = `♪ ${label}`;
+        el.style.opacity = '1';
+        clearTimeout(this._danceToastTimer);
+        this._danceToastTimer = setTimeout(() => { if (el) el.style.opacity = '0'; }, 1400);
+    }
+
+    // ビート同期グルーヴ: 腰の体重移動・拍の沈み込み・膝バウンス・頭ノリ・腕振りを
+    // 腕の型(armStyle)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
+    // （song-kotaete.js の applyGroove を被写体1体構成向けに移植・調整）
+    applySubjectGroove(subject, t, deltaSec, beatPulse) {
+        const vrm = subject.vrm;
+        if (!vrm || !vrm.humanoid) return;
+        const cfg = this.grooveConfig;
+        const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
+        const hips = get('hips'), spine = get('spine'), chest = get('upperChest') || get('chest'), head = get('head');
+        if (!spine && !hips) return;
+        const gain = cfg.gain * (this.isClimax ? cfg.climaxGain * 1.5 : 1.0);
+        const g = this._groove;
+
+        // 拍頭で胴を前に沈めて跳ね返す（スクワッシュ＆ストレッチ）。小節頭は踏み込みを強調
+        const punch = (g + this._barAccent * 0.5) * cfg.punch * gain;
+        if (spine) spine.rotation.x = punch;
+        if (chest) chest.rotation.x = -punch * 0.5;
+
+        // 体重移動: 拍ごとに左右へ振る振り子（_beatStepで反転）。腰・胴でSカーブ＋ひねり
+        const swayTarget = this._beatStep * cfg.sway * gain;
+        this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
+        const s = this._swayCur;
+        const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
+        if (hips) { hips.rotation.z = s; hips.rotation.y = swayN * cfg.twist * 0.4; }
+        if (spine) { spine.rotation.z = -s * 0.6; spine.rotation.y = swayN * cfg.twist; } // 上半身をひねる
+        if (chest) chest.rotation.y = swayN * cfg.twist * 0.5;
+
+        // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
+        if (head) {
+            head.rotation.x = g * cfg.headNod * gain + Math.sin(t * 1.2) * 0.03;
+            head.rotation.z = s * 0.5;
+            head.rotation.y = -swayN * 0.12;
+        }
+
+        // 脚: 両膝の屈伸（接地を保つ）＋ステップ(足踏み)で体重が抜けた側の足を軽く上げる
+        const lUL = get('leftUpperLeg'), rUL = get('rightUpperLeg');
+        const lLL = get('leftLowerLeg'), rLL = get('rightLowerLeg');
+        const knee = g * cfg.kneeBounce * gain;
+        const stepL = Math.max(0, -swayN) * cfg.step * gain; // 左に体重→右足が上がる…の対で交互に
+        const stepR = Math.max(0, swayN) * cfg.step * gain;
+        if (lUL) { lUL.rotation.z = Math.PI / 40; lUL.rotation.x = knee * 0.5 + stepR; }
+        if (rUL) { rUL.rotation.z = -Math.PI / 40; rUL.rotation.x = knee * 0.5 + stepL; }
+        if (lLL) lLL.rotation.x = -knee - stepR * 1.2;
+        if (rLL) rLL.rotation.x = -knee - stepL * 1.2;
+
+        // 肩: 拍ごとに軽く上下させて弾み感
+        const lSh = get('leftShoulder'), rSh = get('rightShoulder');
+        if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
+        if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
+
+        // 腕: 型(SHUTTER_MIKU_POSES)に重ねてビートで動かす。サビは振り上げ＋左右ウェーブ。
+        const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
+        const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
+        if (this.isClimax) {
+            const pump = g * cfg.armPump * gain;
+            if (lUA) { lUA.rotation.x = -pump; lUA.rotation.z += -s * 0.6; }   // 振り上げ＋左右に振る
+            if (rUA) { rUA.rotation.x = -pump; rUA.rotation.z += -s * 0.6; }
+            if (lLA) lLA.rotation.x += -g * 0.2;                               // 肘も弾ませる
+            if (rLA) rLA.rotation.x += -g * 0.2;
+        } else {
+            const swing = swayN * cfg.armSway;       // 体重移動に同期した前後の振り
+            const bob = g * cfg.armBob * gain;       // 拍ごとの弾み
+            if (lUA) lUA.rotation.x += swing - bob;
+            if (rUA) rUA.rotation.x += -swing - bob;
+            if (lLA) lLA.rotation.x += -bob * 0.8;   // 肘の弾み
+            if (rLA) rLA.rotation.x += -bob * 0.8;
+        }
+
+        // 小節頭アクセントの減衰
+        this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
+    }
+
     disposeVRM(vrm) {
         if (!vrm) return;
         vrm.scene.traverse((obj) => {
@@ -523,9 +773,10 @@ export class SongShutter extends BaseSong {
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.camera.position.set(0, 0, 10);
         
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.renderer.domElement.style.position = 'absolute';
         this.renderer.domElement.style.top = '0';
         this.renderer.domElement.style.left = '0';
@@ -1231,7 +1482,7 @@ export class SongShutter extends BaseSong {
                 // 【フェーズ1：目前でのホールド表示 (一瞬大きく表示する提示機能)】
                 // 回り込み中もカメラ前方3に出すため、視線方向に沿って配置する。
                 photo.position.copy(this.camera.position)
-                    .add(this.camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(3));
+                    .add(this.camera.getWorldDirection(this._scratchVec).multiplyScalar(3));
                 photo.quaternion.copy(this.camera.quaternion);
                 
                 // 出現時のわずかなズームアップ演出 (0.8から1.2倍へ) ＆ ズームレベルに反比例させて一定の見かけサイズに保つ
@@ -1285,20 +1536,22 @@ export class SongShutter extends BaseSong {
             this.buildLyricsCache();
         }
 
-        // Filter groups that should be visible on screen (extended post-singing lifespan to +2500ms for prolonged presence)
-        let activeGroups = this.allWordGroups.filter(g => 
-            position >= g.startTime - 600 && position <= g.endTime + 2500
-        );
-
-        // Deduplicate activeGroups by text to prevent duet/unison overlaps and rapid consecutive identical word doubling
-        const seenText = new Set();
-        activeGroups = activeGroups.filter(g => {
-            if (seenText.has(g.text)) {
-                return false;
+        // 表示中ワードグループを単一パスで構築（再利用バッファでGC負荷を回避）。
+        // 「画面表示の可視ウィンドウ判定(startTime-600〜endTime+2500)」と「テキスト重複排除（先勝ち）」を
+        // allWordGroupsの並び順を維持したまま一度に行い、従来の2回の.filter()と同一の集合・順序を得る。
+        const activeGroups = this._activeGroupsScratch;
+        activeGroups.length = 0;
+        const seenText = this._seenTextScratch;
+        seenText.clear();
+        for (let gi = 0; gi < this.allWordGroups.length; gi++) {
+            const g = this.allWordGroups[gi];
+            if (position >= g.startTime - 600 && position <= g.endTime + 2500) {
+                if (!seenText.has(g.text)) {
+                    seenText.add(g.text);
+                    activeGroups.push(g);
+                }
             }
-            seenText.add(g.text);
-            return true;
-        });
+        }
 
         // First, remove out-of-bounds sprites immediately to keep the scene pristine and free grid cells
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
@@ -1441,12 +1694,23 @@ export class SongShutter extends BaseSong {
                 }
             }
 
-            // ビート同期の浮遊バウンス（シーン生成からの相対時刻ベース）
+            // --- ビート同期グルーヴの状態更新（こたえてのビート検出を踏襲） ---
             const floatT = position / 1000;
-            let bounce = 0;
-            if (poseBeat) {
-                const beatProg = Math.min(1.0, (position - poseBeat.startTime) / poseBeat.duration);
-                bounce = 0.12 * Math.exp(-beatProg * 5.0);
+            let beatPulse = 0;
+            if (poseBeat && poseBeat.duration > 0) {
+                const p = Math.min(1, Math.max(0, (position - poseBeat.startTime) / poseBeat.duration));
+                beatPulse = Math.pow(1 - p, 2.2);  // 拍頭で跳ねて減衰
+                this._beatFrac = p;
+                if (poseBeat.index !== this._beatIndex) {
+                    this._beatIndex = poseBeat.index;
+                    this._beatStep = -this._beatStep;                       // 体重移動の向きを反転
+                    if ((poseBeat.position || 1) === 1) this._barAccent = 1; // 小節頭でアクセント発火
+                }
+            }
+            // 拍頭で素早く立ち上がるグルーヴパルス（キレ＋余韻）
+            {
+                const atk = beatPulse > this._groove ? deltaTime * 45 : deltaTime * 9;
+                this._groove += (beatPulse - this._groove) * Math.min(1, atk);
             }
 
             // VRM内部更新（スプリングボーン等）。モバイルは約30fpsに間引いて負荷削減
@@ -1462,58 +1726,22 @@ export class SongShutter extends BaseSong {
                 }
             }
 
-            // --- 表示する被写体を歌唱パートに応じて切り替える（ツーショットにせず1体ずつ） ---
-            let desired = this.shownKey;
-            if (this.activeVocal === 'miku' || this.activeVocal === 'rin') {
-                desired = this.activeVocal;                            // 歌っている方を映す
-            } else if (this.activeVocal === 'duet' && poseChanged) {
-                desired = this.shownKey === 'miku' ? 'rin' : 'miku';   // デュエットは交互にカット
-            }
-            // 切替が必要なら「光りながら消えて/出てくる」トランジションを開始
-            if (desired !== this.shownKey && (!this.swap || this.swap.to !== desired)) {
-                this.swap = { from: this.shownKey, to: desired, t: 0 };
-                this.shownKey = desired;
-                const ns = this.subjects.find(s => s.key === desired);
-                if (ns && ns.vrm.springBoneManager) ns.vrm.springBoneManager.reset();
-            }
-
-            // トランジションの進行と発光フェードの適用
-            if (this.swap) {
-                this.swap.t += deltaTime / this.swapDuration;
-                const fromSub = this.subjects.find(s => s.key === this.swap.from);
-                const toSub = this.subjects.find(s => s.key === this.swap.to);
-                if (this.swap.t >= 1) {
-                    // 終了: 出てきた方を基準へ戻し、消えた方を非表示に
-                    if (fromSub) { this.restoreSubjectMaterials(fromSub); fromSub.vrm.scene.visible = false; }
-                    if (toSub) this.restoreSubjectMaterials(toSub);
-                    this.swap = null;
-                } else {
-                    const glow = Math.sin(Math.min(1, this.swap.t) * Math.PI); // 中間でピークの発光
-                    if (fromSub) { fromSub.vrm.scene.visible = true; this.applyFadeGlow(fromSub, 1 - this.swap.t, glow); }
-                    if (toSub) { toSub.vrm.scene.visible = true; this.applyFadeGlow(toSub, this.swap.t, glow); }
-                }
-            }
-            if (!this.swap) {
-                this.subjects.forEach(s => { s.vrm.scene.visible = (s.key === this.shownKey); });
-            }
+            // --- 表示する被写体は曲開始前に選んだ1体で固定（曲中の切替はしない） ---
+            if (this.selectedKey) this.shownKey = this.selectedKey;
+            this.subjects.forEach(s => { s.vrm.scene.visible = (s.key === this.shownKey); });
 
             // 表示中の被写体（トランジション中は両方）をアニメーション
             const animateList = this.subjects.filter(s => s.vrm.scene.visible);
             animateList.forEach((subject) => {
                 const isShown = subject.key === this.shownKey;
-                if (poseChanged && isShown) {
-                    this.advanceSubjectPose(subject);
-                }
 
-                // サビ突入の瞬間は両手チアーポーズへ
-                if (isShown && this.isClimax && subject.poseIndex !== 3 && currentPhrase &&
-                    currentPhrase.startTime === this.lastPhraseStartTime &&
-                    position - currentPhrase.startTime < 200) {
-                    subject.poseIndex = 3;
-                }
-
-                // 目標ポーズへ滑らかに補間
-                this.lerpSubjectPose(subject, SHUTTER_MIKU_POSES[subject.poseIndex], 0.08);
+                // 腕の型: プリセットの armStyle を基調に。穏やか系はサビで cheer へ切替えて盛り上げる
+                const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
+                const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
+                const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                // 腕の型へ補間 → その上にビートグルーヴ（腰・脚・頭・腕振り）を重ねて踊らせる
+                this.lerpSubjectPose(subject, gesture, 0.08);
+                if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
 
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
@@ -1523,12 +1751,25 @@ export class SongShutter extends BaseSong {
                     subject.vrm.expressionManager.setValue('happy', subject.smile);
                 }
 
-                // センターステージ。基本は正面を向き、ビート同期で軽く浮遊
-                subject.vrm.scene.position.x = subject.baseX;
-                subject.vrm.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.06 + bounce;
-                subject.vrm.scene.position.z = this.mikuBaseZ;
-                subject.vrm.scene.rotation.y = subject.baseRotY; // 正面固定
+                // ステージ内を動き回る（撮影者が追って構図を作れるよう画面内を移動）
+                const sx = Math.sin(floatT * 0.55) * 3.8 + Math.sin(floatT * 0.27 + 1.3) * 1.8; // 横移動 ~±5.6
+                const sz = Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1;        // 前後移動 ~±3.5
+                const px = subject.baseX + sx;
+                const pz = this.mikuBaseZ + sz;
+                subject.vrm.scene.position.x = px;
+                // 浮遊bob ＋ 拍頭で腰を落とす沈み込み（膝バウンス連動）＋ 小節頭の軽いホップ
+                subject.vrm.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.05
+                    - beatPulse * this.grooveConfig.hipDrop * (this.isClimax ? 1.4 : 1.0)
+                    + this._barAccent * this.grooveConfig.hop * (this.isClimax ? 1.4 : 0.6);
+                subject.vrm.scene.position.z = pz;
+                // 常にカメラ（撮影者）の方へ正面を向ける（既定カメラでは π=正面。回り込んでも正面を維持）
+                subject.vrm.scene.rotation.y =
+                    Math.atan2(this.camera.position.x - px, this.camera.position.z - pz) + Math.PI;
                 subject.vrm.scene.rotation.z = Math.sin(floatT * 0.7) * 0.012;
+
+                // 被写体ライトを追従させ、移動中も立体的に照らす
+                if (this.keyLight) this.keyLight.target.position.set(px, this.mikuBaseY + 1.2, pz);
+                if (this.rimLight) this.rimLight.target.position.set(px, this.mikuBaseY + 1.2, pz);
 
                 // VRM内部更新（表情・スプリングボーン等）
                 if (runVrmUpdate) subject.vrm.update(vrmStep);

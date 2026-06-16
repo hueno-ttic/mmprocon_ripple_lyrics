@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { BaseSong } from './BaseSong.js';
@@ -129,9 +130,10 @@ export class SongTricktology extends BaseSong {
         this.camera.position.set(0, 1.4, 13);
         // 注意: BaseSong.animate がパララックスで rotation を上書きするため lookAt は使わない
 
-        this.renderer = new THREE.WebGLRenderer({ antialias: !this.isMobile, alpha: true });
+        this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobile ? 1.5 : 2));
+        this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.__qpr = quality.effectivePixelRatio();
         this.renderer.domElement.style.touchAction = 'none'; // モバイルでドラッグを奪われない
         this.songWrapper.appendChild(this.renderer.domElement);
 
@@ -776,11 +778,14 @@ export class SongTricktology extends BaseSong {
             this._starColA = new THREE.Color(0x9a90e8);
             this._starColB = new THREE.Color(0xCFE8FF);
             this._sectionBlend = 0;
+            // 毎フレームの色補間用スクラッチ(clone割り当てを避けGCを減らす)
+            this._waterColMix = new THREE.Color();
+            this._starColMix = new THREE.Color();
         }
         this._sectionBlend += ((this.isClimax ? 1 : 0) - this._sectionBlend) * Math.min(1, delta * 1.8);
-        const wc = this._waterColA.clone().lerp(this._waterColB, this._sectionBlend);
+        const wc = this._waterColMix.copy(this._waterColA).lerp(this._waterColB, this._sectionBlend);
         this.waterUniforms.uColor.value.set(wc.r, wc.g, wc.b);
-        this.starMaterial.color.copy(this._starColA.clone().lerp(this._starColB, this._sectionBlend));
+        this.starMaterial.color.copy(this._starColMix.copy(this._starColA).lerp(this._starColB, this._sectionBlend));
         this.starMaterial.opacity = 0.55 + this._sectionBlend * 0.35;
         const swapTarget = THREE.MathUtils.smoothstep(this.waveEnergy, 0.55, 1.1);
         this.swapSmooth += (swapTarget - this.swapSmooth) * 0.12;

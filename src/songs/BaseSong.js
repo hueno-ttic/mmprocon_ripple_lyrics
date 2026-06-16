@@ -3,6 +3,7 @@ import { LyricRenderer } from '../ui/LyricRenderer.js';
 import { SONGS } from '../config/songs.js';
 import { appState } from '../core/appState.js';
 import { playerManager } from '../core/player.js';
+import { quality } from '../core/quality.js';
 
 export class BaseSong {
     constructor(container, songId) {
@@ -295,6 +296,8 @@ export class BaseSong {
         }
 
         this.update(time);
+        // 実FPSに応じて解像度を自動調整(全曲共通)。値が変わった時だけ反映。
+        if (this.renderer) quality.maybeApply(this.renderer, this.composer);
         this.render();
     }
 

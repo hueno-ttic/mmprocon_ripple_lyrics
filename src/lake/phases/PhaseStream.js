@@ -43,7 +43,9 @@ export class PhaseStream extends PhaseBase {
         };
 
         // valley terrain (banks + bed in one heightfield)
-        const TGEO = new THREE.PlaneGeometry(280, 260, 128, 118); TGEO.rotateX(-Math.PI / 2);
+        // 背景の谷地形。flatShadingなので高密度セグメントは見た目にほぼ寄与せず、
+        // 頂点数(=シャドウ/描画コスト)だけ嵩むため128×118→72×64に削減(約15k→4.7k頂点)。
+        const TGEO = new THREE.PlaneGeometry(280, 260, 72, 64); TGEO.rotateX(-Math.PI / 2);
         { const p = TGEO.attributes.position; const cols = new Float32Array(p.count * 3);
             const bedC = new THREE.Color(0x7d8a76), wetC = new THREE.Color(0x3f6b3a), bankC = new THREE.Color(0x4f9b35), hiC = new THREE.Color(0x77c44c), dryC = new THREE.Color(0x9fcf63);
             for (let i = 0; i < p.count; i++) { const x = p.getX(i), z = p.getZ(i); const y = terrainY(x, z); p.setY(i, y);
