@@ -66,6 +66,28 @@ export const SHUTTER_DANCE_PRESETS = [
     armStyle: 'handsOnHips',
     config: { gain: 0.85, climaxGain: 1.20, punch: 0.10, sway: 0.20, twist: 0.55, headNod: 0.20, kneeBounce: 0.12, step: 0.05, hipDrop: 0.04, hop: 0.04, armSway: 0.08, armBob: 0.05, armPump: 0.18, shoulder: 0.04 },
   },
+  // ── ラウンド2(30体探索→審査→実描画検証で採用)──
+  {
+    name: 'burikko_face_pop',
+    label: 'ぶりっ子顔よせポップ',
+    concept: '顔の横に手を寄せ、頭・肩・腕を小刻みに弾ませる元気ぶりっ子。サビは手を突き上げて笑顔',
+    armStyle: 'faceHands',
+    config: { gain: 1.05, climaxGain: 1.50, punch: 0.10, sway: 0.16, twist: 0.30, headNod: 0.20, kneeBounce: 0.20, step: 0.09, hipDrop: 0.05, hop: 0.11, armSway: 0.10, armBob: 0.20, armPump: 0.60, shoulder: 0.11 },
+  },
+  {
+    name: 'cute_step_touch',
+    label: 'キュートステップタッチ',
+    concept: '左右への足踏みステップで体重を運び、ピースを拍ごとに弾ませてカメラ目線で魅せる横ノリ',
+    armStyle: 'peace',
+    config: { gain: 1.08, climaxGain: 1.42, punch: 0.11, sway: 0.23, twist: 0.22, headNod: 0.15, kneeBounce: 0.18, step: 0.26, hipDrop: 0.06, hop: 0.10, armSway: 0.16, armBob: 0.24, armPump: 0.56, shoulder: 0.09 },
+  },
+  {
+    name: 'idol_appeal_lr',
+    label: 'アイドル王道アピール',
+    concept: 'カメラ正面で左右交互に重心を移しながら腕を差し出す王道アイドルのアピール振り',
+    armStyle: 'appeal',
+    config: { gain: 1.10, climaxGain: 1.50, punch: 0.12, sway: 0.27, twist: 0.24, headNod: 0.18, kneeBounce: 0.24, step: 0.13, hipDrop: 0.07, hop: 0.13, armSway: 0.30, armBob: 0.26, armPump: 0.66, shoulder: 0.09 },
+  },
 ];
 
 // 既定で使う最も汎用的に可愛いプリセット
