@@ -49,6 +49,21 @@ class QualityManager {
         this._monitorOn = false;
 
         this._startMonitor();
+        this._bindViewportChange();
+    }
+
+    // devicePixelRatio は固定値ではなく、外部ディスプレイへの移動やブラウザズームで
+    // 変わりうる。tier(bloom/shadows/antialias)は作成時固定なので再計算しないが、
+    // 実行時に安全な dpr / isMobile だけは追従させる。effectivePixelRatio() が
+    // this.dpr を都度参照するため、次フレームの maybeApply() で解像度に反映される。
+    _bindViewportChange() {
+        const onChange = () => {
+            this.dpr = window.devicePixelRatio || 1;
+            this.isMobile = window.innerWidth < 768
+                || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+        };
+        window.addEventListener('resize', onChange);
+        window.addEventListener('orientationchange', onChange);
     }
 
     get tier() { return this.tiers[this.tierIndex]; }

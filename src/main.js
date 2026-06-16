@@ -6,13 +6,20 @@ import { PlayerControls } from './ui/PlayerControls.js';
 import { VolumeControl } from './ui/VolumeControl.js';
 import { SONGS } from './config/songs.js';
 import { BaseSong } from './songs/BaseSong.js';
-import { SongKotaete } from './songs/song-kotaete.js';
-import { SongAfter } from './songs/song-after.js';
-import { SongShutter } from './songs/song-shutter.js';
-import { SongOrchestra } from './songs/song-orchestra.js';
-import { SongTricktology } from './songs/song-tricktology.js';
-import { SongTakeover } from './songs/song-takeover.js';
 import { CompletionScreen } from './ui/CompletionScreen.js';
+
+// 曲シーンは1曲ずつしか遊ばないので、静的importで全曲(+pixi/three-vrm)を
+// 初回バンドルに同梱するのは無駄。曲ごとに dynamic import() し、選んだ曲の
+// チャンクだけを遅延ロードする(初回ロードを大幅に軽量化)。
+// 遷移はカーテン(ScreenFade)で覆われているため、このロード待ちは隠れる。
+const SONG_LOADERS = {
+    kotaete: () => import('./songs/song-kotaete.js').then(m => m.SongKotaete),
+    after: () => import('./songs/song-after.js').then(m => m.SongAfter),
+    shutter: () => import('./songs/song-shutter.js').then(m => m.SongShutter),
+    orchestra: () => import('./songs/song-orchestra.js').then(m => m.SongOrchestra),
+    tricktology: () => import('./songs/song-tricktology.js').then(m => m.SongTricktology),
+    takeover: () => import('./songs/song-takeover.js').then(m => m.SongTakeover),
+};
 import { TitleScreen } from './ui/TitleScreen.js';
 import { StoryIntro } from './ui/StoryIntro.js';
 import { screenFade } from './ui/ScreenFade.js';
@@ -281,25 +288,32 @@ class Application {
         }, 2800);
     }
 
-    switchToSongScene(songConfig) {
+    async switchToSongScene(songConfig) {
         if (this.currentSongScene) {
             this.currentSongScene.destroy();
+            this.currentSongScene = null;
         }
 
         document.body.style.backgroundImage = 'none';
         document.body.style.backgroundColor = '#000000';
 
-        let SongClass;
-        switch(songConfig.id) {
-            case 'kotaete': SongClass = SongKotaete; break;
-            case 'after': SongClass = SongAfter; break;
-            case 'shutter': SongClass = SongShutter; break;
-            case 'orchestra': SongClass = SongOrchestra; break;
-            case 'tricktology': SongClass = SongTricktology; break;
-            case 'takeover': SongClass = SongTakeover; break;
-            default: SongClass = BaseSong; break;
+        // 最新の遷移だけを反映するためのトークン(チャンク待ちの間に別曲へ
+        // 切り替わったら、古いロードの結果は破棄する)
+        const token = (this._sceneToken = (this._sceneToken || 0) + 1);
+
+        let SongClass = BaseSong;
+        const loader = SONG_LOADERS[songConfig.id];
+        if (loader) {
+            try {
+                SongClass = await loader();
+            } catch (err) {
+                console.error(`[Lake Sonare] 曲チャンクのロードに失敗: ${songConfig.id}`, err);
+                SongClass = BaseSong;
+            }
         }
-        
+        // ロード中に別の曲へ切り替わっていたら、この結果は捨てる
+        if (token !== this._sceneToken) return;
+
         this.currentSongScene = new SongClass(this.sceneContainer, songConfig.id);
         this.currentSongScene.init();
     }
