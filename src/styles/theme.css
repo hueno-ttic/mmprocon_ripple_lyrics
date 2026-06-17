@@ -790,13 +790,13 @@
     border: 1px dashed rgba(255, 255, 255, 0.08);
 }
 
-/* Decoded lyric tile styling */
+/* Decoded lyric tile styling — 解読済み = 緑(奪還) */
 .to-tile.decoded {
     color: #fff;
-    background: rgba(255, 58, 58, 0.25);
-    border: 1px solid #ff3a3a;
-    text-shadow: 0 0 8px #ff3a3a, 0 0 15px #ff3a3a;
-    box-shadow: 0 0 10px rgba(255, 58, 58, 0.4);
+    background: rgba(0, 255, 170, 0.22);
+    border: 1px solid #00ffaa;
+    text-shadow: 0 0 8px #00ffaa, 0 0 15px #00ffaa;
+    box-shadow: 0 0 10px rgba(0, 255, 170, 0.4);
     animation: toTilePlace 0.5s ease-out forwards;
 }
 
