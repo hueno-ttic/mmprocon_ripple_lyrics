@@ -44,6 +44,7 @@ export class SongTakeover extends BaseSong {
         this.erosionEl = null;           // 赤侵食オーバーレイ
         this._erosionStage = 0;          // 0〜4 の侵食段階（CSSクラス切替）
         this._completeFired = false;     // TAKEOVER COMPLETE は一度だけ
+        this._completeLeadMs = 8000;     // 曲終わりの何ms前に完走演出を起動するか
         this._rebootTimers = [];         // 再起動シーケンスのタイマー群
         this.rebootEl = null;
         // 侵食カラー補間用（シーン背景: 無機質な紫 → 赤黒）
@@ -61,6 +62,12 @@ export class SongTakeover extends BaseSong {
         this._mikuColorRed = new THREE.Color(0xff3a3a);  // 侵食色（赤）
         this._mikuAnchorColor = new THREE.Color(0x00ffaa);
         this._mikuTakeRatio = 0;            // 直近の解読率（脈動の色補間に使用）
+        // ── 完走演出: 歌詞爆散 → シアン逆転 → ミク実体化 ──
+        this._mikuReclaim = false;          // 完走時にtrue: アンカーをヒーロー化（シアン固定）
+        this._reclaimT = 0;                 // 実体化ランプ進捗 0→1
+        this.mikuGlowSprite = null;         // 背後のシアン逆光グロー
+        this.mikuGlowMat = null;
+        this.mikuGlowTexture = null;
 
         this.boundOnResize = this.onResize.bind(this);
     }
@@ -179,6 +186,33 @@ export class SongTakeover extends BaseSong {
         // 画面中央付近・デブリ層より少し手前の奥行き
         this.mikuAnchorSprite.position.set(0, 0.5, -4);
         this.scene.add(this.mikuAnchorSprite);
+
+        // 背後のシアン逆光グロー（完走の実体化でだけ点灯。普段は不可視）
+        const gsize = 256;
+        const gcanvas = document.createElement('canvas');
+        gcanvas.width = gsize;
+        gcanvas.height = gsize;
+        const gctx = gcanvas.getContext('2d');
+        const grad = gctx.createRadialGradient(gsize / 2, gsize / 2, 0, gsize / 2, gsize / 2, gsize / 2);
+        grad.addColorStop(0, 'rgba(0,255,170,0.9)');
+        grad.addColorStop(0.4, 'rgba(0,255,170,0.35)');
+        grad.addColorStop(1, 'rgba(0,255,170,0)');
+        gctx.fillStyle = grad;
+        gctx.fillRect(0, 0, gsize, gsize);
+
+        this.mikuGlowTexture = new THREE.CanvasTexture(gcanvas);
+        this.mikuGlowMat = new THREE.SpriteMaterial({
+            map: this.mikuGlowTexture,
+            color: this._mikuColorCyan.clone(),
+            transparent: true,
+            opacity: 0,                    // 完走まで消灯
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+        this.mikuGlowSprite = new THREE.Sprite(this.mikuGlowMat);
+        this.mikuGlowSprite.scale.set(7, 7, 1);
+        this.mikuGlowSprite.position.set(0, 0.5, -4.2); // シルエットより少し奥
+        this.scene.add(this.mikuGlowSprite);
     }
 
     initUI() {
@@ -413,6 +447,18 @@ export class SongTakeover extends BaseSong {
                     text-shadow: 0 0 8px rgba(255, 58, 58, 0.7);
                     box-shadow: 0 0 12px rgba(255, 58, 58, 0.3), inset 0 0 8px rgba(255, 58, 58, 0.15);
                 }
+                /* 100%奪還: 世界がミクのシアンへ塗り替わる */
+                .to-reclaim .to-monitor { border-color: #00ffaa; box-shadow: 0 0 50px rgba(0, 255, 170, 0.7), inset 0 0 70px rgba(0, 255, 170, 0.4); }
+                .to-reclaim .to-monitor-header { color: #b0ffe6; border-bottom-color: rgba(0, 255, 170, 0.6); background: rgba(0, 255, 170, 0.18); }
+                .to-reclaim .to-monitor-footer { color: #90ffd8; border-top-color: rgba(0, 255, 170, 0.5); background: rgba(0, 255, 170, 0.12); }
+                .to-reclaim .to-monitor-status::before { background: #00ffaa; box-shadow: 0 0 10px #00ffaa; }
+                .to-reclaim .to-monitor-dot.green,
+                .to-reclaim .to-monitor-dot.yellow { background: #00ffaa; }
+                .to-reclaim .to-monitor-grid {
+                    background-image:
+                        linear-gradient(rgba(0, 255, 170, 0.07) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(0, 255, 170, 0.07) 1px, transparent 1px);
+                }
                 /* ── コンボ表示 ── */
                 @keyframes toComboPop {
                     0%   { transform: translateX(-50%) scale(1.6); opacity: 0; }
@@ -501,6 +547,9 @@ export class SongTakeover extends BaseSong {
                     animation: toCursorBlink 0.7s step-end infinite;
                 }
                 .to-reboot-line.shown:not(:last-child)::after { content: none; }
+                /* 奪還版: ログをシアンに */
+                .to-reboot-overlay.reclaim .to-reboot-lines { color: #00ffaa; text-shadow: 0 0 10px #00ffaa; }
+                .to-reboot-overlay.reclaim .to-reboot-line.final { text-shadow: 0 0 20px #00ffaa, 0 0 50px #00ffaa; }
             `;
             document.head.appendChild(style);
         }
@@ -574,10 +623,7 @@ export class SongTakeover extends BaseSong {
             });
         }
 
-        // 解読率100%到達で一度だけ TAKEOVER COMPLETE
-        if (ratio >= 1 && this.totalCount > 0 && !this._completeFired) {
-            this._triggerComplete();
-        }
+        // 完走演出は曲終わりの約8秒前に update() 側で起動する（解読率には依らない）。
     }
 
     // ── 侵食演出: 解読率に応じて画面が段階的に赤く染まる ────────────────
@@ -900,16 +946,21 @@ export class SongTakeover extends BaseSong {
         if (this._completeFired) return;
         this._completeFired = true;
 
+        // 0) 静止/吸気: 解読済みの全タイルを一斉にシアンで満たす（タメ）
+        Object.values(this.bgTiles).forEach(tile => {
+            if (tile) tile.classList.add('to-charge');
+        });
+
         const overlay = document.createElement('div');
-        overlay.className = 'to-reboot-overlay';
+        overlay.className = 'to-reboot-overlay reclaim';
         const linesWrap = document.createElement('div');
         linesWrap.className = 'to-reboot-lines';
 
         const bootLines = [
             '> SYSTEM HALT :: ALL SECTORS DECRYPTED',
-            '> REBOOTING HOST ............ DENIED',
-            '> INJECTING PALETTE #FF3A3A .. OK',
-            '> OWNERSHIP TRANSFERRED',
+            '> PURGING PALETTE #FF3A3A ... OK',
+            '> RESTORING SIGNAL #00FFAA .. OK',
+            '> OWNERSHIP RECLAIMED',
             'TAKEOVER COMPLETE'
         ];
         const lineEls = bootLines.map((text, i) => {
@@ -927,51 +978,88 @@ export class SongTakeover extends BaseSong {
             this._rebootTimers.push(setTimeout(() => { if (this.isActive) fn(); }, ms));
         };
 
-        // 1) ブラックアウト
-        requestAnimationFrame(() => {
-            if (this.isActive && overlay.parentNode) overlay.classList.add('on');
-        });
-
-        // 2) 再起動風テキストを順次表示
-        lineEls.forEach((line, i) => {
-            schedule(() => line.classList.add('shown'), 700 + i * 650);
-        });
-
-        // 3) 世界を完全に自分の色（赤一色）へ
-        const totalMs = 700 + bootLines.length * 650 + 900;
+        // 1) 歌詞の爆散: 各タイルを画面中心から外向きに吹き飛ばす（衝撃波）
         schedule(() => {
-            this.songWrapper.classList.add('to-complete');
-            this._erosionStage = 4;
-            // シーンを深紅へ
+            const cxv = window.innerWidth / 2;
+            const cyv = window.innerHeight / 2;
+            const push = 0.9 * Math.max(window.innerWidth, window.innerHeight);
+            Object.values(this.bgTiles).forEach(tile => {
+                if (!tile) return;
+                const rect = tile.getBoundingClientRect();
+                const tcx = rect.left + rect.width / 2;
+                const tcy = rect.top + rect.height / 2;
+                let dx = tcx - cxv;
+                let dy = tcy - cyv;
+                const dist = Math.hypot(dx, dy) || 1;
+                const tx = (dx / dist) * push + dx * 0.4;
+                const ty = (dy / dist) * push + dy * 0.4;
+                const rot = (Math.random() - 0.5) * 720;
+                const sc = 0.3 + Math.random() * 0.5;
+                tile.style.transform = `translate(${tx}px, ${ty}px) rotate(${rot}deg) scale(${sc})`;
+                tile.classList.remove('to-charge');
+                tile.classList.add('to-burst');
+            });
+        }, 480);
+
+        // 2) ブラックアウト（空になった盤面を覆う）
+        schedule(() => {
+            if (overlay.parentNode) overlay.classList.add('on');
+        }, 980);
+
+        // 3) 奪還ログを順次表示
+        const lineBase = 1200;
+        lineEls.forEach((line, i) => {
+            schedule(() => line.classList.add('shown'), lineBase + i * 600);
+        });
+
+        // 4) 暗転から明けると、世界はミクのシアンに塗り替わり、奥からミクが実体化
+        const totalMs = lineBase + bootLines.length * 600 + 700;
+        schedule(() => {
+            this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3');
+            this.songWrapper.classList.add('to-reclaim');
+            this._erosionStage = 0;
+            // シーンを深いシアンへ
             if (this.scene && this.scene.background && this.scene.background.isColor) {
-                this.scene.background.setHex(0x3a0008);
-                if (this.scene.fog) this.scene.fog.color.setHex(0x3a0008);
+                this.scene.background.setHex(0x001712);
+                if (this.scene.fog) this.scene.fog.color.setHex(0x001712);
             }
             if (this._debrisMat) {
-                this._debrisMat.color.setHex(0xff3a3a);
-                this._debrisMat.opacity = 0.75;
+                this._debrisMat.color.setHex(0x00ffaa);
+                this._debrisMat.opacity = 0.5;
             }
-            if (this.erosionEl) this.erosionEl.style.opacity = window.innerWidth < 768 ? '0.6' : '0.85';
+            // 赤い侵食オーバーレイを消す
+            if (this.erosionEl) this.erosionEl.style.opacity = '0';
+            // 敵の端末(CRTモニター)を溶かし、奥のミクを前面へ露わにする
+            // ※稼働中のフリッカーanimationはopacityを上書きするので止めてからフェード
+            if (this.monitorEl) {
+                this.monitorEl.style.animation = 'none';
+                this.monitorEl.style.transition = 'opacity 1.1s ease';
+                this.monitorEl.style.opacity = '0';
+            }
             if (this.scoreEl) {
-                this.scoreEl.textContent = 'TAKEOVER: COMPLETE';
-                this.scoreEl.style.color = '#ff3a3a';
-                this.scoreEl.style.textShadow = '0 0 24px #ff3a3a, 0 0 48px #ff3a3a';
+                this.scoreEl.textContent = 'TAKEOVER: RECLAIMED';
+                this.scoreEl.style.color = '#00ffaa';
+                this.scoreEl.style.textShadow = '0 0 24px #00ffaa, 0 0 48px #00ffaa';
             }
+            // ミクの実体化ランプ開始（update内でシアン固定・前進・発光）
+            this._reclaimT = 0;
+            this._mikuReclaim = true;
+            // 暗転を明ける（1.2sフェードでシアンの世界とミクが現れる）
             overlay.classList.remove('on');
             overlay.classList.add('off');
         }, totalMs);
 
-        // 4) オーバーレイ除去
+        // 5) オーバーレイ除去
         schedule(() => {
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             if (this.rebootEl === overlay) this.rebootEl = null;
-        }, totalMs + 1400);
+        }, totalMs + 1600);
 
         // 最終成果を登録
         this.setResultSummary({
-            lines: [`解読率 100% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER COMPLETE'],
-            accentColor: '#FF3A3A',
-            swatch: '#FF3A3A'
+            lines: [`解読率 100% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER RECLAIMED'],
+            accentColor: '#00FFAA',
+            swatch: '#00FFAA'
         });
     }
 
@@ -1055,6 +1143,15 @@ export class SongTakeover extends BaseSong {
             ? playerManager.player.findChorus(position) : null;
         this.isClimax = !!chorus;
 
+        // ── 完走演出の起動: 曲終わりの約8秒前に発火（解読率に依らず必ず出す） ──
+        // 演出(約6.5s)を songEnd の黒幕(通常 duration-50ms)より前に出し切るためのリード。
+        if (!this._completeFired) {
+            const duration = playerManager.player.video.duration;
+            if (duration > 0 && position >= duration - this._completeLeadMs) {
+                this._triggerComplete();
+            }
+        }
+
         // Chorus: tighten contrast to signal intensity shift
         if (this.isClimax !== this.prevIsClimax) {
             this.songWrapper.style.filter = this.isClimax ? 'contrast(1.25) saturate(1.6)' : '';
@@ -1071,21 +1168,42 @@ export class SongTakeover extends BaseSong {
         // ── ミクの視覚アンカー: リズムに合わせて淡く脈動 ──
         // サビ(isClimax)で少し速く・強く、解読率に応じてシアン→赤へ寄せる。
         if (this.mikuAnchorSprite && this.mikuAnchorMat) {
-            const speed = this.isClimax ? 0.085 : 0.05;
-            this._mikuAnchorPhase += speed;
-            const pulse = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
-            // 透明度は過剰にしない（サビでわずかに底上げ）
-            const base = this.isClimax ? 0.18 : 0.13;
-            const amp = this.isClimax ? 0.16 : 0.09;
-            this.mikuAnchorMat.opacity = base + pulse * amp;
-            // ごく僅かにスケールも呼吸させる
-            const s = 7 + pulse * (this.isClimax ? 0.5 : 0.25);
-            this.mikuAnchorSprite.scale.set(s, s, 1);
-            // 侵食が進むほど赤へ
-            this._mikuAnchorColor.lerpColors(
-                this._mikuColorCyan, this._mikuColorRed, this._mikuTakeRatio
-            );
-            this.mikuAnchorMat.color.copy(this._mikuAnchorColor);
+            if (this._mikuReclaim) {
+                // ── 完走: ミクが奥から実体化（シアン固定・前進・逆光発光） ──
+                this._reclaimT = Math.min(1, this._reclaimT + 0.012);
+                const ease = 1 - Math.pow(1 - this._reclaimT, 3); // easeOutCubic
+                this._mikuAnchorPhase += 0.04;
+                const breathe = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
+                this.mikuAnchorMat.color.copy(this._mikuColorCyan); // シアン固定（赤寄せを上書き）
+                this.mikuAnchorMat.opacity = Math.min(1, (0.16 + ease * 0.84) - breathe * 0.05 * ease);
+                const s = 7 + ease * 6; // 7 → 13
+                this.mikuAnchorSprite.scale.set(s, s, 1);
+                this.mikuAnchorSprite.position.z = -4 + ease * 2;   // -4 → -2 前進
+                this.mikuAnchorSprite.position.y = 0.5 + ease * 0.4;
+                if (this.mikuGlowMat && this.mikuGlowSprite) {
+                    this.mikuGlowMat.opacity = ease * (0.4 + breathe * 0.18);
+                    const gs = 8 + ease * 11; // シルエットより一回り大きい逆光
+                    this.mikuGlowSprite.scale.set(gs, gs, 1);
+                    this.mikuGlowSprite.position.y = this.mikuAnchorSprite.position.y;
+                    this.mikuGlowSprite.position.z = this.mikuAnchorSprite.position.z - 0.2;
+                }
+            } else {
+                const speed = this.isClimax ? 0.085 : 0.05;
+                this._mikuAnchorPhase += speed;
+                const pulse = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
+                // 透明度は過剰にしない（サビでわずかに底上げ）
+                const base = this.isClimax ? 0.18 : 0.13;
+                const amp = this.isClimax ? 0.16 : 0.09;
+                this.mikuAnchorMat.opacity = base + pulse * amp;
+                // ごく僅かにスケールも呼吸させる
+                const s = 7 + pulse * (this.isClimax ? 0.5 : 0.25);
+                this.mikuAnchorSprite.scale.set(s, s, 1);
+                // 侵食が進むほど赤へ
+                this._mikuAnchorColor.lerpColors(
+                    this._mikuColorCyan, this._mikuColorRed, this._mikuTakeRatio
+                );
+                this.mikuAnchorMat.color.copy(this._mikuAnchorColor);
+            }
         }
 
         // At phrase boundary: expire remaining scrambled targets after a 2-second delay
@@ -1152,7 +1270,9 @@ export class SongTakeover extends BaseSong {
             this.comboEl.parentNode.removeChild(this.comboEl);
             this.comboEl = null;
         }
-        this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3', 'to-complete');
+        this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3', 'to-complete', 'to-reclaim');
+        this._mikuReclaim = false;
+        this._reclaimT = 0;
 
         this.phraseTargets.forEach(t => {
             clearInterval(t.scrambleTimer);
@@ -1170,6 +1290,14 @@ export class SongTakeover extends BaseSong {
         }
         if (this.mikuAnchorMat)     { this.mikuAnchorMat.dispose();     this.mikuAnchorMat = null; }
         if (this.mikuAnchorTexture) { this.mikuAnchorTexture.dispose(); this.mikuAnchorTexture = null; }
+
+        // 背後グローも除去・解放
+        if (this.mikuGlowSprite) {
+            this.scene.remove(this.mikuGlowSprite);
+            this.mikuGlowSprite = null;
+        }
+        if (this.mikuGlowMat)     { this.mikuGlowMat.dispose();     this.mikuGlowMat = null; }
+        if (this.mikuGlowTexture) { this.mikuGlowTexture.dispose(); this.mikuGlowTexture = null; }
 
         const styleEl = document.getElementById('takeover-style');
         if (styleEl) styleEl.parentNode.removeChild(styleEl);
