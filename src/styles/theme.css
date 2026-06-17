@@ -805,6 +805,23 @@
     100% { opacity: 1; transform: scale(1); }
 }
 
+/* 完走演出: タイルをシアンで満たす(タメ) → 外向きに爆散 */
+.to-tile.to-charge {
+    color: #001a14;
+    background: rgba(0, 255, 170, 0.85);
+    border: 1px solid #00ffaa;
+    text-shadow: none;
+    box-shadow: 0 0 16px rgba(0, 255, 170, 0.75);
+    animation: none;
+    transition: all 0.3s ease-out;
+}
+.to-tile.to-burst {
+    opacity: 0;
+    pointer-events: none;
+    animation: none;
+    transition: transform 0.85s cubic-bezier(0.2, 0.7, 0.2, 1), opacity 0.85s ease-out;
+}
+
 @media (max-width: 768px) {
     .to-tile {
         font-size: 10px;

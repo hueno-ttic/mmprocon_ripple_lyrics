@@ -74,7 +74,7 @@ npm run dev
 [main.js](../src/main.js) `Application` がエントリ。
 1. `PlayerControls` / `VolumeControl` 初期化、`playerManager.init()` で TextAlive Player 生成。
 2. プロローグ（[StoryIntro.js](../src/ui/StoryIntro.js)）→ 完了で `WorldUI`（湖の世界）生成。再訪（`mm_seen_intro`）や `?skipIntro=1` でスキップ。
-3. 湖で曲を選ぶと、その曲の `Song*` クラスをインスタンス化してシーン遷移（[ScreenFade.js](../src/ui/ScreenFade.js) でクロスディゾルブ）。
+3. 湖で曲を選ぶと、その曲の `Song*` クラスを **動的 `import()` で遅延ロード**してインスタンス化しシーン遷移（[ScreenFade.js](../src/ui/ScreenFade.js) でクロスディゾルブ）。曲チャンク（＋pixi/three-vrm）は初回バンドルに含めず、選択時のみ取得する（`main.js` の `SONG_LOADERS`／`switchToSongScene`）。遷移カーテンがロード待ちを隠す。
 
 `main.js` には、Chrome/iOS のメディア割り込み（AbortError）や TextAlive の並列ロード競合を握りつぶす `unhandledrejection` ハンドラがある（クラッシュ扱いしないため）。
 
@@ -135,7 +135,7 @@ npm run dev
 - 問い:「この瞬間を永遠にできるか」。Vo. は初音ミク & 鏡音リン（デュエット曲）。
 - 体験: クリック/Enter でシャッター。ステージ奥のミクも一緒に写る。サビやデュエット中の撮影は★ベストショット。撮った写真は終盤にフィルムロールで戻る（最大12枚）。
 - ミク: **被写体で主役**。ズーム機構 `camera.fov=75/zoomLevel`(0.6〜2.5)。**三点照明**（ambient を抑えコントラスト、`keyLight` で顔/身体、`rimLight`=ティールで輪郭分離）。カメラは被写体中心の **オービット（回り込み）**（`orbitPivot=(0,0,-16.5)`, `orbitRadius=26.5`）。歌詞スプライトは毎フレーム `pivot + localOffset.applyQuaternion(camera.quaternion)` でカメラ追従させ常に正面・読みやすく保つ。
-- **保留**: デュエット2体目（リン）は **VRM素材が未着**（`model_miku.vrm` のみ）。素材が届いたら2体化。
+- **実装済**: デュエット2体目の鏡音リン（`model_rin.vrm`）が到着・配線済み。shutter は ミク＋リンの2体を読み込む（`song-shutter.js`）。リンは Vo.鏡音リンの「トリツクロジー」でも使用。
 
 ### 4-4. 世界最後の音楽隊（orchestra）— [song-orchestra.js](../src/songs/song-orchestra.js)
 - 問い:「空はどんな色？あなたはどんなカタチ？」
