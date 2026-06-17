@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
+import { eventBus } from '../core/eventBus.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 
@@ -36,6 +37,16 @@ export class SongAfter extends BaseSong {
         this.themeColor = '#1D9E75';
         this.mouse = new THREE.Vector2(0, 0);
 
+        // スポットライト: 押している(クリック/タップ)間だけ照らす
+        this.isPointerDown = false;
+        this.spotOn = 0;                    // 0=消灯 → 1=点灯(押下中) を滑らかに補間
+
+        // 赤い緞帳(ミク背後の3D背景幕): 開演で上から降りてきて、そのまま留まる(閉幕しない)
+        this._curtainDropped = false;
+        this.curtainHiddenY = 30;           // 開演前: フレーム上方に退避(見えない)
+        this.curtainRestY = 2;              // 開演後: ミク背後の定位置(降り切った状態)
+        this.curtainTex = null;
+
         // 残光システム
         this.kindledCount = 0;              // 照らし切った歌詞の累計
         this.litThreshold = 1400;           // 照らし切り判定に必要な累計照射時間(ms)
@@ -69,6 +80,8 @@ export class SongAfter extends BaseSong {
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnPointerMove = this.onPointerMove.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
+        this.boundOnPointerUp = this.onPointerUp.bind(this);
+        this.boundDropCurtain = () => this.dropCurtain();
     }
 
     relNow() {
@@ -88,6 +101,11 @@ export class SongAfter extends BaseSong {
         // pointermove/pointerdown でマウス・タッチを統一処理
         this.songWrapper.addEventListener('pointermove', this.boundOnPointerMove);
         this.songWrapper.addEventListener('pointerdown', this.boundOnPointerDown);
+        // 押下の解除はウィンドウ全体で拾う(要素外で離しても確実に消灯)
+        window.addEventListener('pointerup', this.boundOnPointerUp);
+        window.addEventListener('pointercancel', this.boundOnPointerUp);
+        // 再生開始(スタート押下)でミク背後に緞帳が降りてくる
+        eventBus.on('play', this.boundDropCurtain);
 
         this.isActive = true;
         super.init();
@@ -131,11 +149,11 @@ export class SongAfter extends BaseSong {
         this.scene.add(this.floor);
 
         // Ambient Light (Very dim, so spotlight effects are dramatic)
-        this.ambientLight = new THREE.AmbientLight(0x081512);
+        this.ambientLight = new THREE.AmbientLight(0x081512, 0.5);
         this.scene.add(this.ambientLight);
 
-        // Dramatic Sweeping Spotlight (automatic)
-        this.spotLight = new THREE.SpotLight(0xffffff, 80);
+        // Dramatic Sweeping Spotlight (automatic / faint stage wash)
+        this.spotLight = new THREE.SpotLight(0xffffff, 22);
         this.spotLight.position.set(0, 20, -2);
         this.spotLight.angle = Math.PI / 6;
         this.spotLight.penumbra = 0.6;
@@ -157,8 +175,8 @@ export class SongAfter extends BaseSong {
         // 滑らかな追従用ターゲット
         this._spotTargetGoal = new THREE.Vector3(0, 0.1, 0);
 
-        // Subtle colored point light for theme mood
-        this.pointLight = new THREE.PointLight(new THREE.Color(this.themeColor), 25, 25);
+        // Subtle colored point light for theme mood (控えめ: スポット以外は薄暗く)
+        this.pointLight = new THREE.PointLight(new THREE.Color(this.themeColor), 8, 25);
         this.pointLight.position.set(0, 3, 0);
         this.scene.add(this.pointLight);
 
@@ -181,15 +199,19 @@ export class SongAfter extends BaseSong {
         this.scene.add(this.rimLight);
         this.scene.add(this.rimLight.target);
 
-        // The Curtain - backstage backdrop (Z = -5)
-        const curtainGeo = new THREE.PlaneGeometry(40, 22);
+        // 赤い緞帳 — ミク背後(Z=-5)の背景幕。開演で上方から降りてくる。
+        const curtainGeo = new THREE.PlaneGeometry(44, 24);
+        this.curtainTex = this.createCurtainTexture();
         const curtainMat = new THREE.MeshStandardMaterial({
-            color: new THREE.Color(0x0b3d2e),
+            map: this.curtainTex,
+            color: 0xffffff,
+            emissive: new THREE.Color(0x3a0509), // 暗がりでも赤がほのかに沈んで見えるように
             roughness: 0.95,
+            metalness: 0.0,
             side: THREE.DoubleSide
         });
         this.curtain = new THREE.Mesh(curtainGeo, curtainMat);
-        this.curtain.position.set(0, 6, -5); // Closed Y=6, opens up to Y=18
+        this.curtain.position.set(0, this.curtainHiddenY, -5); // 開演前はフレーム上方に退避
         this.scene.add(this.curtain);
 
         // 共有バラジオメトリ/マテリアル
@@ -339,6 +361,44 @@ export class SongAfter extends BaseSong {
         if (this.kindledCount > 0) this.counterEl.classList.add('visible');
     }
 
+    // ─── 赤い緞帳: 開演でミク背後に上から降りてくる(閉幕しない) ───
+    dropCurtain() {
+        this._curtainDropped = true;
+    }
+
+    // ベロアの赤い緞帳テクスチャ(縦ひだ + 上下の陰影 + 裾の金モール)
+    createCurtainTexture() {
+        const c = document.createElement('canvas');
+        c.width = 512; c.height = 512;
+        const ctx = c.getContext('2d');
+        // 縦ひだ: x方向に明暗を周期変化させてベロアの折り目を表現
+        const folds = 16;
+        for (let x = 0; x < 512; x++) {
+            const shade = Math.sin(x / 512 * folds * Math.PI * 2) * 0.5 + 0.5; // 0..1
+            const r = Math.round(38 + shade * 130);
+            const g = Math.round(2 + shade * 18);
+            const b = Math.round(6 + shade * 24);
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            ctx.fillRect(x, 0, 1, 512);
+        }
+        // 上下の陰影(天地を落ち着かせる)
+        const vg = ctx.createLinearGradient(0, 0, 0, 512);
+        vg.addColorStop(0.0, 'rgba(0,0,0,0.55)');
+        vg.addColorStop(0.18, 'rgba(0,0,0,0)');
+        vg.addColorStop(0.88, 'rgba(0,0,0,0)');
+        vg.addColorStop(1.0, 'rgba(0,0,0,0.5)');
+        ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, 512, 512);
+        // 裾の金モール
+        const fg = ctx.createLinearGradient(0, 474, 0, 512);
+        fg.addColorStop(0.0, 'rgba(214,176,86,0)');
+        fg.addColorStop(0.6, 'rgba(214,176,86,0.7)');
+        fg.addColorStop(1.0, 'rgba(150,110,40,0.95)');
+        ctx.fillStyle = fg;
+        ctx.fillRect(0, 474, 512, 38);
+        return new THREE.CanvasTexture(c);
+    }
+
     onResize() {
         if (!this.camera || !this.renderer) return;
         this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -356,12 +416,25 @@ export class SongAfter extends BaseSong {
 
     onPointerMove(event) {
         if (!this.isActive || this.finaleP > 0.05) return;
+        // 押している(クリック/タップ)間だけスポットライトが追尾する
+        if (!this.isPointerDown) return;
         this.updateSpotFromClient(event.clientX, event.clientY);
+    }
+
+    onPointerUp() {
+        // 指/ボタンを離したら消灯(spotOnが滑らかに0へ落ちる)
+        this.isPointerDown = false;
     }
 
     onPointerDown(event) {
         if (!this.isActive || !this.renderer || !this.camera) return;
         if (this.finaleP > 0.05) return; // 終演中は操作を受けない
+
+        // 押下開始: ここから照射が点灯し、ドラッグで追尾する
+        this.isPointerDown = true;
+        if (event.pointerId != null && this.songWrapper.setPointerCapture) {
+            try { this.songWrapper.setPointerCapture(event.pointerId); } catch (e) { /* noop */ }
+        }
 
         // タップ位置にもスポットライトを即移動 (タッチではmoveより先にdownが来る)
         this.updateSpotFromClient(event.clientX, event.clientY);
@@ -441,18 +514,72 @@ export class SongAfter extends BaseSong {
         const ctx = canvas.getContext('2d');
         ctx.fillStyle = 'rgba(0,0,0,0)';
         ctx.fillRect(0, 0, 1024, 128);
-        ctx.font = 'bold 72px "Noto Serif JP", "Yu Mincho", serif';
+
+        // 長い歌詞でも端が切れないよう、テキスト幅を計測してフォントを自動縮小する
+        const maxWidth = 1024 - 80; // 左右パディング
+        let fontSize = 72;
+        const minFont = 34;
+        do {
+            ctx.font = `bold ${fontSize}px "Noto Serif JP", "Yu Mincho", serif`;
+            if (ctx.measureText(text).width <= maxWidth) break;
+            fontSize -= 4;
+        } while (fontSize > minFont);
+
         ctx.fillStyle = '#ffffff';
         ctx.shadowColor = '#000000';
         ctx.shadowBlur = 12;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(text, 512, 64);
-        return new THREE.CanvasTexture(canvas);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = 4;
+        return tex;
+    }
+
+    // ─── フレーズを文法的に意味のある単位で「もう少しだけ」短く区切る ───
+    // 句読点・空白で必ず切り、長い節は助詞・接続のあとで近い中点を選んで分割する。
+    // 文法的な切れ目が見つからない場合は無理に割らず、そのまま1つとして扱う。
+    splitPhraseText(text) {
+        const src = (text || '').trim();
+        if (!src) return [];
+        const SOFT_MAX = 14; // これ以下はそのまま出す(=もう少しだけ短く、過分割しない)
+        // 「直後で切っても語を割らない」助詞・記号に限定する。
+        // よ/ね/か/な/さ/っ など語中に紛れやすい字は誤分割を招くので含めない。
+        const PARTICLE = 'はがをにへとでもやの、。，．！？・…」』';
+
+        const splitOnce = (s) => {
+            if (s.length <= SOFT_MAX) return [s];
+            const mid = s.length / 2;
+            let best = -1, bestDist = Infinity;
+            // 末尾以外で、助詞などの直後(=区切って意味が通る位置)を中点近くから探す
+            for (let i = 1; i < s.length - 1; i++) {
+                if (PARTICLE.indexOf(s[i]) !== -1) {
+                    const d = Math.abs((i + 1) - mid);
+                    if (d < bestDist) { bestDist = d; best = i + 1; }
+                }
+            }
+            if (best <= 0 || best >= s.length) return [s]; // 自然な切れ目なし → 割らない
+            return [s.slice(0, best).trim(), s.slice(best).trim()].filter(Boolean);
+        };
+
+        // 明示的な区切り(空白・読点)でまず割ってから、長い節をさらに一段分割
+        const out = [];
+        for (const part of src.split(/[\s、，]+/).filter(Boolean)) {
+            for (const seg of splitOnce(part)) out.push(seg);
+        }
+        return out.length ? out : [src];
     }
 
     spawnText(phrase, spawnTime) {
-        const texture = this.createTextTexture(phrase.text);
+        const chunks = this.splitPhraseText(phrase.text);
+        // 区切った各チャンクを、読む順に少し時間差を付けて出す
+        for (let ci = 0; ci < chunks.length; ci++) {
+            this.spawnTextChunk(chunks[ci], spawnTime + ci * 450);
+        }
+    }
+
+    spawnTextChunk(text, spawnTime) {
+        const texture = this.createTextTexture(text);
 
         const material = new THREE.MeshStandardMaterial({
             map: texture,
@@ -485,7 +612,7 @@ export class SongAfter extends BaseSong {
             kindleFlash: 0,
             baseY: mesh.position.y,
             spinFactor: (Math.random() - 0.5) * 0.15,
-            text: phrase.text
+            text: text
         };
 
         mesh.scale.set(1, 1, 1);
@@ -728,11 +855,15 @@ export class SongAfter extends BaseSong {
         const f = this.finaleP;
         const stageDim = 1 - f;
 
-        // 照明フェード
-        this.spotLight.intensity = 80 * stageDim;
-        this.mouseLight.intensity = 90 * stageDim;
-        this.pointLight.intensity = 25 * stageDim;
-        this.ambientLight.intensity = Math.max(0.06, stageDim);
+        // 押している間だけ点灯。離すと滑らかに消灯する
+        const spotGoal = (this.isPointerDown && f < 0.05) ? 1 : 0;
+        this.spotOn += (spotGoal - this.spotOn) * Math.min(1, dt * 8);
+
+        // 照明フェード (スポット以外は薄暗く保つ)
+        this.spotLight.intensity = 22 * stageDim;
+        this.mouseLight.intensity = 130 * stageDim * this.spotOn; // 押下中のみ照射
+        this.pointLight.intensity = 8 * stageDim;
+        this.ambientLight.intensity = Math.max(0.04, 0.5 * stageDim);
         // 客席の灯: 数に応じて暖かく。終演時はそれだけが世界を照らす
         const seatGlow = Math.min(1, this.seatLights.length / 40);
         this.audienceLight.intensity = seatGlow * (1.8 + f * 7.0);
@@ -743,14 +874,12 @@ export class SongAfter extends BaseSong {
             this.counterEl.classList.add('visible');
         }
 
-        // 1. Curtain & Starry Sky (サビで開く。終演時は閉じて静寂へ)
-        if (this.isClimax && f < 0.3) {
-            this.curtain.position.y += (18 - this.curtain.position.y) * 0.04;
-            if (this.stars) this.stars.material.opacity += (0.9 - this.stars.material.opacity) * 0.04;
-        } else {
-            this.curtain.position.y += (6 - this.curtain.position.y) * 0.04;
-            if (this.stars) this.stars.material.opacity += (0.0 - this.stars.material.opacity) * 0.04;
-        }
+        // 1. 緞帳 — 開演で上方からミク背後へすっと降り、そのまま留まる(閉幕しない)
+        const curtainTargetY = this._curtainDropped ? this.curtainRestY : this.curtainHiddenY;
+        this.curtain.position.y += (curtainTargetY - this.curtain.position.y) * Math.min(1, dt * 1.6);
+        // 星空: サビは緞帳の上の夜空が瞬く
+        const starTarget = (this.isClimax && f < 0.3) ? 0.9 : 0.0;
+        if (this.stars) this.stars.material.opacity += (starTarget - this.stars.material.opacity) * 0.04;
 
         // 自動スイープスポットライト (相対秒で駆動)
         this.spotLight.position.x = Math.sin(rel * 0.8) * 8;
@@ -789,9 +918,10 @@ export class SongAfter extends BaseSong {
             const spotTarget = this.mouseLight.target.position;
             // sqrtを避け2乗距離で比較(4.2 → 4.2²)。毎フレーム×全スプライトの平方根を削減。
             const distToSpotSq = mesh.position.distanceToSquared(spotTarget);
-            // サビは舞台全体が照らされ、すべての歌詞が浮かび上がる
-            // (受動的に聴いていても楽曲の見せ場が伝わる)
-            const isIlluminated = (distToSpotSq < 4.2 * 4.2 || this.isClimax) && f < 0.3;
+            // スポットライトは押下中のみ有効(spotOn)。サビは舞台全体が照らされ、
+            // すべての歌詞が浮かび上がる(受動的に聴いていても見せ場が伝わる)。
+            const litBySpot = distToSpotSq < 4.2 * 4.2 && this.spotOn > 0.4;
+            const isIlluminated = (litBySpot || this.isClimax) && f < 0.3;
             const targetProgress = isIlluminated ? 1.0 : 0.0;
             ud.hoverProgress += (targetProgress - ud.hoverProgress) * 0.08;
             const p = ud.hoverProgress;
@@ -868,10 +998,11 @@ export class SongAfter extends BaseSong {
                 }
             } else if (!ud.toLamp && !ud.fading) {
                 // 床のバラをスポットライトでじっくり照らすと、灯に変わって客席へ
+                // (押下中=spotOnのときだけ照射が効く)
                 const spot = this.mouseLight.target.position;
                 const dx = mesh.position.x - spot.x;
                 const dz = mesh.position.z - spot.z;
-                if (dx * dx + dz * dz < 3.2) {
+                if (this.spotOn > 0.4 && dx * dx + dz * dz < 3.2) {
                     ud.roseLit = (ud.roseLit || 0) + dt * 1000;
                     if (ud.roseLit >= 900 && this.relNow() - (this._lastRoseLamp || 0) > 0.45) {
                         this._lastRoseLamp = this.relNow();
@@ -925,6 +1056,9 @@ export class SongAfter extends BaseSong {
 
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
+        window.removeEventListener('pointerup', this.boundOnPointerUp);
+        window.removeEventListener('pointercancel', this.boundOnPointerUp);
+        eventBus.off('play', this.boundDropCurtain);
         if (this.songWrapper) {
             this.songWrapper.removeEventListener('pointermove', this.boundOnPointerMove);
             this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
@@ -963,6 +1097,7 @@ export class SongAfter extends BaseSong {
         }
         if (this.curtain) {
             this.curtain.geometry.dispose();
+            if (this.curtain.material.map) this.curtain.material.map.dispose();
             this.curtain.material.dispose();
         }
 
