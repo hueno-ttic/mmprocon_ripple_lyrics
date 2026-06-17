@@ -47,9 +47,9 @@ export class SongTakeover extends BaseSong {
         this._completeLeadMs = 8000;     // 曲終わりの何ms前に完走演出を起動するか
         this._rebootTimers = [];         // 再起動シーケンスのタイマー群
         this.rebootEl = null;
-        // 侵食カラー補間用（シーン背景: 無機質な紫 → 赤黒）
-        this._bgColorFrom = new THREE.Color(0x1a0028);
-        this._bgColorTo = new THREE.Color(0x33000a);
+        // 奪還カラー補間用（シーン背景: 敵に支配された赤 → 奪還したシアン）
+        this._bgColorFrom = new THREE.Color(0x2a0008);
+        this._bgColorTo = new THREE.Color(0x001712);
 
         // ── ミクの視覚アンカー（軽量ツインテール・シルエット） ──
         // 他5曲はVRMミクが登場するが、TAKEOVERだけ不在で密度差が出るため、
@@ -98,8 +98,8 @@ export class SongTakeover extends BaseSong {
 
     initThree() {
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0x1a0028);
-        this.scene.fog = new THREE.FogExp2(0x1a0028, 0.018);
+        this.scene.background = new THREE.Color(0x2a0008);
+        this.scene.fog = new THREE.FogExp2(0x2a0008, 0.018);
 
         this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
         this.camera.position.set(0, 0, 10);
@@ -116,7 +116,7 @@ export class SongTakeover extends BaseSong {
         const tmp = new THREE.TetrahedronGeometry(0.7, 0);
         this._debrisEdgesGeo = new THREE.EdgesGeometry(tmp);
         tmp.dispose();
-        this._debrisMat = new THREE.LineBasicMaterial({ color: 0x5a1060, transparent: true, opacity: 0.55 });
+        this._debrisMat = new THREE.LineBasicMaterial({ color: 0x8c1430, transparent: true, opacity: 0.55 });
 
         for (let i = 0; i < 18; i++) {
             const m = new THREE.LineSegments(this._debrisEdgesGeo, this._debrisMat);
@@ -225,8 +225,8 @@ export class SongTakeover extends BaseSong {
                     50%      { opacity:1;    }
                 }
                 @keyframes toDecodeFlash {
-                    0%   { text-shadow:0 0 30px #ff3a3a, 0 0 60px #ff3a3a; letter-spacing:10px; }
-                    100% { text-shadow:0 0 12px #ff3a3a; letter-spacing:2px; }
+                    0%   { text-shadow:0 0 30px #00ffaa, 0 0 60px #00ffaa; letter-spacing:10px; }
+                    100% { text-shadow:0 0 12px #00ffaa; letter-spacing:2px; }
                 }
                 @keyframes toFadeOut {
                     to { opacity:0; transform:translateY(-24px); }
@@ -238,7 +238,7 @@ export class SongTakeover extends BaseSong {
                     text-align:left;
                     padding:12px 28px;
                     background:#05000a; /* Solid black/purple background, no transparency */
-                    border:1px solid rgba(0, 255, 170, 0.3);
+                    border:1px solid rgba(255, 58, 58, 0.3);
                     letter-spacing:2px;
                     pointer-events:auto;
                     user-select:none;
@@ -254,28 +254,30 @@ export class SongTakeover extends BaseSong {
                         padding: 10px 20px; /* Easy-to-tap large padding on mobile */
                     }
                 }
+                /* 暗号化された歌詞 = 赤(敵に支配されたロック状態) */
                 .to-phrase.scrambled {
-                    color:#00ffaa;
+                    color:#ff3a3a;
                     cursor:pointer;
-                    border-color: rgba(0, 255, 170, 0.6);
-                    text-shadow: 0 0 8px rgba(0, 255, 170, 0.6);
-                    box-shadow: 0 0 12px rgba(0, 255, 170, 0.2), inset 0 0 8px rgba(0, 255, 170, 0.1);
+                    border-color: rgba(255, 58, 58, 0.6);
+                    text-shadow: 0 0 8px rgba(255, 58, 58, 0.6);
+                    box-shadow: 0 0 12px rgba(255, 58, 58, 0.2), inset 0 0 8px rgba(255, 58, 58, 0.1);
                     animation:toScramblePulse .75s ease-in-out infinite;
                 }
                 .to-phrase.scrambled:hover {
                     color:#ffffff;
-                    border-color:#00ffaa;
-                    box-shadow: 0 0 25px rgba(0, 255, 170, 0.8), inset 0 0 12px rgba(0, 255, 170, 0.3);
-                    text-shadow: 0 0 12px #00ffaa;
+                    border-color:#ff3a3a;
+                    box-shadow: 0 0 25px rgba(255, 58, 58, 0.8), inset 0 0 12px rgba(255, 58, 58, 0.3);
+                    text-shadow: 0 0 12px #ff3a3a;
                     transform: scale(1.06);
                 }
                 .to-phrase.scrambled:active {
                     transform: scale(0.95);
-                    box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
+                    box-shadow: 0 0 10px rgba(255, 58, 58, 0.5);
                 }
+                /* 解読された歌詞 = 緑(奪還) */
                 .to-phrase.decoded {
-                    color:#ff3a3a;
-                    border-color:#ff3a3a;
+                    color:#00ffaa;
+                    border-color:#00ffaa;
                     cursor:default;
                     pointer-events:none;
                     animation:toDecodeFlash .35s ease-out forwards;
@@ -301,12 +303,12 @@ export class SongTakeover extends BaseSong {
                     left: 5%;
                     width: 90%;
                     height: 72%;
-                    background: radial-gradient(circle, rgba(16, 2, 28, 0.88) 0%, rgba(5, 0, 10, 0.96) 100%);
-                    border: 2px solid #5a1060;
+                    background: radial-gradient(circle, rgba(24, 3, 8, 0.88) 0%, rgba(8, 0, 2, 0.96) 100%);
+                    border: 2px solid #8c1430;
                     border-radius: 8px;
-                    box-shadow: 
-                        0 0 25px rgba(90, 16, 96, 0.55),
-                        inset 0 0 40px rgba(90, 16, 96, 0.45);
+                    box-shadow:
+                        0 0 25px rgba(180, 24, 48, 0.55),
+                        inset 0 0 40px rgba(150, 20, 48, 0.45);
                     z-index: 5;
                     pointer-events: none;
                     overflow: hidden;
@@ -317,11 +319,11 @@ export class SongTakeover extends BaseSong {
                     align-items: center;
                     gap: 6px;
                     padding: 8px 16px;
-                    background: rgba(90, 16, 96, 0.15);
-                    border-bottom: 1px solid rgba(90, 16, 96, 0.3);
+                    background: rgba(140, 16, 40, 0.16);
+                    border-bottom: 1px solid rgba(160, 24, 48, 0.3);
                     font-family: "Courier New", monospace;
                     font-size: 11px;
-                    color: #b549c0;
+                    color: #d05068;
                     letter-spacing: 1px;
                 }
                 .to-monitor-dot {
@@ -357,9 +359,9 @@ export class SongTakeover extends BaseSong {
                     left: 0;
                     width: 100%;
                     height: 100%;
-                    background-image: 
-                        linear-gradient(rgba(90, 16, 96, 0.05) 1px, transparent 1px),
-                        linear-gradient(90deg, rgba(90, 16, 96, 0.05) 1px, transparent 1px);
+                    background-image:
+                        linear-gradient(rgba(180, 30, 46, 0.05) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(180, 30, 46, 0.05) 1px, transparent 1px);
                     background-size: 40px 40px;
                     background-position: center;
                     z-index: 1;
@@ -373,11 +375,11 @@ export class SongTakeover extends BaseSong {
                     display: flex;
                     justify-content: space-between;
                     padding: 8px 16px;
-                    background: rgba(90, 16, 96, 0.08);
-                    border-top: 1px solid rgba(90, 16, 96, 0.2);
+                    background: rgba(140, 16, 40, 0.08);
+                    border-top: 1px solid rgba(160, 24, 48, 0.2);
                     font-family: "Courier New", monospace;
                     font-size: 10px;
-                    color: rgba(181, 73, 192, 0.7);
+                    color: rgba(208, 80, 104, 0.7);
                     letter-spacing: 1px;
                     z-index: 3;
                 }
@@ -391,9 +393,9 @@ export class SongTakeover extends BaseSong {
                     display: inline-block;
                     width: 6px;
                     height: 6px;
-                    background: #27c93f;
+                    background: #ff3a3a;
                     border-radius: 50%;
-                    box-shadow: 0 0 8px #27c93f;
+                    box-shadow: 0 0 8px #ff3a3a;
                 }
                 @media (max-width: 768px) {
                     .to-monitor-header {
@@ -412,8 +414,8 @@ export class SongTakeover extends BaseSong {
                     top: 0; left: 0;
                     width: 100%; height: 100%;
                     background:
-                        linear-gradient(rgba(255, 58, 58, 0) 50%, rgba(120, 0, 10, 0.18) 50%),
-                        radial-gradient(circle at 50% 50%, rgba(255, 58, 58, 0.10) 0%, rgba(120, 0, 10, 0.34) 100%);
+                        linear-gradient(rgba(0, 255, 170, 0) 50%, rgba(0, 80, 56, 0.16) 50%),
+                        radial-gradient(circle at 50% 50%, rgba(0, 255, 170, 0.10) 0%, rgba(0, 80, 56, 0.30) 100%);
                     background-size: 100% 4px, 100% 100%;
                     mix-blend-mode: screen;
                     opacity: 0;
@@ -421,19 +423,22 @@ export class SongTakeover extends BaseSong {
                     pointer-events: none;
                     z-index: 6;
                 }
-                /* ── 侵食段階: ターミナル枠・ヘッダ・走査線が紫→赤へ ── */
-                .to-erode-1 .to-monitor { border-color: #6e1448; box-shadow: 0 0 25px rgba(140, 16, 70, 0.5), inset 0 0 40px rgba(120, 16, 70, 0.4); }
-                .to-erode-2 .to-monitor { border-color: #8c1430; box-shadow: 0 0 28px rgba(180, 24, 48, 0.5), inset 0 0 45px rgba(150, 20, 48, 0.42); }
-                .to-erode-2 .to-monitor-header { color: #d05068; border-bottom-color: rgba(160, 24, 48, 0.4); background: rgba(140, 16, 40, 0.16); }
-                .to-erode-3 .to-monitor { border-color: #c81e2e; box-shadow: 0 0 34px rgba(255, 58, 58, 0.55), inset 0 0 55px rgba(200, 30, 46, 0.45); }
-                .to-erode-3 .to-monitor-header { color: #ff7a7a; border-bottom-color: rgba(255, 58, 58, 0.4); background: rgba(200, 30, 46, 0.18); }
-                .to-erode-3 .to-monitor-footer { color: rgba(255, 122, 122, 0.8); border-top-color: rgba(255, 58, 58, 0.3); background: rgba(200, 30, 46, 0.1); }
+                /* ── 奪還段階: ターミナル枠・ヘッダ・走査線が 赤(敵) → 緑(奪還) へ ── */
+                .to-erode-1 .to-monitor { border-color: #b0562a; box-shadow: 0 0 25px rgba(190, 100, 40, 0.5), inset 0 0 40px rgba(170, 90, 40, 0.4); }
+                .to-erode-1 .to-monitor-header { color: #e08a4a; border-bottom-color: rgba(190, 100, 40, 0.4); background: rgba(150, 80, 30, 0.16); }
+                .to-erode-1 .to-monitor-status::before { background: #ff8a3a; box-shadow: 0 0 8px #ff8a3a; }
+                .to-erode-2 .to-monitor { border-color: #8a9a2a; box-shadow: 0 0 28px rgba(150, 180, 50, 0.5), inset 0 0 45px rgba(130, 160, 50, 0.42); }
+                .to-erode-2 .to-monitor-header { color: #c0d050; border-bottom-color: rgba(150, 180, 50, 0.4); background: rgba(110, 130, 30, 0.16); }
+                .to-erode-2 .to-monitor-status::before { background: #d0e030; box-shadow: 0 0 8px #d0e030; }
+                .to-erode-3 .to-monitor { border-color: #1c9e7e; box-shadow: 0 0 34px rgba(0, 255, 170, 0.5), inset 0 0 55px rgba(0, 200, 140, 0.42); }
+                .to-erode-3 .to-monitor-header { color: #80ffd0; border-bottom-color: rgba(0, 255, 170, 0.4); background: rgba(0, 130, 90, 0.18); }
+                .to-erode-3 .to-monitor-footer { color: rgba(128, 255, 208, 0.8); border-top-color: rgba(0, 255, 170, 0.3); background: rgba(0, 130, 90, 0.1); }
                 .to-erode-3 .to-monitor-grid {
                     background-image:
-                        linear-gradient(rgba(255, 58, 58, 0.07) 1px, transparent 1px),
-                        linear-gradient(90deg, rgba(255, 58, 58, 0.07) 1px, transparent 1px);
+                        linear-gradient(rgba(0, 255, 170, 0.07) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(0, 255, 170, 0.07) 1px, transparent 1px);
                 }
-                .to-erode-3 .to-monitor-status::before { background: #ffbd2e; box-shadow: 0 0 8px #ffbd2e; }
+                .to-erode-3 .to-monitor-status::before { background: #00ffaa; box-shadow: 0 0 8px #00ffaa; }
                 /* 100%: 世界が完全に赤一色 */
                 .to-complete .to-monitor { border-color: #ff3a3a; box-shadow: 0 0 50px rgba(255, 58, 58, 0.8), inset 0 0 70px rgba(255, 58, 58, 0.45); }
                 .to-complete .to-monitor-header { color: #ffb0b0; border-bottom-color: rgba(255, 58, 58, 0.6); background: rgba(255, 58, 58, 0.22); }
@@ -474,8 +479,8 @@ export class SongTakeover extends BaseSong {
                     font-size: 18px;
                     font-weight: bold;
                     letter-spacing: 5px;
-                    color: #ff3a3a;
-                    text-shadow: 0 0 14px #ff3a3a, 0 0 30px #ff3a3a88;
+                    color: #00ffaa;
+                    text-shadow: 0 0 14px #00ffaa, 0 0 30px #00ffaa88;
                     pointer-events: none;
                     z-index: 21;
                     display: none;
@@ -489,12 +494,12 @@ export class SongTakeover extends BaseSong {
                 }
                 /* コンボ中の解読エフェクト強化 */
                 @keyframes toComboDecodeFlash {
-                    0%   { text-shadow: 0 0 45px #ff3a3a, 0 0 90px #ff3a3a, 0 0 120px #ffffff; letter-spacing: 14px; }
-                    100% { text-shadow: 0 0 16px #ff3a3a; letter-spacing: 2px; }
+                    0%   { text-shadow: 0 0 45px #00ffaa, 0 0 90px #00ffaa, 0 0 120px #ffffff; letter-spacing: 14px; }
+                    100% { text-shadow: 0 0 16px #00ffaa; letter-spacing: 2px; }
                 }
                 .to-phrase.decoded.to-combo-boost {
                     animation: toComboDecodeFlash 0.45s ease-out forwards;
-                    box-shadow: 0 0 35px rgba(255, 58, 58, 0.9), inset 0 0 14px rgba(255, 58, 58, 0.4);
+                    box-shadow: 0 0 35px rgba(0, 255, 170, 0.9), inset 0 0 14px rgba(0, 255, 170, 0.4);
                 }
                 /* ── TAKEOVER COMPLETE: ブラックアウト→再起動シーケンス ── */
                 .to-reboot-overlay {
@@ -607,9 +612,13 @@ export class SongTakeover extends BaseSong {
         if (!this.scoreEl) return;
         this.scoreEl.textContent = `TAKEOVER: ${this.takenCount} / ${this.totalCount}`;
         const ratio = this.totalCount > 0 ? this.takenCount / this.totalCount : 0;
-        const r = Math.min(255, 50 + Math.round(ratio * 205));
-        this.scoreEl.style.color = `rgb(${r},18,28)`;
-        this.scoreEl.style.textShadow = `0 0 ${5 + ratio*18}px #ff3a3a`;
+        // 解読率に応じて 赤(敵) → 緑(奪還) へ
+        const cr = Math.round(255 - ratio * 235);
+        const cg = Math.round(40 + ratio * 215);
+        const cb = Math.round(40 + ratio * 120);
+        const shadow = ratio < 0.5 ? '#ff3a3a' : '#00ffaa';
+        this.scoreEl.style.color = `rgb(${cr},${cg},${cb})`;
+        this.scoreEl.style.textShadow = `0 0 ${5 + ratio*18}px ${shadow}`;
 
         this._applyErosion(ratio);
 
@@ -618,15 +627,15 @@ export class SongTakeover extends BaseSong {
         if (!this._completeFired) {
             this.setResultSummary({
                 lines: [`解読率 ${Math.round(ratio * 100)}% ・ 最大コンボ ${this.maxCombo}`],
-                accentColor: '#FF3A3A',
-                swatch: '#FF3A3A'
+                accentColor: '#00FFAA',
+                swatch: '#00FFAA'
             });
         }
 
         // 完走演出は曲終わりの約8秒前に update() 側で起動する（解読率には依らない）。
     }
 
-    // ── 侵食演出: 解読率に応じて画面が段階的に赤く染まる ────────────────
+    // ── 奪還演出: 解読率に応じて画面が赤(敵)→緑(奪還)へ段階的に染まる ──────
     _applyErosion(ratio) {
         // ミクのアンカー色補間用に解読率を保持（実際の色付けは毎フレームのupdateで）
         this._mikuTakeRatio = ratio;
@@ -638,7 +647,7 @@ export class SongTakeover extends BaseSong {
             this.erosionEl.style.opacity = (ratio * maxOpacity).toFixed(3);
         }
 
-        // 段階クラス切替（0%無機質 → 100%赤）
+        // 段階クラス切替（0%=赤い敵領域 → 100%=緑に奪還）
         const stage = this._completeFired ? 4
             : ratio >= 0.75 ? 3
             : ratio >= 0.5  ? 2
@@ -652,14 +661,14 @@ export class SongTakeover extends BaseSong {
             }
         }
 
-        // Three.js 背景・フォグも赤へ補間
+        // Three.js 背景・フォグ: 赤(敵) → シアン(奪還)へ補間
         if (this.scene && this.scene.background && this.scene.background.isColor) {
             this.scene.background.lerpColors(this._bgColorFrom, this._bgColorTo, ratio);
             if (this.scene.fog) this.scene.fog.color.copy(this.scene.background);
         }
-        // デブリのワイヤーフレームも赤味を帯びる
+        // デブリのワイヤーフレームも 赤 → 緑 へ
         if (this._debrisMat) {
-            this._debrisMat.color.setHex(0x5a1060).lerp(new THREE.Color(0xc81e2e), ratio);
+            this._debrisMat.color.setHex(0x8c1430).lerp(new THREE.Color(0x00ffaa), ratio);
         }
     }
 
@@ -1198,9 +1207,9 @@ export class SongTakeover extends BaseSong {
                 // ごく僅かにスケールも呼吸させる
                 const s = 7 + pulse * (this.isClimax ? 0.5 : 0.25);
                 this.mikuAnchorSprite.scale.set(s, s, 1);
-                // 侵食が進むほど赤へ
+                // 奪還が進むほど 赤(敵) → 緑(ミク) へ
                 this._mikuAnchorColor.lerpColors(
-                    this._mikuColorCyan, this._mikuColorRed, this._mikuTakeRatio
+                    this._mikuColorRed, this._mikuColorCyan, this._mikuTakeRatio
                 );
                 this.mikuAnchorMat.color.copy(this._mikuAnchorColor);
             }

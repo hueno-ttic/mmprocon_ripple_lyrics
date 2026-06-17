@@ -151,9 +151,9 @@ export const SONGS = [
     waterBehavior: 'explosion',
     tutorial: {
       steps: [
-        { icon: '💻', text: '暗号化された歌詞をクリック(タップ)して解読します' },
-        { icon: '🔥', text: '4秒以内に連続解読でコンボ！解読するほど世界が赤く侵食される' },
-        { icon: '⚡', text: '解読率100%で TAKEOVER COMPLETE — 世界を完全に奪い取れ' },
+        { icon: '💻', text: '赤く暗号化された歌詞をクリック(タップ)して解読します' },
+        { icon: '🔓', text: '4秒以内に連続解読でコンボ！解読した歌詞は緑に、世界も徐々に奪還される' },
+        { icon: '✨', text: '曲の終盤、解読した歌詞が爆散して初音ミクが実体化する' },
       ]
     }
   }
