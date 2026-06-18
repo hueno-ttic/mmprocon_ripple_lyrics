@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { settleSpringBones } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 
@@ -339,6 +340,7 @@ export class SongTricktology extends BaseSong {
             vrm.scene.rotation.y = 0; // カメラ正面
             vrm.scene.scale.setScalar(this.mikuScale);
             this.setupRelaxedPose(vrm);
+            settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
             this.cacheMaterials(vrm, this.realMatCache);
             this.upperGroup.add(vrm.scene);
             console.log('[TRICKTOLOGY] Real Miku loaded.');
@@ -354,6 +356,7 @@ export class SongTricktology extends BaseSong {
                 vrm.scene.rotation.z = Math.PI; // 足元(原点)を軸に上下反転 → 水鏡の像
                 vrm.scene.scale.setScalar(this.mikuScale);
                 this.setupRelaxedPose(vrm);
+                settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
                 this.cacheMaterials(vrm, this.mirrorMatCache);
                 this.lowerGroup.add(vrm.scene);
                 console.log('[TRICKTOLOGY] Mirror Miku loaded.');

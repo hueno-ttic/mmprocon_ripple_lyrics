@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { settleSpringBones } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { addRipple, getRipples } from '../lake/lakeMemory.js';
@@ -282,6 +283,7 @@ export class SongKotaete extends BaseSong {
                 vrm.scene.rotation.y = Math.PI; // 背中向きで先導
                 this.mikuRotY = Math.PI;
                 this.setupGlidePose(vrm);
+                settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
                 this.mikuLoaded = true;
 
                 // ミクの背後にほのかな光輪
