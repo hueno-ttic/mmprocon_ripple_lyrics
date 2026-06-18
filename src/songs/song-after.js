@@ -430,6 +430,12 @@ export class SongAfter extends BaseSong {
         if (!this.isActive || !this.renderer || !this.camera) return;
         if (this.finaleP > 0.05) return; // 終演中は操作を受けない
 
+        // 3Dキャンバス直上の押下だけを受け付ける。songWrapper で pointerdown を
+        // フックしているため、上に重なるDOM UI(チュートリアルの「スタート」ボタン等)の
+        // 押下もここに伝播してくる。その場合に setPointerCapture でポインタを奪うと
+        // ボタンの click イベントが発火せず、チュートリアルから先へ進めなくなる。
+        if (event.target !== this.renderer.domElement) return;
+
         // 押下開始: ここから照射が点灯し、ドラッグで追尾する
         this.isPointerDown = true;
         if (event.pointerId != null && this.songWrapper.setPointerCapture) {
