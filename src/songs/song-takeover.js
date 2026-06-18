@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
-import { eventBus } from '../core/eventBus.js';
 import { groupPhraseWordsByMinLength, findGroupForWord } from '../utils/lyricGroups.js';
 
 export class SongTakeover extends BaseSong {
@@ -34,6 +33,7 @@ export class SongTakeover extends BaseSong {
         this.cardMargin = 0; // no extra margin for decoded tiles
         this.allGroups = [];
         this.bgTiles = {};
+        this.lyricCardBuilt = false; // 歌詞カード構築済みフラグ（update内で遅延構築・成功時にtrue）
 
         // ── 侵食 / コンボ / TAKEOVER COMPLETE 用の状態 ──
         this.combo = 0;                  // 現在の連続解読数
@@ -81,18 +81,12 @@ export class SongTakeover extends BaseSong {
         window.addEventListener('resize', this.boundOnResize);
         this.isActive = true;
 
-        if (playerManager.player && playerManager.player.video) {
-            this.buildLyricCard();
-        } else {
-            this.boundBuildLyricCard = () => {
-                this.buildLyricCard();
-                eventBus.off('videoReady', this.boundBuildLyricCard);
-                eventBus.off('timerReady', this.boundBuildLyricCard);
-            };
-            eventBus.on('videoReady', this.boundBuildLyricCard);
-            eventBus.on('timerReady', this.boundBuildLyricCard);
-        }
-
+        // 歌詞カードの構築は update() 内で遅延実行する（buildLyricCard が
+        // isTimerReady と video.firstPhrase の両方が揃うまで毎フレーム再試行）。
+        // 旧実装は init 時に player.video の「存在」だけを見て一度だけ構築して
+        // いたため、video はあってもフレーズ未ロード／前曲の stale video の瞬間に
+        // 空のまま固定され、歌詞が一切出ないことがあった（ステージ選択へ戻って
+        // 入り直すと表示される、という症状の原因）。
         super.init();
     }
 
@@ -1073,7 +1067,14 @@ export class SongTakeover extends BaseSong {
     }
 
     buildLyricCard() {
-        if (!this.isActive || !playerManager.player || !playerManager.player.video) return;
+        // 現在の曲のフレーズが完全に揃うまで構築しない（揃うまで update から再試行）。
+        // video の存在だけでなく isTimerReady と firstPhrase を必須にすることで、
+        // 別曲の stale video やフレーズ未ロード状態で空構築するのを防ぐ。
+        if (!this.isActive || !playerManager.isTimerReady ||
+            !playerManager.player || !playerManager.player.video ||
+            !playerManager.player.video.firstPhrase) {
+            return false;
+        }
 
         const video = playerManager.player.video;
         this.allGroups = [];
@@ -1112,7 +1113,9 @@ export class SongTakeover extends BaseSong {
         }
 
         this.totalCount = index;
+        this.lyricCardBuilt = true;
         this.updateScore();
+        return true;
     }
 
     // Called externally (phrase boundary expire)
@@ -1143,6 +1146,12 @@ export class SongTakeover extends BaseSong {
 
     update() {
         if (!playerManager.player || !playerManager.player.video) return;
+
+        // 歌詞カードがまだ構築できていなければ、フレーズが揃い次第ここで構築する。
+        // （タイミング次第で init 時には video.firstPhrase が未ロードのことがあるため）
+        if (!this.lyricCardBuilt) {
+            this.buildLyricCard();
+        }
 
         // TextAlive公式タイマー(player.timer.position)に完全同期（先行調整を排除）
         const position = (playerManager.player && playerManager.player.timer)
@@ -1310,11 +1319,6 @@ export class SongTakeover extends BaseSong {
 
         const styleEl = document.getElementById('takeover-style');
         if (styleEl) styleEl.parentNode.removeChild(styleEl);
-
-        if (this.boundBuildLyricCard) {
-            eventBus.off('videoReady', this.boundBuildLyricCard);
-            eventBus.off('timerReady', this.boundBuildLyricCard);
-        }
 
         if (this.monitorEl && this.monitorEl.parentNode) {
             this.monitorEl.parentNode.removeChild(this.monitorEl);
