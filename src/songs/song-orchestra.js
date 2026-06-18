@@ -113,6 +113,17 @@ export class SongOrchestra extends BaseSong {
                 // Set initial relaxed pose
                 this.setupRelaxedPose(vrm);
 
+                // SpringBone の静止状態を最終ポーズ/スケールへスナップ。
+                // 構築時(VRMLoaderPlugin)の「素ポーズ・原点・スケール1」のまま
+                // 最初の update が走ると、ロード後に当てたトランスフォーム/初期ポーズとの
+                // ズレで髪(ツインテール)がフレーム1で跳ね上がる。これを防ぐため
+                // ポーズ適用直後にワールド行列を更新してから reset() する。
+                vrm.update(0);
+                vrm.scene.updateMatrixWorld(true);
+                if (vrm.springBoneManager) {
+                    vrm.springBoneManager.reset();
+                }
+
                 // Cache relaxed quaternions for active arms
                 const leftUpper = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
                 const rightUpper = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
