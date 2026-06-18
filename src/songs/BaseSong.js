@@ -106,15 +106,7 @@ export class BaseSong {
     showTutorial(songConfig) {
         const { tutorial, themeQuestion = '', color = '#7F77DD' } = songConfig;
 
-        // 曲ID(localStorage の既読判定キーに利用)
-        const songId = songConfig.id != null ? songConfig.id : this.songId;
-
-        // 同じ曲の2回目以降はチュートリアルを出さず、即・頭出し再生する
-        if (songId != null && localStorage.getItem(`mm_tut_${songId}`) === '1') {
-            this.isTutorialActive = false;
-            this._autoStartPlayback();
-            return;
-        }
+        // 全楽曲で毎回チュートリアルを表示する(既読スキップは行わない)
 
         // チュートリアル表示フラグを有効化
         this.isTutorialActive = true;
@@ -160,10 +152,6 @@ export class BaseSong {
 
         overlay.querySelector('.song-tutorial-btn').addEventListener('click', () => {
             dismiss();
-            // この曲のチュートリアルを既読として記録(次回以降は非表示)
-            if (songId != null) {
-                localStorage.setItem(`mm_tut_${songId}`, '1');
-            }
             // Start song playback immediately upon tutorial dismiss (with Web Audio unlock)
             this._autoStartPlayback();
         });
