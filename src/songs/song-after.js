@@ -4,6 +4,7 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { settleSpringBones } from '../utils/vrm.js';
 
 /**
  * アフター・ザ・カーテン — 「終わりの後に何が残るのか」
@@ -248,6 +249,7 @@ export class SongAfter extends BaseSong {
                     if (obj.isMesh) obj.castShadow = !this.isMobile;
                 });
                 this.setupRelaxedPose(vrm);
+                settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
                 console.log('[AFTER] Miku VRM loaded.');
             },
             undefined,

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { settleSpringBones } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
@@ -494,6 +495,7 @@ export class SongShutter extends BaseSong {
                     };
                     // 初期ポーズ（リラックス）を即適用
                     this.applySubjectPoseImmediate(subject, SHUTTER_MIKU_POSES[0]);
+                    settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
                     this.subjects.push(subject);
                     if (def.key === 'miku') this.mikuVRM = vrm; // ライト/破棄の後方互換参照
                     console.log(`[SHUTTER] ${def.key} VRM loaded successfully.`);

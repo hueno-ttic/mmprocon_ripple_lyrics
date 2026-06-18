@@ -5,6 +5,7 @@ import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
+import { settleSpringBones } from '../utils/vrm.js';
 
 export class SongOrchestra extends BaseSong {
     constructor(container, songId) {
@@ -112,6 +113,7 @@ export class SongOrchestra extends BaseSong {
                 
                 // Set initial relaxed pose
                 this.setupRelaxedPose(vrm);
+                settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
 
                 // Cache relaxed quaternions for active arms
                 const leftUpper = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
