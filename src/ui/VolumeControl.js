@@ -1,5 +1,6 @@
 import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
+import { stageRoot } from '../core/stage.js';
 
 /**
  * 全楽曲共通の音量コントロール(画面右下に常設)。
@@ -57,7 +58,7 @@ export class VolumeControl {
             <input class="app-volume-slider" type="range" min="0" max="100" step="1"
                    aria-label="音量" value="${this.volume}">
         `;
-        document.body.appendChild(this.el);
+        stageRoot().appendChild(this.el);
 
         this.muteBtn = this.el.querySelector('.app-volume-mute');
         this.slider = this.el.querySelector('.app-volume-slider');
@@ -93,8 +94,8 @@ export class VolumeControl {
         style.id = 'app-volume-style';
         style.textContent = `
             .app-volume-control {
-                position: fixed;
-                right: 12px;
+                position: absolute;
+                right: calc(12px + env(safe-area-inset-right, 0px));
                 top: 50%;
                 transform: translateY(-50%);
                 z-index: 1200;
@@ -159,7 +160,7 @@ export class VolumeControl {
                 /* モバイルでは中央右の本文・選曲ラベルに被るため、占有面積を小さくし
                    通常時は半透明にして背後の内容を読めるようにする(操作中は不透明に戻す) */
                 .app-volume-control {
-                    right: 6px;
+                    right: calc(6px + env(safe-area-inset-right, 0px));
                     padding: 8px 4px;
                     gap: 6px;
                     border-radius: 16px;

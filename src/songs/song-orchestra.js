@@ -5,7 +5,7 @@ import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
-import { settleSpringBones } from '../utils/vrm.js';
+import { settleSpringBones, anchorSpringBonesToModel } from '../utils/vrm.js';
 
 export class SongOrchestra extends BaseSong {
     constructor(container, songId) {
@@ -125,6 +125,10 @@ export class SongOrchestra extends BaseSong {
                 if (vrm.springBoneManager) {
                     vrm.springBoneManager.reset();
                 }
+
+                // SpringBoneの基準をモデルのルートへ固定し、タップ移動時の
+                // 並進慣性でツインテールが逆立つのを防ぐ。
+                anchorSpringBonesToModel(vrm);
 
                 // Cache relaxed quaternions for active arms
                 const leftUpper = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');

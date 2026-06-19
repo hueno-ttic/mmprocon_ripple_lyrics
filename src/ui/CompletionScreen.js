@@ -1,4 +1,5 @@
 import { SONGS } from '../config/songs.js';
+import { stageRoot } from '../core/stage.js';
 
 export class CompletionScreen {
     constructor() {
@@ -28,7 +29,7 @@ export class CompletionScreen {
         this.el = document.createElement('div');
         this.el.id = 'completion-screen';
         this.el.style.cssText = `
-            position: fixed; top: 0; left: 0;
+            position: absolute; top: 0; left: 0;
             width: 100%; height: 100%;
             background: rgba(2, 8, 15, 0);
             display: flex; flex-direction: column;
@@ -37,7 +38,7 @@ export class CompletionScreen {
             transition: background 1.2s ease;
             overflow: hidden;
         `;
-        document.body.appendChild(this.el);
+        stageRoot().appendChild(this.el);
 
         // Fade in background
         requestAnimationFrame(() => {

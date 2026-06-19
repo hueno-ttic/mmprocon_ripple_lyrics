@@ -23,7 +23,11 @@ body, html {
 
 #app {
     width: 100vw;
+    /* モバイルブラウザのアドレスバー/ツールバーで下端が隠れないよう、
+       表示中の領域に追従する動的ビューポート(dvh)で高さを取る。
+       dvh 非対応ブラウザ向けに 100vh をフォールバックに残す。 */
     height: 100vh;
+    height: 100dvh;
     position: relative;
 }
 
@@ -44,8 +48,16 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    padding: 30px 40px;
-    pointer-events: auto;
+    /* ノッチ/ステータスバーに被らないよう上端と左右にセーフエリアを加算
+       (viewport-fit=cover 時のみ env が効き、非対応時は 0px フォールバック) */
+    padding: calc(30px + env(safe-area-inset-top, 0px))
+             calc(40px + env(safe-area-inset-right, 0px))
+             30px
+             calc(40px + env(safe-area-inset-left, 0px));
+    /* 帯自体は装飾なので当たり判定を持たせない。選曲画面では中身(戻るボタン)が
+       display:none で空になるため、auto のままだと上の透明な帯が選曲パネルの
+       タップを奪ってしまう。操作要素にだけ pointer-events:auto を付け直す。 */
+    pointer-events: none;
     background: linear-gradient(180deg, rgba(0,0,0,0.6) 0%, transparent 100%);
 }
 
@@ -66,9 +78,22 @@ header {
 }
 
 footer {
-    padding: 30px 40px;
-    pointer-events: auto;
+    /* 下端はホームインジケータ/ツールバーぶんをセーフエリアで底上げ */
+    padding: 30px
+             calc(40px + env(safe-area-inset-right, 0px))
+             calc(30px + env(safe-area-inset-bottom, 0px))
+             calc(40px + env(safe-area-inset-left, 0px));
+    /* header と同じ理由で帯自体は当たり判定なし。選曲画面では再生コントロールが
+       display:none になり空の帯が下端に残るため、auto だと「この曲をはじめる」
+       ボタンを覆ってタップを奪う。操作要素にだけ auto を付け直す。 */
+    pointer-events: none;
     background: linear-gradient(0deg, rgba(0,0,0,0.8) 0%, transparent 100%);
+}
+
+/* 帯を pointer-events:none にしたぶん、実際の操作要素だけ当たり判定を復活させる */
+#back-to-lake,
+#player-controls {
+    pointer-events: auto;
 }
 
 #player-controls {

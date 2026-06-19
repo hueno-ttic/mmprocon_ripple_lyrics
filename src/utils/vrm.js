@@ -24,3 +24,29 @@ export function settleSpringBones(vrm) {
     // SpringBoneを現在の静止状態へスナップ（保持中の前フレーム座標をリセット）
     if (vrm.springBoneManager) vrm.springBoneManager.reset();
 }
+
+/**
+ * SpringBoneのシミュレーション基準（center）をモデルのルートへ固定する。
+ *
+ * three-vrmのSpringBoneは既定で「ワールド空間」で揺れを計算するため、
+ * `vrm.scene.position` でミクを画面内へ大きく移動（タップ移動など）させると、
+ * その並進速度が髪への慣性として働き、ツインテールが逆立つように跳ねてしまう。
+ *
+ * 各ジョイントの center をモデルのルート（既定で `vrm.scene`）に設定すると、
+ * 揺れは center 空間で計算され、モデル全体の並進・回転は揺れに影響しなくなる。
+ * これによりタップ移動でツインテールが暴れず、腕や体のローカルなポーズ変化にのみ
+ * 自然に追従する。
+ *
+ * @param {import('@pixiv/three-vrm').VRM} vrm
+ * @param {import('three').Object3D} [center] 基準ノード（省略時は vrm.scene）
+ */
+export function anchorSpringBonesToModel(vrm, center) {
+    if (!vrm || !vrm.springBoneManager) return;
+    const anchor = center || vrm.scene;
+    if (!anchor) return;
+    for (const joint of vrm.springBoneManager.joints) {
+        joint.center = anchor;
+    }
+    // center 変更後は前フレーム座標が旧空間のままなので静止状態へスナップし直す
+    vrm.springBoneManager.reset();
+}

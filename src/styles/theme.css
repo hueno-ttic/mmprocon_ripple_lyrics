@@ -192,7 +192,8 @@
 .world-thumb-card {
     position: absolute;
     left: 50%;
-    bottom: 184px;            /* パネル上端(164px)より上に配置し被りを解消 */
+    /* パネルがセーフエリアぶん上がるので、サムネイルも同量上げて重なりを保つ */
+    bottom: calc(184px + env(safe-area-inset-bottom, 0px));            /* パネル上端(164px)より上に配置し被りを解消 */
     transform: translateX(-50%);
     width: min(264px, 56vw);  /* 大きく表示 */
     aspect-ratio: 1 / 1;
@@ -234,13 +235,15 @@
     }
 }
 @media (max-width: 480px) {
-    .world-thumb-card { bottom: 196px; width: min(200px, 52vw); }
+    .world-thumb-card { bottom: calc(196px + env(safe-area-inset-bottom, 0px)); width: min(200px, 52vw); }
 }
 
 /* ── Song selection panel (bottom operation bar) ─────────── */
 .world-selection-panel {
     position: absolute;
-    bottom: 26px;
+    /* スマホのブラウザ下部ツールバー/ホームインジケータに被って
+       「この曲をはじめる」が押せなくなるのを防ぐためセーフエリアぶん底上げ */
+    bottom: calc(26px + env(safe-area-inset-bottom, 0px));
     left: 50%;
     transform: translateX(-50%);
     display: flex;
@@ -352,7 +355,7 @@
 
 @media (max-width: 480px) {
     .world-selection-panel {
-        bottom: 16px;
+        bottom: calc(16px + env(safe-area-inset-bottom, 0px));
         padding: 12px 16px 14px;
     }
     .world-selection-title {
@@ -368,8 +371,9 @@
 /* Progress counter (X/6) in lake UI */
 .lake-progress-counter {
     position: absolute;
-    top: 18px;
-    right: 20px;
+    /* ノッチ/ステータスバー下に潜らないようセーフエリアを加算 */
+    top: calc(18px + env(safe-area-inset-top, 0px));
+    right: calc(20px + env(safe-area-inset-right, 0px));
     color: rgba(255, 255, 255, 0.85);
     font-size: 12px;
     letter-spacing: 0.25em;
@@ -382,8 +386,8 @@
 /* Water cycle phase indicator */
 .world-phase-indicator {
     position: absolute;
-    top: 18px;
-    left: 20px;
+    top: calc(18px + env(safe-area-inset-top, 0px));
+    left: calc(20px + env(safe-area-inset-left, 0px));
     display: flex;
     flex-direction: column;
     gap: 4px;

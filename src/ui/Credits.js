@@ -1,4 +1,5 @@
 import { SONGS } from '../config/songs.js';
+import { stageRoot } from '../core/stage.js';
 
 /**
  * クレジット表示オーバーレイ。
@@ -68,7 +69,7 @@ export class Credits {
             </div>
         `;
 
-        document.body.appendChild(this.el);
+        stageRoot().appendChild(this.el);
 
         // 閉じる: ×ボタン / 背景クリック / Escape
         this.el.querySelector('.credits-close').addEventListener('click', (e) => {
@@ -108,7 +109,7 @@ export class Credits {
         style.id = 'credits-style';
         style.textContent = `
             .credits-overlay {
-                position: fixed; inset: 0; z-index: 3000;
+                position: absolute; inset: 0; z-index: 3000;
                 display: flex; align-items: center; justify-content: center;
                 background: rgba(2, 6, 14, 0.72);
                 backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);

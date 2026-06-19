@@ -23,6 +23,7 @@ const SONG_LOADERS = {
 import { TitleScreen } from './ui/TitleScreen.js';
 import { StoryIntro } from './ui/StoryIntro.js';
 import { screenFade } from './ui/ScreenFade.js';
+import { initStage, stageRoot } from './core/stage.js';
 // Global resilience handlers for media interruptions & API loading races
 window.addEventListener('unhandledrejection', (event) => {
     if (!event.reason) return;
@@ -41,6 +42,10 @@ window.addEventListener('unhandledrejection', (event) => {
         console.warn(`[Lake Sonare] Safely caught and ignored API warning: ${reasonMessage || event.reason}`);
     }
 });
+
+// スマホ向けレターボックス/ピラーボックスの座標系シムを最優先で仕込む
+// (シーンのカメラ aspect やポインタ計算より前に有効化する必要がある)
+initStage();
 
 class Application {
     constructor() {
@@ -198,7 +203,7 @@ class Application {
 
         const overlay = document.createElement('div');
         overlay.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
             background: rgba(0,0,0,0);
@@ -269,7 +274,7 @@ class Application {
         this._lastSongResult = null;
 
         overlay.appendChild(hint);
-        document.body.appendChild(overlay);
+        stageRoot().appendChild(overlay);
 
         requestAnimationFrame(() => {
             overlay.style.background = 'rgba(0,0,0,0.7)';
