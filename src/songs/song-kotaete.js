@@ -89,6 +89,66 @@ export class SongKotaete extends BaseSong {
         this._choiceKeyHandler = null;
         this._choiceTimers = [];
 
+        // ---- 二股分岐(決定木) ----
+        // 回廊が二股に分かれ、進む世界を「画面の半分タップ」または矢印キーで直感的に選ぶ。
+        // 選んだ世界のプリセット(色/フォグ/明るさ)が世界全体に流れ込み、世界観が変わる。
+        // 決定木: 第1問=天/地 → 天なら第2問=昼/夜。地はそのまま地底へ。
+        //   ['up','day']   → 晴天の湖
+        //   ['up','night'] → 夜空の湖
+        //   ['down', ...]  → 地底湖
+        this.forkActive = false;
+        this.fork = null;             // { pos:{...}, neg:{...}, axis }
+        this.path = [];               // 通ってきた世界 ['up'|'down', 'day'|'night']
+        this._forkConfig = null;
+        this._forkKeyHandler = null;
+        this._descentDeepened = false; // 地ルートの第2サビ「さらに地の底へ」を一度だけ発火
+        this.camPitch = 0;            // カメラのピッチ(見上げ/見下ろし)
+        this.camPitchTarget = 0;
+        this.camYaw = 0;              // カメラのヨー(左右の振り)
+        this.camYawTarget = 0;
+        // 世界プリセット: 色だけでなくフォグ密度・背景の明るさも束ねる
+        this.worldPresets = {
+            // 概念語は曲(こたえて)の語彙に寄せる: 光/色を放つ・静かに耳を傾けて・夜明け/宵
+            base:  { color: '#7F77DD', fog: 0.016, bgMul: 0.07, label: '回廊' },
+            sky:   { color: '#8FD0FF', fog: 0.009, bgMul: 0.18, label: '光のほうへ' },
+            earth: { color: '#C9772F', fog: 0.030, bgMul: 0.05, label: 'しずけさへ' },
+            day:   { color: '#FFBE3D', fog: 0.007, bgMul: 0.22, label: '夜明けへ' },
+            night: { color: '#4036C4', fog: 0.013, bgMul: 0.10, label: '宵の中へ' },
+        };
+        // ラスト3湖のプリセット(到達する結末)
+        // 湖はフォグを薄くして水面・水際・反射が見えるようにする(色だけの湖にしない)
+        this.lakePresets = {
+            clear:  { color: '#9FD8FF', fog: 0.0035, bgMul: 0.26, name: '晴天の湖', env: 'day' },
+            starry: { color: '#5560C4', fog: 0.0045, bgMul: 0.13, name: '夜空の湖', env: 'night' },
+            cavern: { color: '#2FA6B0', fog: 0.010,  bgMul: 0.06, name: '地底湖', env: 'cavern' },
+        };
+        this.endingLake = null;
+        this.lakePlane = null;
+        this.lake = null;   // 湖の3Dオブジェクト群(水面・反射・地平線・岸)
+        // ---- 選択後の3D空間背景(環境) ----
+        // 選ぶたびに雲/太陽/月/洞窟などの実体が出現し、世界そのものが変わる。
+        this.environments = [];   // 現在表示中(フェード中含む)の環境リスト
+        this.activeEnvKey = null;
+        this.cloudTexture = null;
+        // 決定木の各分岐定義。pos=正方向(上/右), neg=負方向(下/左)。
+        this.forkDefs = {
+            root: {
+                axis: 'vertical',
+                prompt: '— 問いが、ふたつに分かれる —',  // 曲の「僕の問いの答え」に呼応
+                pos: { key: 'up',   preset: this.worldPresets.sky,   env: 'sky' },     // 上半分タップ/↑
+                neg: { key: 'down', preset: this.worldPresets.earth, env: 'cavern' },  // 下半分タップ/↓
+            },
+            sky: {
+                axis: 'horizontal',
+                prompt: '— 光が、ふたつに分かれる —',
+                pos: { key: 'night', preset: this.worldPresets.night, env: 'night' }, // 右半分タップ/→
+                neg: { key: 'day',   preset: this.worldPresets.day,   env: 'day' },   // 左半分タップ/←
+            },
+        };
+        this.fogDensityTarget = 0.016;
+        this.bgMul = 0.07;
+        this.bgMulTarget = 0.07;
+
         // ---- 世界の色 ----
         this.worldColor = new THREE.Color(this.themeColor);        // 現在表示中の色(毎フレーム補間)
         this.worldColorTarget = new THREE.Color(this.themeColor);  // 目標色(選択で更新)
@@ -133,6 +193,7 @@ export class SongKotaete extends BaseSong {
         this.initGrid();
         this.initStars();
         this.createGlowTexture();
+        this.createCloudTexture();
         this.loadMiku();
         this.createPaletteUI();
 
@@ -262,6 +323,25 @@ export class SongKotaete extends BaseSong {
         this.ringTexture = new THREE.CanvasTexture(rc);
     }
 
+    // ふわっとした雲のテクスチャ(柔らかい円を重ねたもの)
+    createCloudTexture() {
+        const c = document.createElement('canvas');
+        c.width = 256; c.height = 128;
+        const x = c.getContext('2d');
+        for (let i = 0; i < 9; i++) {
+            const r = 26 + Math.random() * 38;
+            const cx = 40 + Math.random() * 176;
+            const cy = 52 + Math.random() * 40;
+            const g = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+            g.addColorStop(0, 'rgba(255,255,255,0.85)');
+            g.addColorStop(0.6, 'rgba(255,255,255,0.35)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            x.fillStyle = g;
+            x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill();
+        }
+        this.cloudTexture = new THREE.CanvasTexture(c);
+    }
+
     // =====================================================================
     // VRM: 先導するミク
     // =====================================================================
@@ -387,7 +467,8 @@ export class SongKotaete extends BaseSong {
 
         // サビは正面寄り(3/4)を向いて主役化。挨拶・フィナーレ中は専用演出を優先。
         // 通常時は背中向きで先導(選択中は選択側の向き指定に任せる)。
-        if (!this.greetActive && !this.finaleActive) {
+        // 分岐中は beginFork/commitFork の向き指定(正面で差し伸べる)を優先する
+        if (!this.greetActive && !this.finaleActive && !this.forkActive) {
             if (this.isClimax) this.mikuFacingTarget = Math.PI * 0.26;
             else if (!this.choiceActive) this.mikuFacingTarget = Math.PI;
         }
@@ -722,11 +803,31 @@ export class SongKotaete extends BaseSong {
 
         // 中央を流れる読みやすい配置(横は控えめ、縦は重ならないよう散らす)
         const z = this.camera.position.z - 17 - Math.random() * 5;
-        const x = (Math.random() - 0.5) * 3.0;
+        let x = (Math.random() - 0.5) * 3.0;
         // サビはミクが正面・手前で主役になるので、歌詞は下方へ退避させ顔/体を隠さない
-        const y = this.isClimax
+        let y = this.isClimax
             ? -2.5 + (Math.random() - 0.5) * 1.0
             : 1.4 + (Math.random() - 0.5) * 3.2;
+        // 二股分岐中は、歌詞を選択肢の側へ交互に振り分けて流す。
+        // 追った言葉の側がそのまま選択につながる = 「歌詞が誘導路」になる。
+        // 縦分割は上(pos)/下(neg)へ、横分割は右(pos)/左(neg)へ流す。
+        let forkDir = 0, forkDirX = 0;
+        if (this.forkActive && this.fork && this._forkConfig) {
+            this._forkLyricSide = -(this._forkLyricSide || -1);
+            const sgn = this._forkLyricSide > 0 ? 1 : -1;     // +1=pos / -1=neg
+            const opt = sgn > 0 ? this._forkConfig.pos : this._forkConfig.neg;
+            const tint = opt.preset.color;
+            material.color.copy(new THREE.Color(tint).lerp(new THREE.Color(0xffffff), 0.5));
+            if (this._forkConfig.axis === 'vertical') {
+                forkDir = sgn;
+                x = (Math.random() - 0.5) * 2.2;
+                y = sgn > 0 ? (2.2 + Math.random() * 0.8) : (-2.2 - Math.random() * 0.8);
+            } else {
+                forkDirX = sgn;                               // +1=右(pos) / -1=左(neg)
+                x = sgn > 0 ? (2.4 + Math.random() * 0.8) : (-2.4 - Math.random() * 0.8);
+                y = 1.0 + (Math.random() - 0.5) * 1.2;
+            }
+        }
         sprite.position.set(x, y, z);
 
         // 画面内に必ず収める: 可視幅の82%を上限に、近づいて大きく見える分も考慮
@@ -753,6 +854,8 @@ export class SongKotaete extends BaseSong {
             resonated: false,
             resonateFlash: 0,
             haloPulse: Math.random() * Math.PI * 2,
+            forkDir,   // 縦分割の誘導歌詞: 0=通常 / +1=上(pos) / -1=下(neg)
+            forkDirX,  // 横分割の誘導歌詞: 0=通常 / +1=右(pos) / -1=左(neg)
         };
 
         // タップできる合図: 言葉の後ろに淡く脈動する光のハロー
@@ -797,6 +900,20 @@ export class SongKotaete extends BaseSong {
         // 選択UIなどのボタン操作は素通しする
         if (event.target && event.target.closest &&
             event.target.closest('.kotaete-choice-container, .song-tutorial-overlay, .kotaete-ask')) {
+            return;
+        }
+
+        // 二股分岐中は画面の半分を直感的にタップして選ぶ(読まない)。
+        //   縦分割: 上半分=pos(天) / 下半分=neg(地)
+        //   横分割: 右半分=pos(夜) / 左半分=neg(昼)
+        if (this.forkActive && this.fork && this._forkConfig) {
+            let side;
+            if (this._forkConfig.axis === 'vertical') {
+                side = event.clientY < window.innerHeight / 2 ? 'pos' : 'neg';
+            } else {
+                side = event.clientX < window.innerWidth / 2 ? 'neg' : 'pos';
+            }
+            this.commitFork(side);
             return;
         }
 
@@ -1211,14 +1328,27 @@ export class SongKotaete extends BaseSong {
             this._chordName = chord ? chord.name : null;
         }
 
-        if (chorus && this.choicesMade < this.maxChoices && !this.choiceActive
+        if (chorus && !this.choiceActive && !this.finaleActive
             && !this.consumedChoruses.has(chorus.startTime)) {
-            this.consumedChoruses.add(chorus.startTime);
-            this.beginChoice();
+            // 決定木に沿って分岐を提示する。
+            //  1回目: 天/地 / 天を選んだら2回目: 昼/夜 / 地ルートはこれ以上分岐しない。
+            if (this.path.length === 0) {
+                this.consumedChoruses.add(chorus.startTime);
+                this.beginFork(this.forkDefs.root);
+            } else if (this.path.length === 1 && this.path[0] === 'up') {
+                this.consumedChoruses.add(chorus.startTime);
+                this.beginFork(this.forkDefs.sky);
+            } else if (this.path.length === 1 && this.path[0] === 'down' && !this._descentDeepened) {
+                // 地ルートは分岐せず、地底へ向かう降下を一押しする
+                this.consumedChoruses.add(chorus.startTime);
+                this._descentDeepened = true;
+                this.deepenDescent();
+            }
         }
         if (chorus) this._lastChorusMs = position;
-        // サビが終わって1.5秒以上経っても未選択なら静かに引っ込める(回数は消費)
-        if (!chorus && this.choiceActive
+        // サビが終わって1.5秒以上経っても未選択なら静かに引っ込める(回数は消費)。
+        // 分岐中(forkActive)は読まずに選べる演出なので引っ込めず、選ぶまで待つ。
+        if (!chorus && this.choiceActive && !this.forkActive
             && this._lastChorusMs !== undefined && position - this._lastChorusMs > 1500) {
             this.dismissChoice(false);
         }
@@ -1249,13 +1379,22 @@ export class SongKotaete extends BaseSong {
         }
 
         // ---- 世界の色を補間して全体へ適用 ----
+        // 背景の明るさ・フォグ密度は選んだ世界/到達した湖のプリセットへ補間
+        // (色相だけでなく世界観そのものが変わる)。フィナーレも lake プリセットを使う。
         this.worldColor.lerp(this.worldColorTarget, Math.min(1, deltaSec * 1.2));
-        const darkBg = this._scratchColBg.copy(this.worldColor).multiplyScalar(this.finaleActive ? 0.22 : 0.07);
+        this.bgMul += (this.bgMulTarget - this.bgMul) * Math.min(1, deltaSec * 1.2);
+        const darkBg = this._scratchColBg.copy(this.worldColor).multiplyScalar(this.bgMul);
         this.scene.background.copy(darkBg);
         this.scene.fog.color.copy(darkBg);
-        this.scene.fog.density = this.finaleActive ? 0.010 : 0.016;
+        this.scene.fog.density += (this.fogDensityTarget - this.scene.fog.density) * Math.min(1, deltaSec * 1.2);
+
+        // 湖: フィナーレ中はさざ波立つ水面を更新(カメラ前方へ追従)
+        this._updateLake(now);
         this.gridMaterial.color.copy(this.worldColor);
-        this.gridMaterial.opacity = 0.45 + beatPulse * 0.45 + (this.finaleActive ? 0.1 : 0);
+        // フィナーレでは床グリッドを完全に隠し、水面だけを主役にする
+        this.gridMaterial.opacity = this.finaleActive
+            ? 0
+            : 0.45 + beatPulse * 0.45;
         if (this.starField) {
             this.starField.material.color.copy(this.worldColor);
             this.starField.material.opacity = 0.5 + beatPulse * 0.35;
@@ -1275,6 +1414,11 @@ export class SongKotaete extends BaseSong {
         // サビは少し見上げる構図(主役を大きく)+ ビートの微かな脈動
         const camYTarget = (isClimax ? 1.65 : 2) + beatPulse * 0.05;
         this.camera.position.y += (camYTarget - this.camera.position.y) * Math.min(1, deltaSec * 2);
+        // 分岐で選んだ方向へ一瞬振り向き(縦=見上げ/見下ろし, 横=左右)、その後水平へ戻る
+        this.camPitch += (this.camPitchTarget - this.camPitch) * Math.min(1, deltaSec * 2.4);
+        this.camYaw += (this.camYawTarget - this.camYaw) * Math.min(1, deltaSec * 2.4);
+        this.camera.rotation.x = this.camPitch;
+        this.camera.rotation.y = this.camYaw;
         // サビ: 拍でFOVをわずかに詰めるズームパンチ(高揚感)。基準75へ戻る。
         const fovTarget = 75 - (isClimax ? beatPulse * 2.2 : 0);
         if (Math.abs(this.camera.fov - fovTarget) > 0.01) {
@@ -1367,7 +1511,8 @@ export class SongKotaete extends BaseSong {
             // 毎フレーム、現在の距離での可視幅にクランプ(接近して巨大化→
             // 見切れるのを完全に防ぐ)。横位置も中央へ寄せて枠内に保つ
             const visW = this._visibleWidthAt(s.position.z);
-            s.position.x += (0 - s.position.x) * 0.012; // ゆっくり中央寄せ
+            // 横分割の誘導歌詞は左右へ流すので中央寄せしない
+            if (!ud.forkDirX) s.position.x += (0 - s.position.x) * 0.012; // ゆっくり中央寄せ
             const maxW = visW * 0.9 - Math.abs(s.position.x) * 2;
             if (dispW > maxW && maxW > 0.5) {
                 const f = maxW / dispW;
@@ -1402,19 +1547,28 @@ export class SongKotaete extends BaseSong {
                 }
             }
 
-            // 発光色: 歌唱パルスで暖色、共鳴で世界の色に染まる
-            const r = 1.0;
-            const g = 1.0 - ud.pulseProgress * 0.4 + flash * 0.2;
-            const bch = 1.0 - ud.pulseProgress * 0.2 + flash * 0.3;
-            s.material.color.setRGB(r, Math.min(1, g), Math.min(1, bch));
-            if (ud.resonated && flash <= 0.01) {
+            // 発光色: 歌唱パルスで暖色、共鳴で世界の色に染まる。
+            // 分岐の誘導歌詞(forkDir/forkDirX≠0)は枝の色を保つので毎フレームの白寄せはしない。
+            const isForkLyric = ud.forkDir || ud.forkDirX;
+            if (!isForkLyric) {
+                const r = 1.0;
+                const g = 1.0 - ud.pulseProgress * 0.4 + flash * 0.2;
+                const bch = 1.0 - ud.pulseProgress * 0.2 + flash * 0.3;
+                s.material.color.setRGB(r, Math.min(1, g), Math.min(1, bch));
+            }
+            if (ud.resonated && flash <= 0.01 && !isForkLyric) {
                 // 応答済みは世界の色の落ち着いた発光(白寄せを弱め、彩度を残す)
                 s.material.color.copy(this.worldColor).lerp(new THREE.Color(0xffffff), 0.3 - settle * 0.1);
             }
 
             const age = Math.max(0, position - ud.birth);
-            // 応答済みはふわっと上へ昇る軌跡に、未応答はその場で微かに揺れる
-            if (ud.resonated) {
+            // 分岐の誘導歌詞は選択肢の側(上下/左右)へ流れ続ける。
+            // それ以外は、応答済みはふわっと上へ昇る軌跡に、未応答はその場で微かに揺れる。
+            if (ud.forkDir) {
+                s.position.y += deltaSec * ud.forkDir * (1.0 + (ud.resonated ? 0.8 : 0));
+            } else if (ud.forkDirX) {
+                s.position.x += deltaSec * ud.forkDirX * (1.2 + (ud.resonated ? 0.8 : 0));
+            } else if (ud.resonated) {
                 s.position.y += deltaSec * (0.6 + settle * 0.8);
             } else {
                 s.position.y += Math.sin(position * 0.002) * 0.01;
@@ -1451,6 +1605,8 @@ export class SongKotaete extends BaseSong {
         this.updateFlyingParticles(deltaSec);
         this.updateShockwaves(deltaSec);
         this.updateChoiceOrbs(now);
+        this.updateFork(now);
+        this.updateEnvironment(now, deltaSec);
         this.updateEchoes(deltaSec, now);
 
         this._lastFrameReal = now;
@@ -1460,6 +1616,418 @@ export class SongKotaete extends BaseSong {
         if (this.renderer && this.scene && this.camera) {
             this.renderer.render(this.scene, this.camera);
         }
+    }
+
+    // =====================================================================
+    // 二股分岐(決定木) — 回廊が二股に分かれ、進む世界を直感で選ぶ
+    // config: { axis:'vertical'|'horizontal', pos:{key,preset}, neg:{key,preset} }
+    //   vertical:   pos=上(↑) / neg=下(↓)
+    //   horizontal: pos=右(→) / neg=左(←)
+    // =====================================================================
+    beginFork(config) {
+        this._forkConfig = config;
+        this.forkActive = true;
+        this.choiceActive = true; // エコー/挨拶など他演出を抑制(オーブ二択と同じ扱い)
+        // ミクが振り返って差し伸べ、「どちらへ?」と問いかける
+        this.mikuFacingTarget = 0;
+        this.reachBlendTarget = 1;
+        if (this.currentVRM && this.currentVRM.springBoneManager) {
+            this.currentVRM.springBoneManager.reset();
+        }
+
+        const announcement = document.createElement('div');
+        announcement.className = 'kotaete-choice-announcement';
+        announcement.textContent = config.prompt || '— 道が、ふたつに分かれる —';
+        this.songWrapper.appendChild(announcement);
+        this._choiceTimers.push(setTimeout(() => { announcement.style.opacity = '1'; }, 80));
+        this._choiceTimers.push(setTimeout(() => { announcement.style.opacity = '0'; }, 1700));
+        this._choiceTimers.push(setTimeout(() => {
+            if (announcement.parentNode) announcement.parentNode.removeChild(announcement);
+            if (this.forkActive && this.isActive) this.showForkBranches();
+        }, 2300));
+    }
+
+    showForkBranches() {
+        if (this.fork) this._clearFork();
+        const cfg = this._forkConfig;
+
+        // 枝は常に「上向き(+Y)」に組み、軸と方向に応じてZ回転で向きを変える。
+        //   vertical pos=上(0) / neg=下(π) , horizontal pos=右(-π/2) / neg=左(+π/2)
+        // こうすると上下分割でも左右分割でも同じジオメトリを使い回せる。
+        const makeBranch = (side, opt, axis) => {
+            const preset = opt.preset;
+            const group = new THREE.Group();
+            const col = new THREE.Color(preset.color);
+            const mat = new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0 });
+
+            const enclose = opt.key === 'down';  // 地だけ奥で狭まり閉じていく
+            const reach = enclose ? 7.5 : 9.5;
+            const open  = enclose ? 0.55 : 1.5;
+
+            const LANES = 5;
+            for (let i = -LANES; i <= LANES; i++) {
+                const pts = [
+                    new THREE.Vector3(i * 1.0, 0.4, -2),
+                    new THREE.Vector3(i * 2.4 * open, reach, -26),
+                ];
+                group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+            }
+            for (let k = 1; k <= 5; k++) {
+                const z = -2 - k * 5.0;
+                const y = 0.4 + k * (reach / 5);
+                const w = (4 + k * 1.4) * (enclose ? Math.max(0.4, 1 - k * 0.13) : 1);
+                const pts = [new THREE.Vector3(-w, y, z), new THREE.Vector3(w, y, z)];
+                group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+            }
+            // 末端の「向こう側」を示す光の帯。スプライト(ビルボード)なので
+            // 枝をZ回転(横分割)しても向きが歪まず、常に柔らかな光の帯として見える。
+            const horiz = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this.glowTexture,
+                color: col.clone().lerp(new THREE.Color(0xffffff), 0.5),
+                transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+            }));
+            horiz.scale.set(enclose ? 14 : 32, 3.4, 1);
+            horiz.position.set(0, reach, -26);
+            group.add(horiz);
+
+            // 世界のかたまりを表す大きなグロー
+            const glow = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this.glowTexture, color: col, transparent: true, opacity: 0,
+                depthWrite: false, blending: THREE.AdditiveBlending,
+            }));
+            glow.scale.set(enclose ? 16 : 26, enclose ? 12 : 15, 1);
+            glow.position.set(0, 7, -18);
+            group.add(glow);
+
+            // 誘導の言葉(概念語を選択肢側へ置く)。スプライトはビルボードなので回転後も正立。
+            const { texture, aspect } = this.createTextTexture(preset.label, preset.color);
+            const word = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: texture, transparent: true, opacity: 0, depthWrite: false,
+            }));
+            const h = 2.4;
+            word.scale.set(h * aspect, h, 1);
+            word.position.set(0, 5.8, -13);
+            group.add(word);
+
+            // 軸と方向に応じて枝全体をZ回転(上向き→上/下/右/左)
+            group.rotation.z = axis === 'vertical'
+                ? (side === 'pos' ? 0 : Math.PI)
+                : (side === 'pos' ? -Math.PI / 2 : Math.PI / 2);
+
+            this.scene.add(group);
+            return { group, mat, glow, horiz, word, side, opt, preset, born: performance.now() };
+        };
+
+        this.fork = {
+            pos: makeBranch('pos', cfg.pos, cfg.axis),
+            neg: makeBranch('neg', cfg.neg, cfg.axis),
+            axis: cfg.axis,
+        };
+
+        // キーボード対応(縦=↑/↓, 横=→/←)
+        this._forkKeyHandler = (e) => {
+            if (!this.forkActive || !this.fork) return;
+            const ax = this._forkConfig.axis;
+            if (ax === 'vertical') {
+                if (e.code === 'ArrowUp')   { e.preventDefault(); this.commitFork('pos'); }
+                else if (e.code === 'ArrowDown') { e.preventDefault(); this.commitFork('neg'); }
+            } else {
+                if (e.code === 'ArrowRight') { e.preventDefault(); this.commitFork('pos'); }
+                else if (e.code === 'ArrowLeft') { e.preventDefault(); this.commitFork('neg'); }
+            }
+        };
+        document.addEventListener('keydown', this._forkKeyHandler);
+    }
+
+    updateFork(now) {
+        if (!this.fork) return;
+        for (const key of ['pos', 'neg']) {
+            const b = this.fork[key];
+            if (!b) continue;
+            const appear = Math.min(1, (now - b.born) / 600);
+            const breathe = 0.5 + 0.5 * Math.sin(now * 0.003 + (key === 'pos' ? 0 : 3.1));
+            // カメラは前進し続けるので毎フレーム前方へ追従(回転は維持)
+            b.group.position.z = this.camera.position.z;
+            b.mat.opacity = 0.9 * appear;
+            b.glow.material.opacity = (0.26 + breathe * 0.16) * appear;
+            if (b.horiz) b.horiz.material.opacity = (0.5 + breathe * 0.25) * appear;
+            b.word.material.opacity = 0.95 * appear;
+        }
+    }
+
+    commitFork(side) {
+        if (!this.forkActive || !this.fork) return;
+        const b = this.fork[side];
+        const cfg = this._forkConfig;
+        const preset = b.preset;
+        this.path.push(b.opt.key);
+
+        // 選んだ世界が世界全体へ流れ込む(色・フォグ密度・背景の明るさ)
+        this.worldColorTarget.set(preset.color);
+        this.fogDensityTarget = preset.fog;
+        this.bgMulTarget = preset.bgMul;
+
+        // 選んだ世界の3D空間背景(雲/太陽/月/洞窟)を出現させる
+        if (b.opt.env) this.activateEnvironment(b.opt.env);
+
+        // 選んだ方向へカメラを一瞬振り、900ms後に戻す(=その世界へ進む)
+        if (cfg.axis === 'vertical') {
+            this.camPitchTarget = side === 'pos' ? 0.20 : -0.20;  // 見上げ/見下ろし
+            this._choiceTimers.push(setTimeout(() => { this.camPitchTarget = 0; }, 900));
+        } else {
+            this.camYawTarget = side === 'pos' ? -0.20 : 0.20;    // 右/左へ振る
+            this._choiceTimers.push(setTimeout(() => { this.camYawTarget = 0; }, 900));
+        }
+
+        // 手応え: 選んだ枝で弾ける衝撃波 + ミクへ光の粒 + 画面フラッシュ
+        const burst = b.glow.getWorldPosition(new THREE.Vector3());
+        this.spawnShockwave(burst, 5.0);
+        this.spawnFlyingParticles(burst.clone());
+        const flash = document.createElement('div');
+        flash.className = 'kotaete-choice-flash';
+        flash.style.background = preset.color;
+        this.songWrapper.appendChild(flash);
+        void flash.offsetWidth;
+        flash.style.opacity = '0';
+        this._domTimers.push(setTimeout(() => { if (flash.parentNode) flash.parentNode.removeChild(flash); }, 1100));
+
+        // パレットに「通った世界」を層として積む(色だけでも記録)
+        this.chosenColors.push(preset.color);
+        this.addPaletteLayer(preset.color);
+
+        this.choicesMade++;
+        this.forkActive = false;
+        this.choiceActive = false;
+
+        // ミクは前を向いて再び先導
+        this.mikuFacingTarget = Math.PI;
+        this.reachBlendTarget = 0;
+        if (this.currentVRM && this.currentVRM.springBoneManager) {
+            this.currentVRM.springBoneManager.reset();
+        }
+
+        if (this._forkKeyHandler) {
+            document.removeEventListener('keydown', this._forkKeyHandler);
+            this._forkKeyHandler = null;
+        }
+        this._clearFork();
+    }
+
+    _clearFork() {
+        if (!this.fork) return;
+        for (const key of ['pos', 'neg']) {
+            const b = this.fork[key];
+            if (!b) continue;
+            this.scene.remove(b.group);
+            b.group.traverse((o) => {
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) {
+                    if (o.material.map) o.material.map.dispose();
+                    o.material.dispose();
+                }
+            });
+        }
+        this.fork = null;
+    }
+
+    // =====================================================================
+    // 選択後の3D空間背景(環境) — 選ぶたびに世界そのものが変わる
+    // =====================================================================
+    activateEnvironment(key) {
+        if (this.activeEnvKey === key) return;
+        this.activeEnvKey = key;
+        // 既存環境はフェードアウトへ
+        for (const e of this.environments) e.fadingOut = true;
+        const env = this._buildEnvironment(key);
+        if (env) this.environments.push(env);
+    }
+
+    _buildEnvironment(key) {
+        const group = new THREE.Group();
+        group.position.z = this.camera.position.z;
+        this.scene.add(group);
+        const items = [];
+
+        // 雲(ビルボード) — カメラ前方にとどまり、横にゆっくり漂う
+        const addCloud = (x, y, zOff, scl, colHex, op, spd) => {
+            const m = new THREE.SpriteMaterial({
+                map: this.cloudTexture, color: new THREE.Color(colHex),
+                transparent: true, opacity: 0, depthWrite: false,
+            });
+            const s = new THREE.Sprite(m);
+            s.scale.set(scl, scl * 0.55, 1);
+            s.position.set(x, y, -zOff);
+            group.add(s);
+            const baseX = x, ph = Math.random() * 6.28;
+            items.push({ update: (now, dt, fade) => {
+                m.opacity = op * fade;
+                s.position.x = baseX + Math.sin(now * 0.00008 * spd + ph) * 5;
+            }});
+        };
+        // 太陽/月などの発光円盤
+        const addDisc = (x, y, zOff, scl, colHex, op) => {
+            const m = new THREE.SpriteMaterial({
+                map: this.glowTexture, color: new THREE.Color(colHex),
+                transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+            });
+            const s = new THREE.Sprite(m);
+            s.scale.set(scl, scl, 1);
+            s.position.set(x, y, -zOff);
+            group.add(s);
+            items.push({ update: (now, dt, fade) => { m.opacity = op * fade; } });
+        };
+
+        if (key === 'sky') {
+            for (let i = 0; i < 8; i++) {
+                addCloud((Math.random() - 0.5) * 42, 4 + Math.random() * 11, 22 + i * 5,
+                    13 + Math.random() * 8, '#eaf6ff', 0.75, 1 + Math.random());
+            }
+        } else if (key === 'day') {
+            addDisc(7, 12, 44, 34, '#FFE49A', 0.95);   // 太陽
+            for (let i = 0; i < 7; i++) {
+                addCloud((Math.random() - 0.5) * 46, 3 + Math.random() * 12, 20 + i * 6,
+                    15 + Math.random() * 8, '#fff6e6', 0.85, 1 + Math.random());
+            }
+        } else if (key === 'night') {
+            addDisc(-7, 13, 46, 16, '#e6ecff', 0.9);   // 月
+            items.push(this._makeStarBurst(group));
+            for (let i = 0; i < 4; i++) {
+                addCloud((Math.random() - 0.5) * 40, 2 + Math.random() * 8, 24 + i * 7,
+                    17, '#2a3170', 0.45, 0.6);
+            }
+        } else if (key === 'cavern') {
+            this._makeCavern(group, items);
+        } else {
+            this.scene.remove(group);
+            return null;
+        }
+        return { group, key, items, fade: 0, fadingOut: false };
+    }
+
+    // 夜空: 無数の星の瞬き
+    _makeStarBurst(group) {
+        const n = this.isMobile ? 140 : 260;
+        const geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+            pos[i * 3] = (Math.random() - 0.5) * 90;
+            pos[i * 3 + 1] = Math.random() * 32;
+            pos[i * 3 + 2] = -(10 + Math.random() * 80);
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const m = new THREE.PointsMaterial({
+            color: 0xffffff, size: 0.22, transparent: true, opacity: 0,
+            blending: THREE.AdditiveBlending, depthWrite: false,
+        });
+        const p = new THREE.Points(geo, m);
+        group.add(p);
+        return { update: (now, dt, fade) => { m.opacity = (0.6 + 0.4 * Math.sin(now * 0.002)) * 0.9 * fade; } };
+    }
+
+    // 地底: 左右の岩壁・天井・鍾乳石(ダークな線群)＋奥の淡い光
+    _makeCavern(group, items) {
+        // 奥に仄かな光(地底湖へ続く水明かり)。閉塞の中に一点の抜けを作り、暗すぎを回避。
+        const shaft = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this.glowTexture, color: new THREE.Color('#3ea0b0'),
+            transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
+        }));
+        shaft.scale.set(14, 9, 1);
+        shaft.position.set(0, 1.5, -44);
+        group.add(shaft);
+        items.push({ update: (now, dt, fade) => { shaft.material.opacity = (0.4 + 0.12 * Math.sin(now * 0.0012)) * fade; } });
+
+        const wallMat = new THREE.LineBasicMaterial({ color: new THREE.Color('#7a5c44'), transparent: true, opacity: 0 });
+        for (const side of [-1, 1]) {
+            for (let k = 0; k < 9; k++) {
+                const z = -3 - k * 5.5;
+                const pts = [
+                    new THREE.Vector3(side * (6.5 - k * 0.15), -2, z),
+                    new THREE.Vector3(side * 9.5, 7.5, z),
+                ];
+                group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wallMat));
+            }
+        }
+        // 天井(頭上に迫る横線)
+        for (let k = 0; k < 9; k++) {
+            const z = -3 - k * 5.5;
+            const pts = [new THREE.Vector3(-9.5, 7.5, z), new THREE.Vector3(9.5, 7.5, z)];
+            group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wallMat));
+        }
+        items.push({ update: (now, dt, fade) => { wallMat.opacity = 0.95 * fade; } });
+
+        // 鍾乳石(天井から垂れる短い線) — 仄かに青緑に光る
+        const stMat = new THREE.LineBasicMaterial({ color: new THREE.Color('#2f6f80'), transparent: true, opacity: 0 });
+        for (let i = 0; i < 12; i++) {
+            const x = (Math.random() - 0.5) * 15;
+            const z = -6 - Math.random() * 42;
+            const len = 1 + Math.random() * 2.8;
+            const pts = [new THREE.Vector3(x, 7.2, z), new THREE.Vector3(x + 0.35, 7.2 - len, z)];
+            group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), stMat));
+        }
+        items.push({ update: (now, dt, fade) => { stMat.opacity = (0.55 + 0.2 * Math.sin(now * 0.0015)) * fade; } });
+    }
+
+    updateEnvironment(now, deltaSec) {
+        for (let i = this.environments.length - 1; i >= 0; i--) {
+            const e = this.environments[i];
+            const target = e.fadingOut ? 0 : 1;
+            e.fade += (target - e.fade) * Math.min(1, deltaSec * 1.4);
+            e.group.position.z = this.camera.position.z;  // 常にカメラ前方へ追従
+            for (const it of e.items) it.update(now, deltaSec, e.fade);
+            if (e.fadingOut && e.fade < 0.02) {
+                this._disposeEnv(e);
+                this.environments.splice(i, 1);
+            }
+        }
+    }
+
+    _disposeEnv(e) {
+        this.scene.remove(e.group);
+        e.group.traverse((o) => {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) {
+                // 共有テクスチャ(glow/cloud)は破棄しない
+                if (o.material.map && o.material.map !== this.glowTexture && o.material.map !== this.cloudTexture) {
+                    o.material.map.dispose();
+                }
+                o.material.dispose();
+            }
+        });
+    }
+
+    _clearEnvironments() {
+        for (const e of this.environments) this._disposeEnv(e);
+        this.environments = [];
+        this.activeEnvKey = null;
+    }
+
+    // 地ルートの第2サビ: 分岐させず、地底湖へ向かう降下を一押しする。
+    // カメラを下へ伏せ、世界の色を地底湖(水の藍緑)へ寄せ、フォグを深めて閉塞感を強める。
+    deepenDescent() {
+        const cav = this.lakePresets.cavern;
+        // 地底湖の水の色へ寄せ、奥へ閉じていく(色相だけでなく密度も深まる)
+        this.worldColorTarget.lerp(new THREE.Color(cav.color), 0.6);
+        this.fogDensityTarget = Math.max(this.fogDensityTarget, cav.fog);
+        this.bgMulTarget = Math.min(this.bgMulTarget, cav.bgMul + 0.01);
+
+        // 見下ろす視線(900ms後に水平へ戻す)
+        this.camPitchTarget = -0.16;
+        this._choiceTimers.push(setTimeout(() => { this.camPitchTarget = 0; }, 1200));
+
+        // ミクが少しこちらを振り返り、下(地底)へ誘う仕草
+        this.mikuFacingTarget = Math.PI * 0.5;
+        this._choiceTimers.push(setTimeout(() => { this.mikuFacingTarget = Math.PI; }, 1600));
+
+        // 「さらに、地の底へ」の小さな字幕
+        const announcement = document.createElement('div');
+        announcement.className = 'kotaete-choice-announcement';
+        announcement.textContent = '— さらに、地の底へ —';
+        this.songWrapper.appendChild(announcement);
+        this._choiceTimers.push(setTimeout(() => { announcement.style.opacity = '1'; }, 80));
+        this._choiceTimers.push(setTimeout(() => { announcement.style.opacity = '0'; }, 2000));
+        this._choiceTimers.push(setTimeout(() => {
+            if (announcement.parentNode) announcement.parentNode.removeChild(announcement);
+        }, 2600));
     }
 
     // =====================================================================
@@ -1784,13 +2352,202 @@ export class SongKotaete extends BaseSong {
         this._updateGauge();
     }
 
+    // 決定木の経路から到達する湖を決める。
+    //   ['down', ...] → 地底湖 / ['up','night'] → 夜空の湖 / それ以外(up+day等) → 晴天の湖
+    _resolveEndingLake() {
+        const p = this.path;
+        if (p[0] === 'down') return this.lakePresets.cavern;
+        if (p[0] === 'up' && p[1] === 'night') return this.lakePresets.starry;
+        if (p[0] === 'up') return this.lakePresets.clear;
+        return this.lakePresets.clear; // 未選択時のフォールバック
+    }
+
+    // 湖を3Dオブジェクトとして構築する:
+    // さざ波立つ水面メッシュ + 光源の映り込み(反射の筋) + 水面のきらめき
+    // + 地平線の光帯 + 岸/遠景のシルエット。色は到達した湖のプリセット。
+    _createLake(lake, envKey) {
+        if (this.lake) return;
+        const color = new THREE.Color(lake.color);
+        const light = color.clone().lerp(new THREE.Color(0xffffff), 0.6);
+        const group = new THREE.Group();
+        group.position.z = this.camera.position.z;
+        this.scene.add(group);
+        const items = [];
+        const D = 320;          // 湖の奥行き
+        const W = 260;          // 湖の幅
+        const WY = -2.0;        // 水面の高さ
+
+        // --- 水面メッシュ(頂点を毎フレーム揺らしてさざ波) ---
+        // 水際(奥)を明るく・手前を暗くする縦グラデーションを頂点色で与え、
+        // 反射する水面らしさを出す。これでフォグと同化せず「水」に見える。
+        const geo = new THREE.PlaneGeometry(W, D, 40, 56);
+        const pos = geo.attributes.position;
+        const nearC = color.clone().multiplyScalar(0.30);            // 手前=深い水(暗)
+        const farC = color.clone().lerp(new THREE.Color(0xffffff), 0.55); // 奥(水際)=空の反射(明)
+        const colAttr = new Float32Array(pos.count * 3);
+        const tmpC = new THREE.Color();
+        for (let i = 0; i < pos.count; i++) {
+            const ty = (pos.array[i * 3 + 1] + D / 2) / D; // 0=手前 1=奥(水際)
+            tmpC.copy(nearC).lerp(farC, Math.pow(ty, 1.5));
+            colAttr[i * 3] = tmpC.r; colAttr[i * 3 + 1] = tmpC.g; colAttr[i * 3 + 2] = tmpC.b;
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(colAttr, 3));
+        const waterMat = new THREE.MeshBasicMaterial({
+            vertexColors: true, transparent: true, opacity: 0, depthWrite: false,
+        });
+        const water = new THREE.Mesh(geo, waterMat);
+        water.rotation.x = -Math.PI / 2;
+        water.position.set(0, WY, -D / 2 + 18);
+        water.renderOrder = 1;
+        group.add(water);
+        items.push({ kind: 'water', pos, base: Float32Array.from(pos.array), mat: waterMat });
+
+        // 光源(太陽/月/光蝕)の水面上の位置に合わせて反射の筋を出す
+        const streakX = envKey === 'night' ? -7 : envKey === 'day' ? 7 : 0;
+
+        // --- 反射の筋(水面に寝かせた発光帯。奥の光源からこちらへ伸びる) ---
+        const streakGeo = new THREE.PlaneGeometry(8, D * 0.9, 1, 24);
+        const streakMat = new THREE.MeshBasicMaterial({
+            map: this.glowTexture, color: light, transparent: true, opacity: 0,
+            depthWrite: false, blending: THREE.AdditiveBlending,
+        });
+        const streak = new THREE.Mesh(streakGeo, streakMat);
+        streak.rotation.x = -Math.PI / 2;
+        streak.position.set(streakX, WY + 0.03, -D * 0.45);
+        streak.renderOrder = 2;
+        group.add(streak);
+        items.push({ kind: 'streak', mat: streakMat });
+
+        // --- 光源の水面への映り込み(水際に灯る明るい円) ---
+        const reflMat = new THREE.SpriteMaterial({
+            map: this.glowTexture, color: light, transparent: true, opacity: 0,
+            depthWrite: false, blending: THREE.AdditiveBlending,
+        });
+        const refl = new THREE.Sprite(reflMat);
+        refl.scale.set(18, 9, 1);
+        refl.position.set(streakX, WY + 0.5, -D + 34);
+        refl.renderOrder = 3;
+        group.add(refl);
+        items.push({ kind: 'refl', mat: reflMat });
+
+        // --- 水面のきらめき(光の粒が水面で瞬く) ---
+        const gn = this.isMobile ? 70 : 140;
+        const gpos = new Float32Array(gn * 3);
+        for (let i = 0; i < gn; i++) {
+            gpos[i * 3] = (Math.random() - 0.5) * W * 0.8;
+            gpos[i * 3 + 1] = WY + 0.05;
+            gpos[i * 3 + 2] = -Math.random() * D;
+        }
+        const ggeo = new THREE.BufferGeometry();
+        ggeo.setAttribute('position', new THREE.BufferAttribute(gpos, 3));
+        const gmat = new THREE.PointsMaterial({
+            color: light, size: 0.5, map: this.glowTexture, transparent: true, opacity: 0,
+            depthWrite: false, blending: THREE.AdditiveBlending,
+        });
+        group.add(new THREE.Points(ggeo, gmat));
+        items.push({ kind: 'glints', mat: gmat });
+
+        // --- 水際(水と空/天井の境の明瞭なライン) ---
+        // くっきりした明るい細帯。これが無いと水と背景の境が消えて湖に見えない。
+        const lineMat = new THREE.MeshBasicMaterial({
+            color: light, transparent: true, opacity: 0, depthWrite: false,
+        });
+        const line = new THREE.Mesh(new THREE.PlaneGeometry(W + 40, 0.9), lineMat);
+        line.position.set(0, WY + 0.05, -D + 36);
+        line.renderOrder = 2;
+        group.add(line);
+        items.push({ kind: 'line', mat: lineMat });
+
+        // --- 水際の柔らかな光のにじみ ---
+        const horizonMat = new THREE.SpriteMaterial({
+            map: this.glowTexture, color: light, transparent: true, opacity: 0,
+            depthWrite: false, blending: THREE.AdditiveBlending,
+        });
+        const horizon = new THREE.Sprite(horizonMat);
+        horizon.scale.set(140, 10, 1);
+        horizon.position.set(0, WY + 1.4, -D + 35);
+        group.add(horizon);
+        items.push({ kind: 'horizon', mat: horizonMat });
+
+        // --- 岸/遠景のシルエット(空の湖だけ。地底は洞窟壁が縁になる) ---
+        if (envKey !== 'cavern') {
+            const shoreMat = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(0x0a0c16), transparent: true, opacity: 0, depthWrite: false,
+            });
+            const shore = new THREE.Mesh(new THREE.PlaneGeometry(300, 7), shoreMat);
+            shore.position.set(0, WY + 1.4, -D + 28);
+            group.add(shore);
+            items.push({ kind: 'shore', mat: shoreMat });
+        }
+
+        this.lake = { group, items, born: performance.now() };
+    }
+
+    // 水面のさざ波・反射・きらめきを毎フレーム更新し、カメラ前方へ追従させる
+    _updateLake(now) {
+        if (!this.lake) return;
+        const L = this.lake;
+        L.group.position.z = this.camera.position.z;
+        const fadeT = Math.min(1, (now - L.born) / 1600);
+        const t = now * 0.001;
+        for (const it of L.items) {
+            if (it.kind === 'water') {
+                const { pos, base } = it;
+                for (let i = 0; i < pos.count; i++) {
+                    const x = base[i * 3], y = base[i * 3 + 1];
+                    pos.array[i * 3 + 2] = base[i * 3 + 2]
+                        + Math.sin(x * 0.15 + t * 1.3) * 0.18
+                        + Math.sin(y * 0.20 + t * 0.9) * 0.14
+                        + Math.sin((x + y) * 0.10 + t * 0.6) * 0.10;
+                }
+                pos.needsUpdate = true;
+                it.mat.opacity = 0.95 * fadeT;   // 頂点色のグラデを保つので worldColor で上書きしない
+            } else if (it.kind === 'streak') {
+                it.mat.opacity = (0.4 + 0.2 * Math.sin(t * 2.2)) * fadeT;
+            } else if (it.kind === 'refl') {
+                it.mat.opacity = (0.7 + 0.2 * Math.sin(t * 1.7)) * fadeT;
+            } else if (it.kind === 'glints') {
+                it.mat.opacity = (0.5 + 0.4 * Math.sin(t * 3.0)) * fadeT;
+            } else if (it.kind === 'line') {
+                it.mat.opacity = 0.9 * fadeT;
+            } else if (it.kind === 'horizon') {
+                it.mat.opacity = (0.5 + 0.15 * Math.sin(t * 1.1)) * fadeT;
+            } else if (it.kind === 'shore') {
+                it.mat.opacity = 0.92 * fadeT;
+            }
+        }
+    }
+
     // =====================================================================
-    // フィナーレ: あなたの答えの色が世界を満たす
+    // フィナーレ: 選んだ経路の果ての「湖」へ辿り着く
     // =====================================================================
     startFinale() {
         this.finaleActive = true;
 
-        // 最後の問いを選ばないまま終盤に入った場合も、選んだ分だけで混色を確定する
+        // 経路から結末の湖を決定し、世界をその湖のプリセットへ染める
+        const lake = this._resolveEndingLake();
+        this.endingLake = lake;
+        this.worldColorTarget.set(lake.color);
+        this.fogDensityTarget = lake.fog;
+        this.bgMulTarget = lake.bgMul;
+        const hex = lake.color;
+
+        // 湖に対応する3D空間背景を確実に出す(空/夜空/洞窟)
+        if (lake.env) this.activateEnvironment(lake.env);
+
+        // 湖を3D構築し、カメラをやや見下ろして水面の広がりを見せる
+        this._createLake(lake, lake.env);
+        this.camPitchTarget = -0.12;
+        this.camYawTarget = 0;
+
+        // ミクが振り返り、両手を差し伸べて締めくくる
+        this.mikuFacingTarget = 0;
+        this.reachBlendTarget = 1;
+        if (this.currentVRM && this.currentVRM.springBoneManager) {
+            this.currentVRM.springBoneManager.reset();
+        }
+
+        // パレットの混色(これまで通った世界の色)を「あなたの答えの色」として確定
         if (!this.finalAnswerColor && this.chosenColors.length > 0) {
             const mix = new THREE.Color(0, 0, 0);
             this.chosenColors.forEach(c => mix.add(new THREE.Color(c)));
@@ -1799,34 +2556,16 @@ export class SongKotaete extends BaseSong {
             this.confirmPalette();
         }
 
-        // 答えの色(未選択ならテーマ色のまま)へ世界を染める
-        if (this.finalAnswerColor) {
-            this.worldColorTarget.copy(this.finalAnswerColor);
-        }
-        // ミクが振り返り、両手を差し伸べて締めくくる
-        this.mikuFacingTarget = 0;
-        this.reachBlendTarget = 1;
-        if (this.currentVRM && this.currentVRM.springBoneManager) {
-            this.currentVRM.springBoneManager.reset();
-        }
-
-        const hex = this.finalAnswerColor
-            ? `#${this.finalAnswerColor.getHexString()}`
-            : this.themeColor;
-
         this.finaleOverlay = document.createElement('div');
         this.finaleOverlay.className = 'kotaete-finale-overlay';
         this.finaleOverlay.style.setProperty('--kotaete-answer-color', hex);
-        // 共鳴の還元②: 共鳴数がフィナーレの輝度と文言に反映される
         const resonanceGlow = Math.min(1, 0.45 + this.resonanceCount * 0.07);
         this.finaleOverlay.style.setProperty('--kotaete-finale-glow', resonanceGlow.toFixed(2));
         const resonanceLine = this.resonanceCount > 0
-            ? `<div class="kotaete-finale-sub">${this.resonanceCount} つの共鳴とともに</div>`
-            : '';
+            ? `<div class="kotaete-finale-sub">${this.resonanceCount} つの共鳴とともに辿り着いた</div>`
+            : '<div class="kotaete-finale-sub">あなたが選んだ道の果てに</div>';
         this.finaleOverlay.innerHTML = `
-            <div class="kotaete-finale-text">
-                ${this.finalAnswerColor ? 'これが、あなたの答えの色' : 'まだ見ぬ、あなたの答えの色'}
-            </div>
+            <div class="kotaete-finale-text">${lake.name}</div>
             ${resonanceLine}
         `;
         this.songWrapper.appendChild(this.finaleOverlay);
@@ -1834,21 +2573,31 @@ export class SongKotaete extends BaseSong {
             if (this.finaleOverlay) this.finaleOverlay.classList.add('visible');
         }, 100));
 
-        // エンドカードへ成果を登録(問いを書けば saveUserQuestion が上書きする)
+        // エンドカードへ成果を登録
         this.setResultSummary({
             accentColor: hex,
-            swatch: this.finalAnswerColor ? hex : null,
+            swatch: hex,
             lines: [
-                this.finalAnswerColor ? 'あなたの答えの色が生まれた' : 'まだ見ぬ、あなたの答えの色',
+                `${lake.name}に辿り着いた`,
                 `歌詞との共鳴 ${this.resonanceCount}`,
             ],
         });
 
-        // 「問いを立てる」— この色を答えとする問いをユーザーが綴り、湖へ流す。
-        // 少し間を置いてから差し出す(色が満ちる演出を見せてから)。
-        this._domTimers.push(setTimeout(() => {
-            if (this.isActive && this.finaleActive) this.showAskPanel(hex);
-        }, 3200));
+        // 文字入力は廃止。辿り着いた湖を自動で波紋として湖に流す(創作ループは維持)。
+        this._autoSaveLakeRipple(lake);
+    }
+
+    // 辿り着いた湖を、文字入力なしで自動的に湖memoryへ波紋として残す。
+    // これにより「過去のプレイの到達湖が次回エコーとして再来する」循環を保つ。
+    _autoSaveLakeRipple(lake) {
+        try {
+            this.savedRipple = addRipple({
+                songId: 'kotaete', type: 'question',
+                text: lake.name, color: lake.color,
+                meta: { path: this.path.slice(), resonance: this.resonanceCount },
+            });
+            this.updateLakeCount();
+        } catch (e) { /* localStorage不可時は無視 */ }
     }
 
     // =====================================================================
@@ -2336,6 +3085,35 @@ export class SongKotaete extends BaseSong {
             if (o.label && o.label.parentNode) o.label.parentNode.removeChild(o.label);
         }));
         this.choiceOrbs = null; this._capturedOrbs = null;
+
+        // 二股分岐の枝とキーハンドラを解放
+        this._clearFork();
+        if (this._forkKeyHandler) {
+            document.removeEventListener('keydown', this._forkKeyHandler);
+            this._forkKeyHandler = null;
+        }
+        // 湖面を解放
+        if (this.lakePlane) {
+            this.scene.remove(this.lakePlane);
+            this.lakePlane.geometry.dispose();
+            this.lakePlane.material.dispose();
+            this.lakePlane = null;
+        }
+        // 湖の3Dオブジェクト群を解放
+        if (this.lake) {
+            this.scene.remove(this.lake.group);
+            this.lake.group.traverse((o) => {
+                if (o.geometry) o.geometry.dispose();
+                if (o.material) {
+                    if (o.material.map && o.material.map !== this.glowTexture && o.material.map !== this.cloudTexture) o.material.map.dispose();
+                    o.material.dispose();
+                }
+            });
+            this.lake = null;
+        }
+        // 3D空間背景(環境)を解放
+        this._clearEnvironments();
+        if (this.cloudTexture) { this.cloudTexture.dispose(); this.cloudTexture = null; }
 
         // DOM
         if (this.choiceContainer && this.choiceContainer.parentNode) {
