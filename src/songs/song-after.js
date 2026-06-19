@@ -12,9 +12,10 @@ import { VRMLoaderPlugin } from '@pixiv/three-vrm';
  * 劇場ステージ演出:
  *  - スポットライト(実SpotLight)をポインタ(マウス/タッチ統一)で操作し、暗闇の歌詞とミクを照らす
  *  - ステージ中央にミクVRM(脱力ポーズ+呼吸)。照らすと顔がそちらを向き、サビで両腕を広げ星空を見上げる
- *  - 照らし切った歌詞は消える時に暖色の灯となって客席へ飛び、座席に灯り続ける(残光システム)
- *  - バラ紙吹雪は床に積もり、曲終了まで残る
- *  - 終演: 照明が落ち、客席の残光と床のバラだけが闇に浮かぶ
+ *  - 歌詞を一定時間照らし切ると、光って弾け、紙吹雪となって舞い降りる(破裂演出)
+ *  - 弾けた歌詞は同時に暖色の灯となって客席へ飛び、座席に灯り続ける(残光システム)
+ *  - 紙吹雪は床に積もり、曲終了まで残る(降るのは破裂した歌詞からのみ)
+ *  - 終演: 照明が落ち、客席の残光と床の紙吹雪だけが闇に浮かぶ
  */
 export class SongAfter extends BaseSong {
     constructor(container, songId) {
@@ -36,6 +37,8 @@ export class SongAfter extends BaseSong {
 
         this.themeColor = '#1D9E75';
         this.mouse = new THREE.Vector2(0, 0);
+        this._beamDir = new THREE.Vector3();   // スポットライトのビーム軸(毎フレーム再利用)
+        this._toLyric = new THREE.Vector3();   // ビーム始点→歌詞ベクトル(毎フレーム再利用)
 
         // スポットライト: 押している(クリック/タップ)間だけ照らす
         this.isPointerDown = false;
@@ -443,45 +446,39 @@ export class SongAfter extends BaseSong {
         }
 
         // タップ位置にもスポットライトを即移動 (タッチではmoveより先にdownが来る)
+        // 紙吹雪はタップでは降らせない。歌詞を照らし切って破裂したときだけ舞い降りる。
         this.updateSpotFromClient(event.clientX, event.clientY);
-
-        // Raycast to Z=0 plane to spawn confetti precisely where tapped in 3D
-        const rect = this.renderer.domElement.getBoundingClientRect();
-        const nx = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-        const ny = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(new THREE.Vector2(nx, ny), this.camera);
-        const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
-        const intersectionPoint = new THREE.Vector3();
-        if (raycaster.ray.intersectPlane(plane, intersectionPoint)) {
-            this.spawnPetals(intersectionPoint);
-        }
     }
 
-    // BaseSong既定のクリック波紋(DOM)とバラの二重生成を抑止 — pointerdownに一本化
+    // BaseSong既定のクリック波紋(DOM)との二重処理を抑止 — pointerdownに一本化
     onClick() {}
 
-    // ─── バラ紙吹雪: 床に積もり、曲が終わるまで残る ───
-    spawnPetals(origin) {
-        const count = this.isMobile ? 8 : 14;
+    // ─── 紙吹雪: 照らし切った歌詞が破裂して生まれ、舞い降りて床に積もる ───
+    // 歌詞の位置から一度パッと弾け飛び(初速の外向き+上向き)、その後ふわりと降る。
+    burstLyricToConfetti(origin) {
+        const count = this.isMobile ? 12 : 20;
         for (let i = 0; i < count; i++) {
-            const mat = this.petalMaterials[Math.random() > 0.35 ? 0 : 1];
+            const mat = this.petalMaterials[Math.random() > 0.5 ? 0 : 1];
             const mesh = new THREE.Mesh(this.petalGeo, mat);
 
+            // 歌詞のあった一点から弾け出す(密集スタート)
             mesh.position.set(
-                origin.x + (Math.random() - 0.5) * 4,
-                origin.y + Math.random() * 5 + 4,
-                origin.z + (Math.random() - 0.5) * 4
+                origin.x + (Math.random() - 0.5) * 0.6,
+                origin.y + (Math.random() - 0.5) * 0.6,
+                origin.z + (Math.random() - 0.5) * 0.6
             );
             mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
 
+            // 破裂: 全方位へ散ったあと重力でふわりと舞い降りる
+            const ang = Math.random() * Math.PI * 2;
+            const spd = 0.06 + Math.random() * 0.10;
             mesh.userData = {
-                vx: (Math.random() - 0.5) * 0.04,
-                vy: -0.04 - Math.random() * 0.04,
-                vz: (Math.random() - 0.5) * 0.04,
-                rotSpeedX: (Math.random() - 0.5) * 0.06,
-                rotSpeedY: (Math.random() - 0.5) * 0.06,
+                vx: Math.cos(ang) * spd,
+                vy: 0.05 + Math.random() * 0.08,        // いったん跳ね上がる
+                vz: Math.sin(ang) * spd * 0.6,
+                gravity: 0.004 + Math.random() * 0.002, // その後ゆっくり降下
+                rotSpeedX: (Math.random() - 0.5) * 0.12,
+                rotSpeedY: (Math.random() - 0.5) * 0.12,
                 flutterPhase: Math.random() * Math.PI * 2,
                 isFloored: false,
                 fading: false,
@@ -576,12 +573,59 @@ export class SongAfter extends BaseSong {
         return out.length ? out : [src];
     }
 
-    spawnText(phrase, spawnTime) {
+    spawnText(phrase, fallbackTime) {
         const chunks = this.splitPhraseText(phrase.text);
-        // 区切った各チャンクを、読む順に少し時間差を付けて出す
-        for (let ci = 0; ci < chunks.length; ci++) {
-            this.spawnTextChunk(chunks[ci], spawnTime + ci * 450);
+        // 各チャンクに TextAlive の実歌唱タイミング(先頭文字の startTime)を割り当て、
+        // その時刻に出現させる(固定刻みではなく歌唱に同期)。
+        const timed = this.assignChunkTimes(phrase, chunks, fallbackTime);
+        for (const { text, startTime } of timed) {
+            this.spawnTextChunk(text, startTime);
         }
+    }
+
+    // ─── 各チャンクに TextAlive の歌唱タイミングを割り当てる ───
+    // フレーズの文字(IChar)を時系列に並べ、各チャンクの先頭文字に一致する位置の
+    // startTime をそのチャンクの出現時刻とする。空白・約物のズレに強い前進照合。
+    assignChunkTimes(phrase, chunks, fallbackTime) {
+        // フレーズ内の全文字を {ch, t} の時系列に展開
+        const timeline = [];
+        let c = phrase && phrase.firstChar;
+        let guard = 0;
+        while (c && guard++ < 20000) {
+            const txt = c.text || '';
+            for (const ch of txt) timeline.push({ ch, t: c.startTime });
+            if (c === phrase.lastChar) break;
+            c = c.next;
+        }
+        // 文字データが取れない場合はフレーズ開始時刻に揃える(従来同等のフォールバック)
+        if (!timeline.length) {
+            const base = (phrase && typeof phrase.startTime === 'number') ? phrase.startTime : fallbackTime;
+            return chunks.map(text => ({ text, startTime: base }));
+        }
+
+        const result = [];
+        let cursor = 0;
+        for (const chunkText of chunks) {
+            const target = (chunkText || '').replace(/\s/g, ''); // 空白を無視して照合
+            let startTime = fallbackTime;
+            if (target.length) {
+                // カーソル以降で chunk 先頭文字に一致する位置まで進む(約物・空白はスキップ)
+                let k = cursor;
+                while (k < timeline.length && timeline[k].ch !== target[0]) k++;
+                if (k < timeline.length) {
+                    startTime = timeline[k].t;
+                    // chunk 全体ぶんカーソルを前進(タイムライン側の余剰文字はスキップ)
+                    let ti = 0, p = k;
+                    while (p < timeline.length && ti < target.length) {
+                        if (timeline[p].ch === target[ti]) ti++;
+                        p++;
+                    }
+                    cursor = p;
+                }
+            }
+            result.push({ text: chunkText, startTime });
+        }
+        return result;
     }
 
     spawnTextChunk(text, spawnTime) {
@@ -915,32 +959,65 @@ export class SongAfter extends BaseSong {
         const word = playerManager.player.video.findWord(position)
                   || playerManager.player.video.findChar(position);
 
+        // スポットライトが実際に照らしている円錐(ビーム)を毎フレーム1回求める。
+        // 始点(ライト位置)→狙点(target)が軸。当たり判定は甘め: コーン半頂角に
+        // 少し余裕(×1.2)を持たせ、ビーム周縁の薄明かりに入った歌詞も照射とみなす。
+        const beamPos = this.mouseLight.position;
+        const beamDir = this._beamDir.copy(this.mouseLight.target.position).sub(beamPos).normalize();
+        const spotCos = Math.cos(Math.min(Math.PI / 2, this.mouseLight.angle * 1.2));
+
         // 2. Update Interactive 3D Lyrics
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const mesh = this.activeSprites[i];
             const ud = mesh.userData;
             const age = Math.max(0, position - ud.birth);
 
-            const spotTarget = this.mouseLight.target.position;
-            // sqrtを避け2乗距離で比較(4.2 → 4.2²)。毎フレーム×全スプライトの平方根を削減。
-            const distToSpotSq = mesh.position.distanceToSquared(spotTarget);
+            // スポットライトのビーム(円錐)の中に歌詞が入っているかで判定する。
+            // クリック位置(カーソル)ではなく、実際に光が当たっている範囲を使う。
+            // ビーム始点から歌詞へのベクトルが、軸方向の前方かつコーン半頂角内にあれば照射。
+            const toLyric = this._toLyric.copy(mesh.position).sub(beamPos);
+            const along = toLyric.dot(beamDir);                 // ビーム軸方向の前方距離
+            const cosToAxis = along > 0 ? along / toLyric.length() : -1;
             // スポットライトは押下中のみ有効(spotOn)。サビは舞台全体が照らされ、
             // すべての歌詞が浮かび上がる(受動的に聴いていても見せ場が伝わる)。
-            const litBySpot = distToSpotSq < 4.2 * 4.2 && this.spotOn > 0.4;
+            const litBySpot = this.spotOn > 0.25 && along > 0 && cosToAxis > spotCos;
             const isIlluminated = (litBySpot || this.isClimax) && f < 0.3;
             const targetProgress = isIlluminated ? 1.0 : 0.0;
             ud.hoverProgress += (targetProgress - ud.hoverProgress) * 0.08;
             const p = ud.hoverProgress;
 
             // 照射時間の蓄積 → 照らし切り(kindle)判定
+            // 照らし切った瞬間に「光って破裂」: 紙吹雪が舞い降り、同時に客席の灯としても残る
             if (isIlluminated) {
                 ud.litTime += dtMs;
                 if (!ud.kindled && ud.litTime >= this.litThreshold) {
                     ud.kindled = true;
                     ud.kindleFlash = 1.0;
+                    ud.bursting = true;
+                    ud.burstT = 0;
+                    this.burstLyricToConfetti(mesh.position.clone());
+                    this.spawnSeatLight(mesh.position.clone());
                 }
             }
             ud.kindleFlash *= 0.94;
+
+            // 破裂演出: 膨らんで強く発光しながら弾け飛び、紙吹雪を残して消える
+            if (ud.bursting) {
+                ud.burstT += dt;
+                const bt = Math.min(1, ud.burstT / 0.35);
+                const bs = 1 + bt * 1.8;
+                mesh.scale.set(bs, bs, 1);
+                mesh.material.opacity = Math.max(0, 1 - bt);
+                mesh.material.emissive.setHSL(0.12, 0.9, Math.min(0.95, 0.4 + 0.55 * (1 - bt)));
+                if (bt >= 1) {
+                    this.scene.remove(mesh);
+                    mesh.material.map.dispose();
+                    mesh.material.dispose();
+                    mesh.geometry.dispose();
+                    this.activeSprites.splice(i, 1);
+                }
+                continue; // 破裂中は通常の歌詞更新をスキップ
+            }
 
             // Float up and drift smoothly
             mesh.position.y = ud.baseY + Math.sin(position * 0.0015 + ud.birth) * 0.25 * p + (age * 0.00025);
@@ -971,10 +1048,8 @@ export class SongAfter extends BaseSong {
             }
 
             if (age > ud.life || f >= 1) {
-                // 照らし切った歌詞は、消える瞬間に客席の灯として残る
-                if (ud.kindled && f < 1) {
-                    this.spawnSeatLight(mesh.position.clone());
-                }
+                // 照らし切れなかった歌詞は、灯にも紙吹雪にもならず静かに消える
+                // (照らし切った歌詞は kindle 時に破裂・灯化を済ませている)
                 this.scene.remove(mesh);
                 mesh.material.map.dispose();
                 mesh.material.dispose();
@@ -983,12 +1058,14 @@ export class SongAfter extends BaseSong {
             }
         }
 
-        // 3. Petals: 床に積もり、曲が終わるまで残る
+        // 3. 紙吹雪(破裂した歌詞由来): 舞い降りて床に積もり、曲が終わるまで残る
         for (let i = this.petals.length - 1; i >= 0; i--) {
             const mesh = this.petals[i];
             const ud = mesh.userData;
 
             if (!ud.isFloored) {
+                // 破裂の初速を重力で減衰させ、跳ね上がりからふわりと降下へ転じる
+                if (ud.gravity) ud.vy = Math.max(-0.085, ud.vy - ud.gravity);
                 mesh.position.x += ud.vx + Math.sin(rel * 3.5 + ud.flutterPhase) * 0.015;
                 mesh.position.y += ud.vy;
                 mesh.position.z += ud.vz;
@@ -1001,21 +1078,6 @@ export class SongAfter extends BaseSong {
                     mesh.rotation.x = -Math.PI / 2;
                     mesh.rotation.y = 0;
                     mesh.rotation.z = Math.random() * Math.PI * 2;
-                }
-            } else if (!ud.toLamp && !ud.fading) {
-                // 床のバラをスポットライトでじっくり照らすと、灯に変わって客席へ
-                // (押下中=spotOnのときだけ照射が効く)
-                const spot = this.mouseLight.target.position;
-                const dx = mesh.position.x - spot.x;
-                const dz = mesh.position.z - spot.z;
-                if (this.spotOn > 0.4 && dx * dx + dz * dz < 3.2) {
-                    ud.roseLit = (ud.roseLit || 0) + dt * 1000;
-                    if (ud.roseLit >= 900 && this.relNow() - (this._lastRoseLamp || 0) > 0.45) {
-                        this._lastRoseLamp = this.relNow();
-                        ud.toLamp = true;
-                        this.spawnSeatLight(mesh.position.clone());
-                        this.startPetalFade(mesh); // 共有マテリアルを汚さない正規ルート
-                    }
                 }
             }
 
