@@ -1391,8 +1391,8 @@ export class SongKotaete extends BaseSong {
         // 湖: フィナーレ中はさざ波立つ水面を更新(カメラ前方へ追従)
         this._updateLake(now);
         this.gridMaterial.color.copy(this.worldColor);
-        // フィナーレでは床グリッドを完全に隠し、水面だけを主役にする
-        this.gridMaterial.opacity = this.finaleActive
+        // フィナーレ／地底ケイブ中は床グリッドを隠し、水面を主役にする
+        this.gridMaterial.opacity = (this.finaleActive || this.activeEnvKey === 'cavern')
             ? 0
             : 0.45 + beatPulse * 0.45;
         if (this.starField) {
@@ -1896,7 +1896,7 @@ export class SongKotaete extends BaseSong {
                     17, '#2a3170', 0.45, 0.6);
             }
         } else if (key === 'cavern') {
-            this._makeCavern(group, items);
+            this._makeCaveScene(group, items);
         } else {
             this.scene.remove(group);
             return null;
@@ -1924,47 +1924,203 @@ export class SongKotaete extends BaseSong {
         return { update: (now, dt, fade) => { m.opacity = (0.6 + 0.4 * Math.sin(now * 0.002)) * 0.9 * fade; } };
     }
 
-    // 地底: 左右の岩壁・天井・鍾乳石(ダークな線群)＋奥の淡い光
-    _makeCavern(group, items) {
-        // 奥に仄かな光(地底湖へ続く水明かり)。閉塞の中に一点の抜けを作り、暗すぎを回避。
-        const shaft = new THREE.Sprite(new THREE.SpriteMaterial({
-            map: this.glowTexture, color: new THREE.Color('#3ea0b0'),
-            transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending,
-        }));
-        shaft.scale.set(14, 9, 1);
-        shaft.position.set(0, 1.5, -44);
-        group.add(shaft);
-        items.push({ update: (now, dt, fade) => { shaft.material.opacity = (0.4 + 0.12 * Math.sin(now * 0.0012)) * fade; } });
+    // GLSL: 水面のさざ波(高さ場)。design_drafts/こたえての素材 の Cave Water より移植。
+    _caveRippleGLSL() {
+        return `
+          uniform float uTime; uniform float uSpeed; uniform float uActivity;
+          float ripple(vec2 p, vec2 c, float wl, float decay, float ph0){
+            float d = length(p - c);
+            float ph = d / wl - uTime * uSpeed + ph0;
+            return sin(ph * 6.28318) * exp(-d * decay);
+          }
+          float heightFn(vec2 p){
+            float h = 0.0;
+            h += ripple(p, vec2(-1.0, 2.0), 0.90, 0.07, 0.0) * 0.035;
+            h += ripple(p, vec2( 3.0,-1.0), 1.10, 0.06, 1.7) * 0.030;
+            h += ripple(p, vec2(-4.0,-3.0), 0.80, 0.08, 3.1) * 0.025;
+            h += ripple(p, vec2( 1.0,-5.0), 1.30, 0.05, 0.6) * 0.030;
+            h += sin(p.x * 0.70 + uTime * 0.7) * 0.018;
+            h += sin(p.y * 0.60 - uTime * 0.6) * 0.018;
+            h += sin((p.x + p.y) * 1.60 + uTime * 1.1) * 0.010;
+            return h * uActivity;
+          }
+        `;
+    }
 
-        const wallMat = new THREE.LineBasicMaterial({ color: new THREE.Color('#7a5c44'), transparent: true, opacity: 0 });
-        for (const side of [-1, 1]) {
-            for (let k = 0; k < 9; k++) {
-                const z = -3 - k * 5.5;
-                const pts = [
-                    new THREE.Vector3(side * (6.5 - k * 0.15), -2, z),
-                    new THREE.Vector3(side * 9.5, 7.5, z),
-                ];
-                group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wallMat));
+    // 地底湖: design_drafts のケイブ・ウォーター背景を移植。
+    // 水面(シェーダ)+岩柱+鍾乳石+天井+発光ライティングを、カメラに追従するgroupに構築。
+    // ※元コードは固定カメラ(z=9)前提のため、奥行き判定は world.z でなく
+    //   ローカルz(プール基準)で行い、進行で破綻しないようにしている。
+    _makeCaveScene(group, items) {
+        const tint = { shallow: [0.13, 0.62, 0.66], mid: [0.02, 0.26, 0.34], deep: [0.01, 0.05, 0.09], glow: [0.30, 0.88, 0.92] };
+        const V = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+        const uniforms = {
+            uTime: { value: 0 }, uSpeed: { value: 0.9 }, uActivity: { value: 1.0 },
+            uAmp: { value: 0.05 }, uIntensity: { value: 1.0 }, uOpacity: { value: 0 },
+            uShallow: { value: V(tint.shallow) }, uMid: { value: V(tint.mid) },
+            uDeep: { value: V(tint.deep) }, uGlow: { value: V(tint.glow) },
+        };
+        const ripple = this._caveRippleGLSL();
+        const waterMat = new THREE.ShaderMaterial({
+            uniforms, side: THREE.DoubleSide, transparent: true, depthWrite: false,
+            vertexShader: ripple + `
+                uniform float uAmp;
+                varying vec3 vWorld; varying vec2 vLoc;
+                void main(){
+                    vLoc = position.xz;
+                    vec3 p = position; p.y += heightFn(position.xz) * uAmp;
+                    vec4 wp = modelMatrix * vec4(p, 1.0);
+                    vWorld = wp.xyz;
+                    gl_Position = projectionMatrix * viewMatrix * wp;
+                }
+            `,
+            fragmentShader: ripple + `
+                uniform vec3 uShallow; uniform vec3 uMid; uniform vec3 uDeep; uniform vec3 uGlow;
+                uniform float uIntensity; uniform float uOpacity;
+                varying vec3 vWorld; varying vec2 vLoc;
+                float caustic(vec2 uv, float t){
+                    vec2 q = uv * 1.35;
+                    for(int i=0;i<4;i++){
+                        q += vec2(sin(q.y*1.5 + t*0.8 + float(i)), cos(q.x*1.4 - t*0.7 + float(i))) * 0.40;
+                    }
+                    float a = sin(q.x*2.0) * sin(q.y*2.0);
+                    float b = sin(q.x*1.1 + q.y*1.3);
+                    float c = abs(a)*0.7 + abs(b)*0.3;
+                    float net = clamp(pow(1.0 - c, 4.0), 0.0, 1.0);
+                    float d = length(uv - vec2(0.0, -1.5));
+                    float rings = (0.5 + 0.5 * sin(d * 5.0 - t * 2.0)) * exp(-d * 0.13);
+                    return clamp(net * (0.55 + 0.7 * rings) + rings * 0.22, 0.0, 1.0);
+                }
+                void main(){
+                    vec2 p = vLoc;
+                    float e = 0.18;
+                    float hx = heightFn(p + vec2(e,0.0)) - heightFn(p - vec2(e,0.0));
+                    float hz = heightFn(p + vec2(0.0,e)) - heightFn(p - vec2(0.0,e));
+                    vec3 N = normalize(vec3(-hx, 2.0*e, -hz));
+                    float near = smoothstep(-9.0, 7.0, vLoc.y);
+                    float edge = smoothstep(2.0, 8.5, abs(vLoc.x));
+                    float lit = clamp(near * 0.82 + edge * 0.34, 0.0, 1.0);
+                    vec2 cuv = p + N.xz * 2.2;
+                    float ca = caustic(cuv, uTime * 0.9) * (0.18 + lit);
+                    vec3 base = mix(uDeep, uMid, smoothstep(0.0, 0.5, lit));
+                    base = mix(base, uShallow, smoothstep(0.45, 1.0, lit));
+                    vec3 col = base + uGlow * ca * uIntensity;
+                    vec3 Vd = normalize(cameraPosition - vWorld);
+                    float fres = pow(1.0 - max(dot(N, Vd), 0.0), 3.0);
+                    col = mix(col, vec3(0.05,0.045,0.035), fres * 0.6);
+                    vec3 L = normalize(vec3(0.25, 1.0, 0.15));
+                    vec3 Hh = normalize(L + Vd);
+                    float spec = pow(max(dot(N, Hh), 0.0), 110.0);
+                    col += vec3(0.7,0.95,0.85) * spec * 0.35;
+                    col = mix(vec3(0.03,0.03,0.035), col, smoothstep(-22.0, -4.0, vLoc.y));
+                    gl_FragColor = vec4(col, uOpacity);
+                }
+            `,
+        });
+        const seg = this.isMobile ? 110 : 190;
+        const waterGeo = new THREE.PlaneGeometry(70, 70, seg, seg);
+        waterGeo.rotateX(-Math.PI / 2);
+        const water = new THREE.Mesh(waterGeo, waterMat);
+        group.add(water);
+
+        // フェード対象(不透明素材・ライト)を集めて1つのupdaterで制御
+        const mats = [];   // { mat, base }
+        const lights = []; // { light, base }
+
+        const rockMat = new THREE.MeshStandardMaterial({ color: 0x6f5d42, roughness: 1.0, metalness: 0.0, transparent: true, opacity: 0 });
+        const ceilMat = new THREE.MeshStandardMaterial({ color: 0x241b12, roughness: 1.0, transparent: true, opacity: 0 });
+        const stalMat = new THREE.MeshStandardMaterial({ color: 0x82704f, roughness: 0.95, transparent: true, opacity: 0 });
+        mats.push({ mat: rockMat, base: 1 }, { mat: ceilMat, base: 1 }, { mat: stalMat, base: 1 });
+
+        const jitter = (geo, amp) => {
+            const pos = geo.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+                const n = Math.sin(x * 3.1 + y * 2.3) * Math.cos(z * 2.7 + y * 1.7);
+                const r = 1 + n * amp * 0.5 + (Math.random() - 0.5) * amp;
+                pos.setXYZ(i, x * r, y, z * r);
             }
-        }
-        // 天井(頭上に迫る横線)
-        for (let k = 0; k < 9; k++) {
-            const z = -3 - k * 5.5;
-            const pts = [new THREE.Vector3(-9.5, 7.5, z), new THREE.Vector3(9.5, 7.5, z)];
-            group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wallMat));
-        }
-        items.push({ update: (now, dt, fade) => { wallMat.opacity = 0.95 * fade; } });
+            pos.needsUpdate = true;
+            geo.computeVertexNormals();
+        };
+        const makeMound = (x, z, r, ht) => {
+            const g = new THREE.ConeGeometry(r, ht, 26, 6);
+            jitter(g, 0.22);
+            const m = new THREE.Mesh(g, rockMat);
+            m.position.set(x, ht / 2 - 0.15, z);
+            group.add(m);
+        };
+        const makeColumn = (x, z, baseR, baseH, shaftR, topY) => {
+            makeMound(x, z, baseR, baseH);
+            const sh = topY - (baseH - 0.15);
+            const g = new THREE.CylinderGeometry(shaftR, baseR * 0.5, sh, 22, 8);
+            jitter(g, 0.16);
+            const m = new THREE.Mesh(g, rockMat);
+            m.position.set(x, (baseH - 0.15) + sh / 2, z);
+            group.add(m);
+        };
+        makeColumn(4.7, -1.6, 1.75, 1.7, 0.6, 5.4);
+        makeColumn(-5.0, 0.4, 1.55, 1.6, 0.5, 5.4);
+        makeMound(-2.4, -0.6, 0.95, 1.15);
+        makeMound(-3.6, -2.1, 0.70, 0.9);
+        makeMound(5.6, -4.0, 0.9, 1.0);
 
-        // 鍾乳石(天井から垂れる短い線) — 仄かに青緑に光る
-        const stMat = new THREE.LineBasicMaterial({ color: new THREE.Color('#2f6f80'), transparent: true, opacity: 0 });
-        for (let i = 0; i < 12; i++) {
-            const x = (Math.random() - 0.5) * 15;
-            const z = -6 - Math.random() * 42;
-            const len = 1 + Math.random() * 2.8;
-            const pts = [new THREE.Vector3(x, 7.2, z), new THREE.Vector3(x + 0.35, 7.2 - len, z)];
-            group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), stMat));
+        const ceil = new THREE.Mesh(new THREE.BoxGeometry(60, 1.4, 40), ceilMat);
+        ceil.position.set(0, 5.9, -8);
+        group.add(ceil);
+
+        const makeStalactite = (x, z, topR, len, seed) => {
+            const g = new THREE.CylinderGeometry(topR, topR * 0.04, len, 14, 30, false);
+            const pos = g.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                const px = pos.getX(i), py = pos.getY(i), pz = pos.getZ(i);
+                const ty = (py + len / 2) / len;
+                const rr = Math.sqrt(px * px + pz * pz);
+                const ang = Math.atan2(pz, px);
+                let profile = Math.pow(Math.max(ty, 0.0), 0.55);
+                profile *= 1.0
+                    + 0.22 * Math.sin(ty * Math.PI * 4.5 + seed)
+                    + 0.10 * Math.sin(ang * 5.0 + seed * 1.7)
+                    + 0.06 * Math.sin(ty * Math.PI * 13.0 + seed);
+                const desired = topR * Math.max(profile, 0.0);
+                const f = rr > 1e-4 ? desired / rr : 0.0;
+                pos.setXYZ(i, px * f, py, pz * f);
+            }
+            pos.needsUpdate = true;
+            jitter(g, 0.05);
+            g.computeVertexNormals();
+            const m = new THREE.Mesh(g, stalMat);
+            m.position.set(x, 5.4 - len / 2, z);
+            m.rotation.y = seed;
+            group.add(m);
+        };
+        const ceilN = this.isMobile ? 24 : 46;
+        for (let i = 0; i < ceilN; i++) {
+            makeStalactite(-11 + Math.random() * 22, -11 + Math.random() * 8,
+                0.12 + Math.random() * 0.30, 0.8 + Math.random() * 2.7, Math.random() * 6.28);
         }
-        items.push({ update: (now, dt, fade) => { stMat.opacity = (0.55 + 0.2 * Math.sin(now * 0.0015)) * fade; } });
+        const curtainN = this.isMobile ? 12 : 22;
+        for (let i = 0; i < curtainN; i++) {
+            makeStalactite(-10 + Math.random() * 20, -3.6 + Math.random() * 1.4,
+                0.10 + Math.random() * 0.18, 0.6 + Math.random() * 1.8, Math.random() * 6.28);
+        }
+
+        const amb = new THREE.AmbientLight(0x1a221f, 0); group.add(amb); lights.push({ light: amb, base: 1.1 });
+        const key = new THREE.DirectionalLight(0xffe7c4, 0); key.position.set(4, 9, 5); group.add(key); lights.push({ light: key, base: 0.7 });
+        const rim = new THREE.DirectionalLight(0x6a7a9a, 0); rim.position.set(-6, 5, -4); group.add(rim); lights.push({ light: rim, base: 0.4 });
+        const glow = new THREE.PointLight(0x1ec88a, 0, 16, 1.6); glow.position.set(0, 0.5, 1.5); group.add(glow); lights.push({ light: glow, base: 2.0 });
+        const glow2 = new THREE.PointLight(0x16b8c8, 0, 14, 1.8); glow2.position.set(-3, 0.4, -1); group.add(glow2); lights.push({ light: glow2, base: 1.2 });
+
+        // カメラに追従しつつ、水面が床に来るようY=-0.3・前方9へ。元シーンの構図を再現。
+        items.push({
+            update: (now, dt, fade) => {
+                group.position.set(0, -0.3, this.camera.position.z - 9);
+                uniforms.uTime.value = now * 0.001;
+                uniforms.uOpacity.value = fade;
+                for (const m of mats) m.mat.opacity = m.base * fade;
+                for (const l of lights) l.light.intensity = l.base * fade;
+            },
+        });
     }
 
     updateEnvironment(now, deltaSec) {
@@ -2535,8 +2691,8 @@ export class SongKotaete extends BaseSong {
         // 湖に対応する3D空間背景を確実に出す(空/夜空/洞窟)
         if (lake.env) this.activateEnvironment(lake.env);
 
-        // 湖を3D構築し、カメラをやや見下ろして水面の広がりを見せる
-        this._createLake(lake, lake.env);
+        // 湖を3D構築(地底湖はケイブ・ウォーター環境が水面を持つので汎用湖は出さない)
+        if (lake.env !== 'cavern') this._createLake(lake, lake.env);
         this.camPitchTarget = -0.12;
         this.camYawTarget = 0;
 
