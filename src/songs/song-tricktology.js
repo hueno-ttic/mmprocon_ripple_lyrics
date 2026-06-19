@@ -74,6 +74,46 @@ export class SongTricktology extends BaseSong {
         this.captionEl = null;
         this._captionTimer = null;
 
+        // ── ゲージ & 欠片収集ゲーム ──
+        this.gauge = 0;            // 共鳴ゲージ 0..1（満タンで世界反転）
+        this.flipState = 0;        // 0=実像が上, 1=鏡像が上（タップ蓄積で切替）
+        this.flipCount = 0;
+        this.fragmentSprites = []; // レイキャスト対象の欠片（upperスプライト）
+        this.combo = 0;
+        this.bestCombo = 0;
+        this.perfectCount = 0;
+        this.collectedCount = 0;
+        this._beatPulse = 0;
+        this.mirrorFlash = 0;      // タップ時の鋭い閃光（鏡像歌詞・水鏡世界が光る）
+        this.charge = 0;           // 鏡像タップで貯まるチャージ 0..1（実像タップで放出して欠片を多く集める）
+
+        // ── 集約する月 ──
+        this.moonGroup = null;
+        this.moon = null;
+        this.moonReflection = null;
+        this.moonHalo = null;
+        this.moonReflHalo = null;
+        this.moonCanvas = null;
+        this.moonCtx = null;
+        this.moonTex = null;
+        this.moonPhase = 0;        // 0..1 満ち欠け
+        this.moonProgress = 0;     // 集めた重みの累計
+        this.moonTarget = this.isMobile ? 14 : 18;
+        this.moonComplete = false;
+        this.moonPulse = 0;
+        this.moonLocal = new THREE.Vector3(0, 7.2, -17);
+        this._moonCap = null;
+
+        // 光の粒（欠片→月へ収束）
+        this.motes = [];
+
+        // HUD要素
+        this.gaugeEl = null;
+        this.gaugeFillEl = null;
+        this.comboEl = null;
+        this.chargeEl = null;
+        this.flashEl = null;
+
         // パーティクル（崩壊の光の粒など）
         this.bursts = [];
 
@@ -107,6 +147,8 @@ export class SongTricktology extends BaseSong {
         this.initAmbientShapes();
         this.glowTexture = this.createGlowTexture();
         this.loadMikus();
+        this.initMoon();
+        this.initHud();
 
         window.addEventListener('resize', this.boundOnResize);
         this.songWrapper.addEventListener('pointerdown', this.boundOnPointerDown);
@@ -475,10 +517,13 @@ export class SongTricktology extends BaseSong {
     }
 
     spawnLyricPair(phrase, position) {
-        // 最大ペア数制限（古いものから消す）
-        const maxPairs = this.isMobile ? 3 : 4;
+        // 最大ペア数制限（古いものから消す）。タップ収集のため少し多めに漂わせる
+        const maxPairs = this.isMobile ? 4 : 6;
         while (this.activePairs.length >= maxPairs) {
-            this.disposePair(this.activePairs.shift());
+            const old = this.activePairs.shift();
+            const fi = this.fragmentSprites.indexOf(old.upper);
+            if (fi >= 0) this.fragmentSprites.splice(fi, 1);
+            this.disposePair(old);
         }
 
         const { texture: upTex, aspect } = this.createTextTexture(phrase.text, false);
@@ -509,6 +554,7 @@ export class SongTricktology extends BaseSong {
             upper, lower,
             upTex, loTex,
             flipped: false,
+            collected: false,
             text: phrase.text,
             birth: position,
             life: duration + 1400,
@@ -519,6 +565,7 @@ export class SongTricktology extends BaseSong {
             drift: (Math.random() - 0.5) * 0.004,
             pulse: 0
         });
+        this.fragmentSprites.push(upper);
     }
 
     disposePair(pair) {
@@ -534,11 +581,15 @@ export class SongTricktology extends BaseSong {
     // ───────────────────────── 入力 → 波紋 ─────────────────────────
 
     onPointerDown(e) {
-        if (this.choiceOverlay) return; // 選択UI表示中はドラッグ無効
+        if (this.choiceOverlay) return; // 選択UI表示中は無効
         this.isDragging = true;
         this.lastPointer.set(e.clientX, e.clientY);
         this.dragAccum = 0;
-        this.spawnRippleAtPointer(e.clientX, e.clientY, 0.5);
+
+        // タップした瞬間の拍タイミングを毎回評価（欠片に当たらなくても光る）
+        if (!this.worldChosen) this.handleTap(e.clientX, e.clientY);
+        // 水面の波紋（世界が生きている手応え）
+        this.spawnRippleAtPointer(e.clientX, e.clientY, 0.4);
     }
 
     onPointerMove(e) {
@@ -584,6 +635,418 @@ export class SongTricktology extends BaseSong {
         this.rippleIndex++;
         this.rippleCount++;
         this.waveEnergy = Math.min(1.4, this.waveEnergy + amp * 0.38);
+    }
+
+    // ───────────────────── 欠片の収集 → ゲージ → 反転 ─────────────────────
+
+    // タップ1回ごとの処理: 鏡像＝チャージ / 実像＝チャージを放出して欠片を多く集める
+    handleTap(clientX, clientY) {
+        const judge = this.judgeTiming();
+
+        // コンボ（リズム：拍に合えば伸び、外すと切れる）
+        if (judge === 'ok') { this.combo = 0; }
+        else { this.combo++; if (this.combo > this.bestCombo) this.bestCombo = this.combo; }
+        if (judge === 'perfect') this.perfectCount++;
+
+        const hit = this.pickSprite(clientX, clientY);
+        if (hit && hit.kind === 'lower') {
+            this.chargeMirror(judge, clientX, clientY);          // 鏡像をタップ＝チャージ
+        } else if (hit && hit.kind === 'upper') {
+            this.reflectReal(hit.pair, judge, clientX, clientY); // 実像をタップ＝放出して収集
+        } else {
+            // 空タップ: 軽い拍フラッシュのみ
+            const f = judge === 'perfect' ? 0.5 : judge === 'good' ? 0.3 : 0.1;
+            this.mirrorFlash = Math.min(1.8, this.mirrorFlash + f);
+            this.showJudgment(judge, clientX, clientY);
+        }
+
+        this.waveEnergy = Math.min(1.4, this.waveEnergy + 0.12);
+        this.updateHud();
+    }
+
+    // 鏡像歌詞をタップ＝チャージを貯める（タップするほど鏡像も実像の欠片も強く光る）
+    chargeMirror(judge, clientX, clientY) {
+        const amt = judge === 'perfect' ? 0.34 : judge === 'good' ? 0.22 : 0.10;
+        this.charge = Math.min(1, this.charge + amt);
+        // チャージが乗るほど派手に閃く
+        this.mirrorFlash = Math.min(1.8, this.mirrorFlash + 0.55 + this.charge * 0.6);
+        this.showJudgment(judge, clientX, clientY, '⚡ CHARGE');
+    }
+
+    // 実像歌詞をタップ＝チャージを放出（チャージ量に応じて欠片が多く集まる）
+    reflectReal(pair, judge, clientX, clientY) {
+        const mult = 1 + this.charge * 3;     // 無チャージ=×1 … 満タン=×4
+        this.collectFragment(pair, judge, mult);
+        this.mirrorFlash = Math.min(1.8, this.mirrorFlash + 0.5);
+        this.showJudgment(judge, clientX, clientY, mult >= 1.3 ? `反映 ×${mult.toFixed(1)}` : null);
+        this.charge = 0;                       // チャージを使い切る
+    }
+
+    // タップ位置のスプライトを拾う（上=実像 / 下=鏡像）。直接ヒット→画面最近傍の順
+    pickSprite(clientX, clientY) {
+        if (!this.camera) return null;
+        const cand = [];
+        for (const p of this.activePairs) {
+            if (p.collected || p.shatter) continue;
+            cand.push({ sprite: p.upper, pair: p, kind: 'upper' });
+            cand.push({ sprite: p.lower, pair: p, kind: 'lower' });
+        }
+        if (!cand.length) return null;
+        const ndc = new THREE.Vector2(
+            (clientX / window.innerWidth) * 2 - 1,
+            -(clientY / window.innerHeight) * 2 + 1
+        );
+        this.raycaster.setFromCamera(ndc, this.camera);
+        const hits = this.raycaster.intersectObjects(cand.map(c => c.sprite), false);
+        if (hits.length) {
+            const c = cand.find(c => c.sprite === hits[0].object);
+            if (c) return c;
+        }
+        // 画面上の最近傍（指は大まかでも拾える）
+        let best = null, bestD = 90; // px
+        const v = new THREE.Vector3();
+        for (const c of cand) {
+            v.setFromMatrixPosition(c.sprite.matrixWorld).project(this.camera);
+            const sx = (v.x * 0.5 + 0.5) * window.innerWidth;
+            const sy = (-v.y * 0.5 + 0.5) * window.innerHeight;
+            const d = Math.hypot(sx - clientX, sy - clientY);
+            if (d < bestD) { bestD = d; best = c; }
+        }
+        return best;
+    }
+
+    collectFragment(pair, judge, mult = 1) {
+        pair.collected = true;
+        this.collectedCount++;
+
+        // ゲージ・月への寄与（チャージ量 mult で増幅＝欠片が多く集まる）
+        const gain = (judge === 'perfect' ? 0.20 : judge === 'good' ? 0.13 : 0.07) * mult;
+        this.addGauge(gain * (this.isClimax ? 1.25 : 1));
+        const weight = (judge === 'perfect' ? 1.0 : judge === 'good' ? 0.7 : 0.4) * mult;
+        this.collectMoon(weight);
+
+        // チャージ量に応じて閃光と、月へ収束する光の粒が増える
+        this.mirrorFlash = Math.min(1.8, this.mirrorFlash + 0.4 + (mult - 1) * 0.18);
+        const worldPos = new THREE.Vector3().setFromMatrixPosition(pair.upper.matrixWorld);
+        this.spawnLightMotes(worldPos, judge, mult);
+
+        // すぐには消さず「割れて収束」: 白く弾け、素早く膨張フェードして散る（update内で処理）
+        pair.shatter = true;
+        pair.shatterT = 0;   // 0→1 で割れ→消滅
+        pair.pulse = 1;      // 純白フラッシュ
+        // 収集対象から除外（再収集・以後のレイキャストを防ぐ。activePairsには残しフェードさせる）
+        const fi = this.fragmentSprites.indexOf(pair.upper);
+        if (fi >= 0) this.fragmentSprites.splice(fi, 1);
+
+        this.waveEnergy = Math.min(1.4, this.waveEnergy + 0.18);
+    }
+
+    judgeTiming() {
+        const player = playerManager.player;
+        const position = (player && player.timer) ? player.timer.position : this.getSmoothedTime();
+        if (player && typeof player.findBeat === 'function') {
+            const beat = player.findBeat(position);
+            if (beat) {
+                const diff = Math.min(
+                    Math.abs(position - beat.startTime),
+                    Math.abs(position - beat.endTime)
+                );
+                if (diff <= 130) return 'perfect';
+                if (diff <= 280) return 'good';
+            }
+        }
+        return 'ok';
+    }
+
+    addGauge(amount) {
+        if (this.gauge >= 1) return;
+        this.gauge = Math.min(1, this.gauge + amount);
+        if (this.gauge >= 1) this.triggerFlip();
+    }
+
+    // ゲージ満タン → 世界が"ひっくり返る"（派手な反転）
+    triggerFlip() {
+        this.flipState = this.flipState ? 0 : 1;
+        this.flipCount++;
+        this.gauge = 0;
+
+        this.waveEnergy = 1.4;
+        this.swapSmooth = 1;
+        this.flashScreen();
+        this.addRipple(0, this.mikuZ + 10, 1.2);
+        this.spawnCollapseBurst(null, this.flipState ? 1 : -1);
+        if (this.surfaceLine) this.surfaceLine.material.opacity = 1.0;
+
+        // 反転のたびに月が一段満ちる
+        this.collectMoon(this.moonTarget * 0.12);
+        this.updateHud();
+    }
+
+    showJudgment(judge, clientX, clientY, tag) {
+        const el = document.createElement('div');
+        el.className = 'tricktology-judge';
+        const label = judge === 'perfect' ? 'PERFECT' : judge === 'good' ? 'GOOD' : 'TOUCH';
+        let color = judge === 'perfect' ? '#fff7ad' : judge === 'good' ? '#b9acff' : '#9aa0c8';
+        let text = (this.combo >= 3 && judge !== 'ok') ? `${label}  ${this.combo}` : label;
+        if (tag) {
+            text = `${tag}\n${text}`;
+            // チャージ＝金、反映＝シアン白で色分け
+            if (tag.indexOf('CHARGE') >= 0) color = '#ffdf8a';
+            else if (tag.indexOf('反映') >= 0) color = '#d6f4ff';
+        }
+        el.textContent = text;
+        el.style.whiteSpace = 'pre';
+        el.style.textAlign = 'center';
+        el.style.left = clientX + 'px';
+        el.style.top = clientY + 'px';
+        el.style.color = color;
+        el.style.fontSize = (tag || judge === 'perfect') ? 'clamp(18px,4vw,32px)' : 'clamp(15px,3.2vw,26px)';
+        el.style.textShadow = `0 0 14px ${color}, 0 0 4px #000`;
+        this.songWrapper.appendChild(el);
+        setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 750);
+    }
+
+    flashScreen() {
+        if (!this.flashEl) return;
+        this.flashEl.classList.remove('fire');
+        void this.flashEl.offsetWidth;
+        this.flashEl.classList.add('fire');
+    }
+
+    updateHud() {
+        if (this.gaugeFillEl) this.gaugeFillEl.style.width = (this.gauge * 100).toFixed(1) + '%';
+        if (this.gaugeEl) this.gaugeEl.classList.toggle('full', this.gauge >= 1);
+        if (this.comboEl) {
+            if (this.combo >= 3) {
+                this.comboEl.textContent = `${this.combo} COMBO`;
+                this.comboEl.classList.add('show');
+            } else {
+                this.comboEl.classList.remove('show');
+            }
+        }
+        if (this.chargeEl) {
+            if (this.charge > 0.02) {
+                this.chargeEl.textContent = `⚡ CHARGE ${Math.round(this.charge * 100)}%`;
+                this.chargeEl.style.filter = `brightness(${(1 + this.charge * 0.8).toFixed(2)})`;
+                this.chargeEl.classList.add('show');
+            } else {
+                this.chargeEl.classList.remove('show');
+            }
+        }
+    }
+
+    // ───────────────────────── 集約する月 ─────────────────────────
+
+    initMoon() {
+        this.moonGroup = new THREE.Group();
+
+        this.moonCanvas = document.createElement('canvas');
+        this.moonCanvas.width = 256;
+        this.moonCanvas.height = 256;
+        this.moonCtx = this.moonCanvas.getContext('2d');
+        this.moonTex = new THREE.CanvasTexture(this.moonCanvas);
+        this.redrawMoon();
+
+        const scale = this.isMobile ? 3.2 : 4.2;
+        this._moonScale = scale;
+
+        const moonMat = new THREE.SpriteMaterial({
+            map: this.moonTex, transparent: true, opacity: 0,
+            depthWrite: false
+        });
+        this.moon = new THREE.Sprite(moonMat);
+        this.moon.position.copy(this.moonLocal);
+        this.moon.scale.set(scale, scale, 1);
+        this.moonGroup.add(this.moon);
+
+        const haloMat = new THREE.SpriteMaterial({
+            map: this.glowTexture, transparent: true, opacity: 0,
+            depthWrite: false, blending: THREE.AdditiveBlending,
+            color: new THREE.Color('#cfe3ff')
+        });
+        this.moonHalo = new THREE.Sprite(haloMat);
+        this.moonHalo.position.copy(this.moonLocal);
+        this.moonHalo.scale.set(scale * 2.4, scale * 2.4, 1);
+        this.moonGroup.add(this.moonHalo);
+
+        // 水鏡側の反射（やや弱く揺らぐ）
+        this.moonReflection = new THREE.Sprite(moonMat.clone());
+        this.moonReflection.position.set(this.moonLocal.x, -this.moonLocal.y, this.moonLocal.z);
+        this.moonReflection.scale.set(scale, scale, 1);
+        this.moonGroup.add(this.moonReflection);
+
+        this.moonReflHalo = new THREE.Sprite(haloMat.clone());
+        this.moonReflHalo.position.set(this.moonLocal.x, -this.moonLocal.y, this.moonLocal.z);
+        this.moonReflHalo.scale.set(scale * 2.4, scale * 2.4, 1);
+        this.moonGroup.add(this.moonReflHalo);
+
+        this.worldGroup.add(this.moonGroup);
+    }
+
+    // 満ち欠けをキャンバスに描く（phase: 0=新月/不可視, 1=満月）
+    redrawMoon() {
+        const ctx = this.moonCtx;
+        const S = 256, cx = 128, cy = 128, r = 96;
+        ctx.clearRect(0, 0, S, S);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.clip();
+        // 月本体
+        const g = ctx.createRadialGradient(cx - 26, cy - 26, 12, cx, cy, r);
+        g.addColorStop(0, '#ffffff');
+        g.addColorStop(0.6, '#e9ecff');
+        g.addColorStop(1, '#aab4e8');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, S, S);
+        // 満ち欠けの影（右から光が満ちる）
+        const dx = this.moonPhase * 2 * r; // 0=全影, 2r=満月
+        ctx.fillStyle = 'rgba(7,7,26,0.94)';
+        ctx.beginPath();
+        ctx.arc(cx + dx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+        if (this.moonTex) this.moonTex.needsUpdate = true;
+    }
+
+    collectMoon(weight) {
+        if (this.moonComplete) { this.moonPulse = Math.min(1.6, this.moonPulse + 0.3); return; }
+        this.moonProgress += weight;
+        const newPhase = Math.min(1, this.moonProgress / this.moonTarget);
+        if (Math.abs(newPhase - this.moonPhase) > 0.004 || newPhase >= 1) {
+            this.moonPhase = newPhase;
+            this.redrawMoon();
+        }
+        this.moonPulse = Math.min(1.6, this.moonPulse + 0.25);
+        if (this.moonPhase >= 1 && !this.moonComplete) this.completeMoon();
+    }
+
+    completeMoon() {
+        this.moonComplete = true;
+        this.moonPulse = 1.6;
+        this.flashScreen();
+        this.spawnCollapseBurst(null, 1);
+        this.waveEnergy = 1.4;
+        if (this.surfaceLine) this.surfaceLine.material.opacity = 1.0;
+
+        const cap = document.createElement('div');
+        cap.className = 'tricktology-caption';
+        cap.textContent = '欠片が満ちて — 月が生まれた';
+        this.songWrapper.appendChild(cap);
+        this._moonCap = cap;
+        requestAnimationFrame(() => cap.classList.add('visible'));
+        setTimeout(() => { if (cap.parentNode) cap.classList.remove('visible'); }, 5000);
+    }
+
+    spawnLightMotes(worldPos, judge, mult = 1) {
+        let n = judge === 'perfect' ? 22 : judge === 'good' ? 16 : 10;
+        n = Math.round(n * Math.min(3.2, mult));
+        if (this.isMobile) n = Math.round(n * 0.6);
+        n = Math.max(6, n);
+        const start = this.worldGroup.worldToLocal(worldPos.clone());
+        const positions = new Float32Array(n * 3);
+        const starts = [];
+        for (let i = 0; i < n; i++) {
+            const jx = (Math.random() - 0.5) * 1.2;
+            const jy = (Math.random() - 0.5) * 1.2;
+            const jz = (Math.random() - 0.5) * 1.2;
+            positions[i * 3] = start.x + jx;
+            positions[i * 3 + 1] = start.y + jy;
+            positions[i * 3 + 2] = start.z + jz;
+            starts.push(new THREE.Vector3(start.x + jx, start.y + jy, start.z + jz));
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const mat = new THREE.PointsMaterial({
+            color: new THREE.Color(judge === 'perfect' ? '#ffffff' : '#cdb8ff'),
+            size: 0.26,
+            map: this.glowTexture,
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            opacity: 1.0,
+            depthWrite: false
+        });
+        const pts = new THREE.Points(geo, mat);
+        pts.userData = { starts, birth: this.relSec(), life: 0.95 };
+        this.worldGroup.add(pts);
+        this.motes.push(pts);
+    }
+
+    updateMotes(t, delta) {
+        for (let i = this.motes.length - 1; i >= 0; i--) {
+            const pts = this.motes[i];
+            const age = t - pts.userData.birth;
+            const k = Math.min(1, age / pts.userData.life);
+            const ease = k * k * (3 - 2 * k);
+            const arr = pts.geometry.attributes.position.array;
+            const starts = pts.userData.starts;
+            for (let j = 0; j < starts.length; j++) {
+                const s = starts[j];
+                arr[j * 3] = s.x + (this.moonLocal.x - s.x) * ease;
+                arr[j * 3 + 1] = s.y + (this.moonLocal.y - s.y) * ease;
+                arr[j * 3 + 2] = s.z + (this.moonLocal.z - s.z) * ease;
+            }
+            pts.geometry.attributes.position.needsUpdate = true;
+            pts.material.opacity = 1 - ease * ease;
+            if (k >= 1) {
+                this.worldGroup.remove(pts);
+                pts.geometry.dispose();
+                pts.material.dispose();
+                this.motes.splice(i, 1);
+                this.moonPulse = Math.min(1.6, this.moonPulse + 0.12);
+            }
+        }
+    }
+
+    updateMoon(t, delta) {
+        if (!this.moon) return;
+        this.moonPulse *= Math.exp(-delta * 2.2);
+        const appear = Math.min(1, this.moonPhase * 1.5 + (this.moonComplete ? 1 : 0));
+        const bob = Math.sin(t * 0.4) * 0.12;
+        this.moon.position.y = this.moonLocal.y + bob;
+        this.moon.material.opacity = appear;
+
+        const haloBase = 0.25 + this.moonPhase * 0.5 + (this.moonComplete ? 0.25 : 0);
+        const halo = Math.min(1.1, haloBase + this.moonPulse * 0.5);
+        this.moonHalo.material.opacity = halo;
+        this.moonHalo.position.y = this.moon.position.y;
+        const hs = this._moonScale * (2.2 + this.moonPulse * 0.5 + (this.moonComplete ? 0.4 : 0));
+        this.moonHalo.scale.set(hs, hs, 1);
+
+        if (this.moonReflection) {
+            this.moonReflection.material.opacity = appear * 0.55;
+            this.moonReflection.position.x = this.moonLocal.x + Math.sin(t * 1.6) * 0.15 * (0.4 + this.waveEnergy);
+            this.moonReflHalo.material.opacity = halo * 0.5;
+            this.moonReflHalo.position.x = this.moonReflection.position.x;
+            this.moonReflHalo.scale.set(hs, hs, 1);
+        }
+    }
+
+    initHud() {
+        const gauge = document.createElement('div');
+        gauge.className = 'tricktology-gauge';
+        const fill = document.createElement('div');
+        fill.className = 'tricktology-gauge-fill';
+        gauge.appendChild(fill);
+        this.songWrapper.appendChild(gauge);
+        this.gaugeEl = gauge;
+        this.gaugeFillEl = fill;
+
+        const combo = document.createElement('div');
+        combo.className = 'tricktology-combo';
+        this.songWrapper.appendChild(combo);
+        this.comboEl = combo;
+
+        const charge = document.createElement('div');
+        charge.className = 'tricktology-charge';
+        this.songWrapper.appendChild(charge);
+        this.chargeEl = charge;
+
+        const flash = document.createElement('div');
+        flash.className = 'tricktology-flash';
+        this.songWrapper.appendChild(flash);
+        this.flashEl = flash;
     }
 
     // ───────────────────────── 終盤の選択UI ─────────────────────────
@@ -633,6 +1096,67 @@ export class SongTricktology extends BaseSong {
                 font-family: "Inter", "Noto Sans JP", sans-serif;
             }
             .tricktology-caption.visible { opacity: 1; }
+            .tricktology-gauge {
+                position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%);
+                width: min(62vw, 420px); height: 12px; z-index: 40;
+                border-radius: 999px; background: rgba(10,8,40,0.5);
+                border: 1px solid rgba(124,112,230,0.5);
+                box-shadow: 0 0 16px rgba(60,52,137,0.5);
+                overflow: hidden; pointer-events: none;
+            }
+            .tricktology-gauge-fill {
+                height: 100%; width: 0%;
+                background: linear-gradient(90deg, #6A5AE8, #b9acff, #ffffff);
+                box-shadow: 0 0 18px rgba(185,172,255,0.9);
+                transition: width 0.18s ease-out;
+            }
+            .tricktology-gauge.full .tricktology-gauge-fill {
+                animation: tricktology-gauge-flash 0.5s ease-in-out infinite;
+            }
+            @keyframes tricktology-gauge-flash {
+                0%,100% { filter: brightness(1); }
+                50% { filter: brightness(1.8); }
+            }
+            .tricktology-combo {
+                position: absolute; left: 50%; bottom: calc(7% + 26px);
+                transform: translateX(-50%); z-index: 41;
+                color: #fff; font-size: clamp(15px, 3vw, 24px); letter-spacing: 0.12em;
+                font-weight: bold; pointer-events: none; opacity: 0;
+                text-shadow: 0 0 14px #7c70e6, 0 0 4px #000;
+                transition: opacity 0.3s ease;
+                font-family: "Inter", "Noto Sans JP", sans-serif;
+            }
+            .tricktology-combo.show { opacity: 1; }
+            .tricktology-charge {
+                position: absolute; left: 50%; bottom: calc(7% + 52px);
+                transform: translateX(-50%); z-index: 41;
+                color: #ffe39a; font-size: clamp(13px, 2.6vw, 20px); letter-spacing: 0.14em;
+                font-weight: bold; pointer-events: none; opacity: 0;
+                text-shadow: 0 0 14px #ffcf5a, 0 0 4px #000;
+                transition: opacity 0.2s ease;
+                font-family: "Inter", "Noto Sans JP", sans-serif;
+            }
+            .tricktology-charge.show { opacity: 1; }
+            .tricktology-judge {
+                position: absolute; z-index: 42; pointer-events: none;
+                font-weight: bold; letter-spacing: 0.1em; white-space: nowrap;
+                transform: translate(-50%, -50%);
+                font-family: "Inter", "Noto Sans JP", sans-serif;
+                animation: tricktology-judge-pop 0.7s ease-out forwards;
+            }
+            @keyframes tricktology-judge-pop {
+                0% { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+                25% { opacity: 1; transform: translate(-50%, -80%) scale(1.1); }
+                100% { opacity: 0; transform: translate(-50%, -160%) scale(1.0); }
+            }
+            .tricktology-flash {
+                position: absolute; inset: 0; z-index: 45; pointer-events: none;
+                opacity: 0; background: radial-gradient(circle at 50% 42%, rgba(185,172,255,0.85), rgba(106,90,232,0.0) 60%);
+            }
+            .tricktology-flash.fire { animation: tricktology-flash-anim 0.85s ease-out; }
+            @keyframes tricktology-flash-anim {
+                0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; }
+            }
         `;
         document.head.appendChild(this.styleEl);
     }
@@ -674,7 +1198,8 @@ export class SongTricktology extends BaseSong {
             accentColor: '#8a7fff',
             lines: [
                 side === 'upper' ? '選んだのは — 実像の世界' : '選んだのは — 水鏡の世界',
-                `起こした波紋 ${this.rippleCount}`,
+                this.moonComplete ? '欠片を満たし — 月を宿した' : `月の満ち ${Math.round(this.moonPhase * 100)}%`,
+                `最大コンボ ${this.bestCombo} ／ Perfect ${this.perfectCount}`,
             ],
         });
 
@@ -758,6 +1283,10 @@ export class SongTricktology extends BaseSong {
 
         // ── 波エネルギーの減衰と上下明暗スワップ ──
         this.waveEnergy *= Math.exp(-delta * 1.6);
+        // 鏡像フラッシュは素早く減衰させ、タップ直後だけ鋭く閃かせる
+        this.mirrorFlash *= Math.exp(-delta * 3.2);
+        // チャージは緩やかに減衰（実像で反映しないと少しずつ逃げる）
+        this.charge *= Math.exp(-delta * 0.22);
 
         // 環境オブジェ: 上はゆっくり回り、鏡像は位相のずれた「ありえない」動き
         if (this.ambientShapes) {
@@ -802,12 +1331,12 @@ export class SongTricktology extends BaseSong {
             this.rippleCount--; // 自動波紋は操作カウントに含めない
         }
 
-        // ── サビ判定 → 世界反転 ──
+        // ── サビ判定（色彩の高揚＆ゲージ加算ボーナスに使用。反転はゲージ主導）──
         const chorus = (typeof playerManager.player.findChorus === 'function')
                        ? playerManager.player.findChorus(position) : null;
         this.isClimax = !!chorus;
 
-        let flipTarget = this.isClimax ? 1 : 0;
+        let flipTarget = this.flipState; // ゲージ満タンで切り替わるプレイヤー主導の反転
         if (this.worldChosen === 'lower') flipTarget = 1; // 下の世界を本物に確定 → 上に
         if (this.worldChosen === 'upper') flipTarget = 0;
         this.flipProgress += (flipTarget - this.flipProgress) * 0.035;
@@ -842,12 +1371,13 @@ export class SongTricktology extends BaseSong {
             }
         }
 
-        this.dirLight.intensity = 2.4 * upperB + 0.4;
-        this.mirrorLight.intensity = 0.7 + 1.6 * (lowerB - 0.5);
-        if (this.realMatCache.length) this.setBrightness(this.realMatCache, Math.max(0.05, upperB));
-        if (this.mirrorMatCache.length) this.setBrightness(this.mirrorMatCache, Math.max(0.05, lowerB * 0.9));
+        // チャージが乗るほど実像世界が帯電して明るくなる（放出待ちの手応え）
+        this.dirLight.intensity = 2.4 * upperB + 0.4 + this.charge * 1.0;
+        this.mirrorLight.intensity = 0.7 + 1.6 * (lowerB - 0.5) + this.mirrorFlash * 2.4 + this.charge * 0.6;
+        if (this.realMatCache.length) this.setBrightness(this.realMatCache, Math.max(0.05, upperB + this.charge * 0.45));
+        if (this.mirrorMatCache.length) this.setBrightness(this.mirrorMatCache, Math.max(0.05, lowerB * 0.9 + this.mirrorFlash * 0.8));
         if (this.mirrorSilhouette) {
-            this.mirrorSilhouette.material.opacity = 0.7 * Math.max(0, lowerB);
+            this.mirrorSilhouette.material.opacity = Math.min(1, 0.7 * Math.max(0, lowerB) + this.mirrorFlash * 0.5);
             this.mirrorSilhouette.position.x = Math.sin(t * 2.2) * 0.06 * (0.3 + this.waveEnergy);
         }
 
@@ -861,19 +1391,29 @@ export class SongTricktology extends BaseSong {
             this.spawnLyricPair(phrase, position);
         }
 
-        // 前面の読みやすい歌詞（共通レンダラ）
+        // 中央の歌詞表示は廃止（歌詞は水面の「欠片」として登場し、タップで収集する）
         const word = playerManager.player.video.findWord(position)
                   || playerManager.player.video.findChar(position);
-        if (this.lyricRenderer) {
-            if (word) {
-                this.lyricRenderer.update(word);
-            } else if (!phrase) {
-                this.lyricRenderer.update(null);
+
+        // ビート同期: 拍の頭で欠片と水面ラインが脈動し「タップの合図」になる
+        let beatPulse = 0;
+        if (typeof playerManager.player.findBeat === 'function') {
+            const beat = playerManager.player.findBeat(position);
+            if (beat) {
+                const d = Math.min(Math.abs(position - beat.startTime), Math.abs(position - beat.endTime));
+                beatPulse = Math.max(0, 1 - d / 180);
             }
+        }
+        this._beatPulse = beatPulse;
+        if (this.surfaceLine && !this.worldChosen) {
+            this.surfaceLine.material.opacity = Math.min(1, 0.45 + 0.25 * this.swapSmooth
+                                              + 0.3 * beatPulse + 0.5 * this.mirrorFlash);
         }
 
         // ── 歌詞ペアの更新 ──
         const wobbleAmp = 0.05 + this.waveEnergy * 0.22; // 波で下世界が歪む
+        const mirrorFlash = this.mirrorFlash || 0;        // 直近タップの鋭い閃光
+        const charge = this.charge || 0;                  // チャージ量（実像欠片の発光に反映）
         for (let i = this.activePairs.length - 1; i >= 0; i--) {
             const p = this.activePairs[i];
             const age = Math.max(0, position - p.birth);
@@ -882,13 +1422,26 @@ export class SongTricktology extends BaseSong {
             const isWordActive = word && p.text && p.text.includes(word.text)
                               && position >= word.startTime && position <= word.endTime;
             p.pulse += ((isWordActive ? 1 : 0) - p.pulse) * 0.2;
-            const pulseScale = 1.0 + p.pulse * 0.25;
+            // ビートの頭で全欠片が膨らんで光り、「今タップ」の合図になる。
+            // さらにチャージ量に応じて実像欠片がひと回り大きく強く光る。
+            const ripe = this._beatPulse || 0;
+            const pulseScale = 1.0 + p.pulse * 0.25 + ripe * 0.14 + charge * 0.16;
+
+            // 収集された欠片は「割れて収束」: 白く弾けながら膨張しフェードして散る
+            let shatterFade = 1, shatterScale = 1;
+            if (p.shatter) {
+                p.shatterT = Math.min(1, p.shatterT + delta / 0.65); // 約0.65秒で消滅
+                const st = p.shatterT;
+                shatterFade = 1 - st * st;             // 後半で急速にフェード
+                shatterScale = 1 + st * 0.7;           // 割れて広がる
+                p.pulse = Math.max(p.pulse, 1 - st * 0.6); // 純白フラッシュを維持
+            }
 
             // ゆっくり漂う
             p.baseX += p.drift;
             const upY = p.baseY + Math.sin(t * 0.8 + p.baseY) * 0.08;
             p.upper.position.set(p.baseX, upY, p.upper.position.z);
-            p.upper.scale.set(p.baseScale * p.aspect * pulseScale, p.baseScale * pulseScale, 1);
+            p.upper.scale.set(p.baseScale * p.aspect * pulseScale * shatterScale, p.baseScale * pulseScale * shatterScale, 1);
 
             // 波紋が歌詞の真下を通過する瞬間、正像⇄鏡像が入れ替わる
             // (触った波が歌詞に届く=操作が歌詞演出に還元される核)
@@ -913,26 +1466,36 @@ export class SongTricktology extends BaseSong {
                 p.pulse = Math.max(p.pulse, 0.9);
             }
 
-            // 鏡像: 上下対称＋揺らぎ（波エネルギーで増幅）
+            // 鏡像: 上下対称＋揺らぎ（波エネルギーで増幅）。拍同期タップでぐっと膨らんで閃く
             const wob = Math.sin(t * 3.1 + p.baseY * 2.0) * wobbleAmp;
+            const mfPop = 1 + mirrorFlash * 0.18;
             p.lower.position.set(p.baseX + wob, -upY, p.lower.position.z);
             p.lower.scale.set(
-                p.baseScale * p.aspect * pulseScale * (1.0 + wob * 0.08),
-                p.baseScale * pulseScale,
+                p.baseScale * p.aspect * pulseScale * (1.0 + wob * 0.08) * mfPop * shatterScale,
+                p.baseScale * pulseScale * mfPop * shatterScale,
                 1
             );
 
-            // 歌唱パルスで純白フラッシュ
+            // 実像欠片: 歌唱パルスで白く、チャージが乗るほど金色に強く発光（放出すると大量に集まる合図）
             p.upper.material.color.setRGB(1, 1 - p.pulse * 0.25, 1 - p.pulse * 0.25);
+            if (charge > 0.02) {
+                p.upper.material.color.lerp(this._chargeCol || (this._chargeCol = new THREE.Color('#ffdf8a')), Math.min(0.85, charge));
+            }
+            // 鏡像はタップで貯まるチャージ＆鋭い閃光でシアン寄りの白に強く発光
+            p.lower.material.color.setRGB(1, 1, 1).lerp(this._mirrorGlowCol || (this._mirrorGlowCol = new THREE.Color('#d6f4ff')), Math.min(1, mirrorFlash * 0.7 + charge * 0.5));
 
             // 不透明度（フェードイン/アウト × 世界の明るさ）
             let alpha = 1;
             if (age < 200) alpha = age / 200;
             else if (age > p.life - 300) alpha = Math.max(0, (p.life - age) / 300);
-            p.upper.material.opacity = alpha * Math.min(1, upperB + 0.15);
-            p.lower.material.opacity = alpha * 0.7 * Math.min(1, lowerB + 0.2);
+            // 実像欠片はチャージ量で明るさが増す
+            p.upper.material.opacity = Math.min(1, alpha * (Math.min(1, upperB + 0.15) + charge * 0.35)) * shatterFade;
+            // 鏡像歌詞: 普段は薄暗いが、タップ（チャージ）と閃光で一気に明るく浮かび上がる
+            p.lower.material.opacity = Math.min(1, alpha * (0.7 + mirrorFlash * 0.7 + charge * 0.4) * Math.min(1.2, lowerB + 0.2) + mirrorFlash * 0.3 + charge * 0.3) * shatterFade;
 
-            if (age > p.life) {
+            if (age > p.life || (p.shatter && p.shatterT >= 1)) {
+                const fi = this.fragmentSprites.indexOf(p.upper);
+                if (fi >= 0) this.fragmentSprites.splice(fi, 1);
                 this.disposePair(p);
                 this.activePairs.splice(i, 1);
             }
@@ -968,6 +1531,11 @@ export class SongTricktology extends BaseSong {
             pts.geometry.attributes.position.needsUpdate = true;
             pts.material.opacity = 1.0 - lifeT;
         }
+
+        // ── 光の粒（欠片→月へ収束）と月の満ち欠け ──
+        this.updateMotes(t, delta);
+        this.updateMoon(t, delta);
+        this.updateHud();
 
         // ── 終盤検出 → 選択UI ──
         const duration = playerManager.player.video.duration;
@@ -1076,6 +1644,30 @@ export class SongTricktology extends BaseSong {
             pts.material.dispose();
         });
         this.bursts = [];
+
+        // 光の粒（欠片→月）
+        this.motes.forEach((pts) => {
+            if (pts.parent) pts.parent.remove(pts);
+            pts.geometry.dispose();
+            pts.material.dispose();
+        });
+        this.motes = [];
+        this.fragmentSprites = [];
+
+        // 月（マテリアルのmapはmoonTex/glowTextureを共有するので個別disposeしない）
+        if (this.moonGroup) {
+            this.moonGroup.traverse((o) => {
+                if (o.material) o.material.dispose();
+            });
+            if (this.moonGroup.parent) this.moonGroup.parent.remove(this.moonGroup);
+            this.moonGroup = null;
+        }
+        if (this.moonTex) this.moonTex.dispose();
+
+        // HUD要素・月のキャプション
+        [this.gaugeEl, this.comboEl, this.chargeEl, this.flashEl, this._moonCap].forEach((el) => {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+        });
 
         // 水面
         if (this.water) {
