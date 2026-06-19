@@ -4,6 +4,8 @@
 // transitions (title → world, world → song, song → world, …) cross-dissolve
 // instead of cutting hard. Sits above all screens; only captures input while
 // a fade is in progress.
+import { stageRoot } from '../core/stage.js';
+
 class ScreenFade {
     constructor() {
         this.el = null;
@@ -15,12 +17,12 @@ class ScreenFade {
         const d = document.createElement('div');
         d.id = 'screen-fade';
         d.style.cssText = `
-            position: fixed; inset: 0; z-index: 3000;
+            position: absolute; inset: 0; z-index: 3000;
             background: #05070d;
             opacity: 0; pointer-events: none;
             transition: opacity 0.5s ease;
         `;
-        document.body.appendChild(d);
+        stageRoot().appendChild(d);
         this.el = d;
     }
 

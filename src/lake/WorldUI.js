@@ -305,7 +305,7 @@ export class WorldUI {
         const ending = document.createElement('div');
         ending.className = 'world-ending';
         ending.style.cssText = `
-            position: fixed; left: 50%; top: 64px; transform: translateX(-50%);
+            position: absolute; left: 50%; top: 64px; transform: translateX(-50%);
             color: rgba(255,255,255,0.92); z-index: 480; pointer-events: none;
             font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
             font-size: clamp(13px, 3.2vw, 18px); font-weight: 300; letter-spacing: 0.18em;
@@ -401,7 +401,7 @@ export class WorldUI {
         const overlay = document.createElement('div');
         overlay.className = 'world-phase-transition';
         overlay.style.cssText = `
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0); z-index: 500;
             transition: background 1.2s ease;
             display: flex; align-items: center; justify-content: center;
@@ -417,7 +417,7 @@ export class WorldUI {
         const phaseName = PHASES[newPhaseIndex]?.name || '';
         phaseText.textContent = `水は ${phaseName} になった`;
         overlay.appendChild(phaseText);
-        document.body.appendChild(overlay);
+        this.container.appendChild(overlay);
 
         // Fade in
         requestAnimationFrame(() => {

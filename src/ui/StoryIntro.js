@@ -1,4 +1,5 @@
 import { appState } from '../core/appState.js';
+import { stageRoot } from '../core/stage.js';
 
 export class StoryIntro {
     constructor(onComplete) {
@@ -27,7 +28,7 @@ export class StoryIntro {
         this.textElement.style.transition = 'opacity 2s ease';
         this.container.appendChild(this.textElement);
 
-        document.body.appendChild(this.container);
+        stageRoot().appendChild(this.container);
     }
 
     async start() {

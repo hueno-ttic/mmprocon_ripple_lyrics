@@ -132,7 +132,9 @@ export class TitleScreen {
         this.creditsBtn.type = 'button';
         this.creditsBtn.textContent = 'クレジット';
         this.creditsBtn.style.cssText = `
-            position: absolute; right: 22px; bottom: 22px;
+            position: absolute;
+            right: calc(22px + env(safe-area-inset-right, 0px));
+            bottom: calc(22px + env(safe-area-inset-bottom, 0px));
             padding: 9px 20px;
             font-family: 'Noto Sans JP', 'Inter', sans-serif;
             font-size: 13px; letter-spacing: 0.18em;
