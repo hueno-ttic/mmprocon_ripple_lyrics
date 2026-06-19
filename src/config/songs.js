@@ -119,7 +119,7 @@ export const SONGS = [
       lyricId: 126593,
       lyricDiffId: 28630
     },
-    themeQuestion: '水面に映るあたしと本物のあたしはどちら？',
+    themeQuestion: '水面に立つあたし、水面に映るあたし<br>どっちが本物なのかな',
     color: '#3C3489',
     thumbnail: 'assets/thumbnails/tricktology.jpg',
     waterBehavior: 'mirror',
