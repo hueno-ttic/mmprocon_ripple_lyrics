@@ -51,6 +51,7 @@
     align-items: center;
     color: #ffffff;
     pointer-events: none;
+    touch-action: manipulation; /* 連打でダブルタップ拡大が誤発火しないように */
     transition: transform 0.05s linear, opacity 0.3s ease;
     will-change: transform;
 }
@@ -241,6 +242,9 @@
 /* ── Song selection panel (bottom operation bar) ─────────── */
 .world-selection-panel {
     position: absolute;
+    /* パネル内(矢印ボタン周辺)を連打してもダブルタップ拡大が起きないように。
+       touch-action は子孫にも交差適用されるので、ボタン外側の余白タップも安全。 */
+    touch-action: manipulation;
     /* スマホのブラウザ下部ツールバー/ホームインジケータに被って
        「この曲をはじめる」が押せなくなるのを防ぐためセーフエリアぶん底上げ */
     bottom: calc(26px + env(safe-area-inset-bottom, 0px));
