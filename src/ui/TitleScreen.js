@@ -1,5 +1,6 @@
 import { Credits } from './Credits.js';
 import { stageRoot } from '../core/stage.js';
+import { WaterCaustics } from './WaterCaustics.js';
 
 export class TitleScreen {
     constructor(onComplete) {
@@ -26,45 +27,46 @@ export class TitleScreen {
         // ※ タップ演出はSVGの feDisplacementMap(毎フレーム大面積を歪ませる=重い)を使わず、
         //   transformベースのキーフレーム(GPU合成・再描画ゼロ)で軽快に波打たせる。
 
-        // 背景の水面レイヤー(3層)。
-        //  動きは transform のみ(translate/scale/rotate/skew) = GPU合成で再描画ゼロ(軽い)。
-        //  「波長を大きく・周波数を小さく」=ゆったりした大波のイメージ:
-        //   - グラデの塊と縞を大きく取り(大波長)、周期を長く(低周波)してゆっくり動かす。
-        //   - skewは控えめにして、鋭い波立ちではなく広い大波のうねりにする。
-        //  inset を広めに取り、端が覗いてもグラデは透明へ抜ける。
-        //  ※ background-position アニメや mix-blend-mode はCPU再描画/背景合成で重いため不使用。
-        const layerDefs = [
-            {
-                bg: `radial-gradient(78% 60% at 28% 30%, rgba(158,216,248,0.60), rgba(158,216,248,0) 70%),
-                     radial-gradient(74% 64% at 76% 68%, rgba(98,168,226,0.56), rgba(98,168,226,0) 72%)`,
-                anim: 'water-swell 15s ease-in-out infinite',
-            },
-            {
-                bg: `radial-gradient(70% 58% at 54% 80%, rgba(132,202,242,0.46), rgba(132,202,242,0) 74%),
-                     radial-gradient(64% 54% at 16% 64%, rgba(150,212,245,0.42), rgba(150,212,245,0) 72%)`,
-                anim: 'water-flow 19s ease-in-out infinite',
-            },
-            {
-                // コントラストのある縞=コースティクス。これが動くと「水が流れている」と知覚できる。
-                // 縞は広め(大波長)・周期は11s(ゆったり)・移動量は約1縞分でゆっくり寄せて返す。
-                bg: `repeating-linear-gradient(104deg,
-                        rgba(205,236,252,0.22) 0px, rgba(205,236,252,0) 90px,
-                        rgba(205,236,252,0.22) 190px)`,
-                anim: 'water-churn 13s ease-in-out infinite',
-            },
-        ];
-        this.waterLayers = layerDefs.map(({ bg, anim }) => {
-            const layer = document.createElement('div');
-            layer.style.cssText = `
-                position: absolute; inset: -40%;
-                z-index: 0; pointer-events: none;
-                background: ${bg};
-                animation: ${anim};
-                will-change: transform;
-            `;
-            this.container.appendChild(layer);
-            return layer;
-        });
+        // 背景の水面: コースティクス(屈折で揺らぐ水面の光)を WebGL のフラグメント
+        //   シェーダで描く。波打ちをピクセル単位でGPU計算するため、CSS feDisplacementMap
+        //   のようにCPUで大面積を歪ませず 50–60fps を保てる(参考: AEのCaustics/WaveWorldの質感)。
+        this.water = new WaterCaustics();
+        if (this.water.ok) {
+            this.container.appendChild(this.water.canvas);
+        } else {
+            // WebGL不可の環境フォールバック: transformのみで漂うCSSグラデ3層(再描画ゼロ)。
+            this.water = null;
+            const layerDefs = [
+                {
+                    bg: `radial-gradient(78% 60% at 28% 30%, rgba(158,216,248,0.60), rgba(158,216,248,0) 70%),
+                         radial-gradient(74% 64% at 76% 68%, rgba(98,168,226,0.56), rgba(98,168,226,0) 72%)`,
+                    anim: 'water-swell 15s ease-in-out infinite',
+                },
+                {
+                    bg: `radial-gradient(70% 58% at 54% 80%, rgba(132,202,242,0.46), rgba(132,202,242,0) 74%),
+                         radial-gradient(64% 54% at 16% 64%, rgba(150,212,245,0.42), rgba(150,212,245,0) 72%)`,
+                    anim: 'water-flow 19s ease-in-out infinite',
+                },
+                {
+                    bg: `repeating-linear-gradient(104deg,
+                            rgba(205,236,252,0.22) 0px, rgba(205,236,252,0) 90px,
+                            rgba(205,236,252,0.22) 190px)`,
+                    anim: 'water-churn 13s ease-in-out infinite',
+                },
+            ];
+            this.waterLayers = layerDefs.map(({ bg, anim }) => {
+                const layer = document.createElement('div');
+                layer.style.cssText = `
+                    position: absolute; inset: -40%;
+                    z-index: 0; pointer-events: none;
+                    background: ${bg};
+                    animation: ${anim};
+                    will-change: transform;
+                `;
+                this.container.appendChild(layer);
+                return layer;
+            });
+        }
 
         this.title = document.createElement('h1');
         // 揺らぎは内側のspanに分離(フェードインのtransformと競合させない)
@@ -184,6 +186,9 @@ export class TitleScreen {
     }
 
     start() {
+        // 水面シェーダの描画ループ開始(コンテナがステージへ追加され寸法が確定した後)
+        if (this.water) this.water.start();
+
         // Trigger initial fade-in
         setTimeout(() => {
             this.title.style.opacity = '1';
@@ -203,7 +208,13 @@ export class TitleScreen {
         // タップ座標(無い場合は中央)を起点にする
         const x = e && e.clientX != null ? e.clientX : window.innerWidth / 2;
         const y = e && e.clientY != null ? e.clientY : window.innerHeight / 2;
-        this.spawnRipple(x, y);
+        // 水面シェーダがあれば、水面そのものを屈折させる同心円波紋を起こす(参考の水面波紋)。
+        // 無い環境ではDOMの拡大リングでフォールバック。
+        if (this.water) {
+            this.water.addRipple(x / window.innerWidth, y / window.innerHeight);
+        } else {
+            this.spawnRipple(x, y);
+        }
         this.disturb();
 
         // クレジットが開いていれば閉じ、ボタンも隠す
@@ -211,7 +222,7 @@ export class TitleScreen {
         this.creditsBtn.style.opacity = '0';
         this.creditsBtn.style.pointerEvents = 'none';
 
-        // 波紋の広がりをひと目見せたら、素早くフェードアウト(もたつかせない)
+        // 波紋の広がりを少し見せてから、素早くフェードアウト(もたつかせない)
         const fadeOut = 'opacity 0.55s ease-in';
         setTimeout(() => {
             this.title.style.transition = fadeOut;
@@ -220,16 +231,18 @@ export class TitleScreen {
             this.title.style.opacity = '0';
             this.subtitle.style.opacity = '0';
             this.container.style.opacity = '0';
-        }, 420);
+        }, 620);
 
         setTimeout(() => {
+            if (this._titleRaf) { cancelAnimationFrame(this._titleRaf); this._titleRaf = 0; }
+            if (this.water) { this.water.stop(); this.water = null; }
             if (this.container.parentNode) {
                 this.container.parentNode.removeChild(this.container);
             }
             if (this.onComplete) {
                 this.onComplete();
             }
-        }, 1050);
+        }, 1300);
     }
 
     // タップ点から広がる単一の波紋
@@ -256,12 +269,55 @@ export class TitleScreen {
         setTimeout(() => { if (ring.parentNode) ring.parentNode.removeChild(ring); }, duration * 1000 + 100);
     }
 
-    // タップ時、タイトル文字を軽快に一度だけ波打たせる。
-    // transformのみ(GPU合成・再描画なし)なのでFPSを落とさない。
+    // タップ時、タイトル文字を波紋に合わせて動かす。
+    //  WebGL水面があれば、波紋の波面が文字の位置に到達した瞬間に合わせて
+    //  文字をうねらせる(シェーダと同じ波の式をCPUで毎フレーム評価して transform 駆動)。
+    //  WebGL不可ならCSSの簡易波打ちでフォールバック。
     disturb() {
-        if (this.titleInner) {
-            // 素早い波打ち(skew主体の減衰オシレーション)。0.7秒で収束。
+        if (this.water) {
+            this._syncTextToRipple();
+        } else if (this.titleInner) {
             this.titleInner.style.animation = 'title-ripple 0.7s cubic-bezier(0.2, 0.8, 0.2, 1)';
         }
+    }
+
+    // 要素の中心をキャンバス左上原点の正規化座標(0..1)で返す
+    _centerUv(el) {
+        const r = el.getBoundingClientRect();
+        return [
+            (r.left + r.width / 2) / window.innerWidth,
+            (r.top + r.height / 2) / window.innerHeight,
+        ];
+    }
+
+    // 波面の通過に同期して文字を上下/せん断で動かす(波紋の寿命ぶん回す)
+    _syncTextToRipple() {
+        const tUv = this._centerUv(this.titleInner);
+        const sUv = this._centerUv(this.subtitle);
+        const AMP = 52;      // 上下振幅(px)
+        const SKEW = 12;     // せん断(deg)
+        const CLAMP = 26;    // 近距離タップでの振れ過ぎを抑える上限(px)
+        const clamp = (v, lim) => Math.max(-lim, Math.min(lim, v));
+        const start = performance.now();
+        const tick = () => {
+            this._titleRaf = 0;
+            if (!this.water) return;
+            // 文字向けは低周波・広め(うねり)で評価=細かいリングではなく波面の通過を大きく表現
+            const ht = this.water.sampleHeight(tUv[0], tUv[1], 10, 5);
+            const hs = this.water.sampleHeight(sUv[0], sUv[1], 10, 5);
+            const yt = clamp(-ht * AMP, CLAMP), ys = clamp(-hs * AMP * 0.7, CLAMP * 0.7);
+            this.titleInner.style.transform =
+                `translateY(${yt.toFixed(2)}px) skewX(${clamp(ht * SKEW, 14).toFixed(2)}deg) ` +
+                `scale(${(1 + Math.abs(ht) * 0.06).toFixed(3)})`;
+            this.subtitle.style.transform =
+                `translateY(${ys.toFixed(2)}px) skewX(${clamp(hs * SKEW * 0.6, 9).toFixed(2)}deg)`;
+            if (performance.now() - start < 2200) {
+                this._titleRaf = requestAnimationFrame(tick);
+            } else {
+                this.titleInner.style.transform = '';
+                this.subtitle.style.transform = '';
+            }
+        };
+        this._titleRaf = requestAnimationFrame(tick);
     }
 }
