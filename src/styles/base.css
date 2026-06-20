@@ -103,6 +103,9 @@ footer {
 }
 
 button {
+    /* スマホで連打した時にダブルタップ拡大が誤発火して描画が崩れるのを防ぐ
+       (パン/ピンチは残し、ダブルタップズームのみ無効化) */
+    touch-action: manipulation;
     background: rgba(255, 255, 255, 0.1);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
