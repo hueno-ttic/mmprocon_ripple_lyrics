@@ -12,12 +12,16 @@ import { CompletionScreen } from './ui/CompletionScreen.js';
 // 初回バンドルに同梱するのは無駄。曲ごとに dynamic import() し、選んだ曲の
 // チャンクだけを遅延ロードする(初回ロードを大幅に軽量化)。
 // 遷移はカーテン(ScreenFade)で覆われているため、このロード待ちは隠れる。
+// issue #30 改修版トリツクロジー。true にすると改修前のリズムゲーム版へ即座に戻せる。
+const TRICKTOLOGY_LEGACY = false;
 const SONG_LOADERS = {
     kotaete: () => import('./songs/song-kotaete.js').then(m => m.SongKotaete),
     after: () => import('./songs/song-after.js').then(m => m.SongAfter),
     shutter: () => import('./songs/song-shutter.js').then(m => m.SongShutter),
     orchestra: () => import('./songs/song-orchestra.js').then(m => m.SongOrchestra),
-    tricktology: () => import('./songs/song-tricktology.js').then(m => m.SongTricktology),
+    tricktology: () => (TRICKTOLOGY_LEGACY
+        ? import('./songs/song-tricktology.legacy.js')
+        : import('./songs/song-tricktology.js')).then(m => m.SongTricktology),
     takeover: () => import('./songs/song-takeover.js').then(m => m.SongTakeover),
 };
 import { TitleScreen } from './ui/TitleScreen.js';
@@ -273,6 +277,9 @@ class Application {
         }
         this._lastSongResult = null;
 
+        // 一部の曲はリザルトをユーザーのタップまで維持する(issue #30: トリツクロジー)
+        const holdUntilTap = !!(songConfig && songConfig.holdResultUntilTap);
+
         overlay.appendChild(hint);
         stageRoot().appendChild(overlay);
 
@@ -283,14 +290,31 @@ class Application {
             if (resultEl) resultEl.style.color = 'rgba(255,255,255,0.85)';
         });
 
-        setTimeout(() => {
+        let finished = false;
+        const finish = () => {
+            if (finished) return;
+            finished = true;
             // Hand off to backToLake, whose curtain fades over this overlay;
             // remove the overlay once it's hidden behind the curtain.
             onDone();
             setTimeout(() => {
                 if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             }, 500);
-        }, 2800);
+        };
+
+        if (holdUntilTap) {
+            // タップするまで表示を維持。少し遅れて誘導を出し、誤操作での即離脱を防ぐ。
+            hint.textContent = '';
+            overlay.style.pointerEvents = 'auto';
+            overlay.style.cursor = 'pointer';
+            setTimeout(() => {
+                hint.textContent = `タップして${phaseName}へ戻る`;
+                hint.style.color = 'rgba(255,255,255,0.5)';
+                overlay.addEventListener('pointerdown', finish, { once: true });
+            }, 1600);
+        } else {
+            setTimeout(finish, 2800);
+        }
     }
 
     async switchToSongScene(songConfig) {

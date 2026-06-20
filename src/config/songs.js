@@ -120,14 +120,16 @@ export const SONGS = [
       lyricDiffId: 28630
     },
     themeQuestion: '水面に立つあたし、水面に映るあたし<br>どっちが本物なのかな',
-    color: '#3C3489',
+    bareQuestion: true,        // 問いの言葉をカギ括弧で囲まない（issue #30 コメント）
+    holdResultUntilTap: true,  // リザルトはタップするまで維持（issue #30）
+    color: '#3f9fd6',          // 冷たい水色（issue #30）
     thumbnail: 'assets/thumbnails/tricktology.jpg',
     waterBehavior: 'mirror',
     tutorial: {
       steps: [
-        { icon: '⚡', text: '水鏡側（下）の歌詞をビートに合わせてタップしてチャージ — タップするほど歌詞が強く光る' },
-        { icon: '✨', text: 'チャージしたら実像側（上）の歌詞が消える前にタップ＝反映。チャージ量に応じて欠片が大量に集まる' },
-        { icon: '🌕', text: '集めた欠片でゲージが満ちると世界が反転、欠片が満ちきると月が生まれて輝く。最後に「本物はどっち？」' },
+        { icon: '🌙', text: '月が天をめぐり、水面と地上の世界が入れ替わっていく' },
+        { icon: '👆', text: '地上に昇る歌詞／水面に逆さまに映る歌詞をタップ — その世界の月が満ちていく' },
+        { icon: '🌕', text: 'やがて月が水に沈み「本物はどっち？」あなたが選んだ世界が本物になり、もう一人は光になって溶ける' },
       ]
     }
   },

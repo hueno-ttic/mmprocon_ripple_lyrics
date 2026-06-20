@@ -104,7 +104,7 @@ export class BaseSong {
     }
 
     showTutorial(songConfig) {
-        const { tutorial, themeQuestion = '', color = '#7F77DD' } = songConfig;
+        const { tutorial, themeQuestion = '', color = '#7F77DD', bareQuestion = false } = songConfig;
 
         // 全楽曲で毎回チュートリアルを表示する(既読スキップは行わない)
 
@@ -130,7 +130,7 @@ export class BaseSong {
         overlay.innerHTML = `
             <div class="song-tutorial-content">
                 <div class="song-tutorial-label">問い</div>
-                <p class="song-tutorial-question">「${themeQuestion}」</p>
+                <p class="song-tutorial-question">${bareQuestion ? themeQuestion : `「${themeQuestion}」`}</p>
                 <div class="song-tutorial-divider"></div>
                 <div class="song-tutorial-steps">${stepsHtml}</div>
                 <button class="song-tutorial-btn">スタート</button>
