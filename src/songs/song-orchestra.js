@@ -1459,7 +1459,17 @@ export class SongOrchestra extends BaseSong {
 
             const floatTime = position * 0.001; // Song time in seconds
 
-            if (!hasLyrics && !this.tapAnimation) {
+            // 飛行/通常モードのちらつき防止（ヒステリシス）。
+            // 歌詞は語句ごとに数十〜数百msの隙間が空くため、hasLyrics をそのまま使うと
+            // 飛行⇄通常が短時間で高速トグルし、位置(ホーム⇄軌道)と姿勢が断続的に飛んで
+            // ツインテールが「発話の瞬間」に逆立つ。歌詞が一定時間(0.6s)継続して不在に
+            // なって初めて飛行へ入る／戻ることで、語句の合間での誤トグルを抑える。
+            if (hasLyrics) this._lastLyricMs = position;
+            if (this._lastLyricMs === undefined) this._lastLyricMs = position;
+            const lyricGapMs = position - this._lastLyricMs;
+            const inFlight = (lyricGapMs > 600) && !this.tapAnimation;
+
+            if (inFlight) {
                 // --- FLIGHT MODE (No lyrics on screen - glide in a Lissajous orbit) ---
                 this.isFlying = true;
                 const flightSpeed = floatTime * 0.6;
@@ -1468,10 +1478,10 @@ export class SongOrchestra extends BaseSong {
                 const fovRad = (this.camera.fov * Math.PI) / 180;
                 const visibleHeight = 2.0 * dist * Math.tan(fovRad / 2.0);
                 const visibleWidth = visibleHeight * this.camera.aspect;
-                
+
                 const flightRangeX = visibleWidth * 0.35;  // wide responsive movement
                 const flightRangeY = visibleHeight * 0.22; // tall responsive movement
-                
+
                 const targetFlightX = Math.sin(flightSpeed * 0.8) * flightRangeX;
                 const targetFlightY = Math.cos(flightSpeed * 1.2) * flightRangeY - (responsiveScale * 0.25);
                 const targetFlightZ = -13.0 + Math.sin(flightSpeed * 1.6) * 3.0;
@@ -1483,12 +1493,13 @@ export class SongOrchestra extends BaseSong {
             } else {
                 // --- NORMAL / LYRIC ACTIVE MODE ---
                 this.isFlying = false;
-                
-                // If not tapped yet, adjust base position based on current scale dynamically
+
+                // If not tapped yet, slide smoothly to home（ハードセットだと飛行位置から
+                // 一瞬でホームへ瞬間移動し、その速度差で髪が暴れるため lerp で連続的に戻す）
                 if (!this.hasTapped) {
-                    this.baseMikuX = 0;
-                    this.baseMikuY = -0.53 * responsiveScale;
-                    this.baseMikuZ = -13.0;
+                    this.baseMikuX += (0 - this.baseMikuX) * 0.04;
+                    this.baseMikuY += ((-0.53 * responsiveScale) - this.baseMikuY) * 0.04;
+                    this.baseMikuZ += ((-13.0) - this.baseMikuZ) * 0.04;
                 } else if (!this.tapAnimation) {
                     // Smoothly slide back to the last tapped position or home position
                     let targetHomeX = 0;
@@ -1602,7 +1613,14 @@ export class SongOrchestra extends BaseSong {
                     this.currentVRM.scene.position.copy(targetMikuPos);
                 }
             } else {
-                this.currentVRM.scene.position.copy(basePos);
+                // タップ終了フレームでは、直前のタップ完了処理(elapsed>=dur)で baseMiku が
+                // 移動先へ更新されるが、basePos は update() 冒頭で旧home値のまま計算済み。
+                // basePos をそのまま使うと位置が1フレームだけhomeへ瞬間移動し、直後に移動先へ
+                // 戻る——この往復速度でツインテールのSpringBoneが暴発（移動後に逆立つ）。
+                // 位置を現在の baseMiku から毎フレーム再計算し、連続性を保って暴発を防ぐ。
+                const homeX = this.baseMikuX + Math.cos(floatTime * 0.8) * 0.15;
+                const homeY = this.baseMikuY + Math.sin(floatTime * 1.2) * 0.25;
+                this.currentVRM.scene.position.set(homeX, homeY, this.baseMikuZ);
             }
 
             // Arm bones animation update
