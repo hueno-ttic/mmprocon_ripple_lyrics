@@ -234,6 +234,7 @@ export class TitleScreen {
         }, 620);
 
         setTimeout(() => {
+            if (this._titleRaf) { cancelAnimationFrame(this._titleRaf); this._titleRaf = 0; }
             if (this.water) { this.water.stop(); this.water = null; }
             if (this.container.parentNode) {
                 this.container.parentNode.removeChild(this.container);
@@ -268,12 +269,55 @@ export class TitleScreen {
         setTimeout(() => { if (ring.parentNode) ring.parentNode.removeChild(ring); }, duration * 1000 + 100);
     }
 
-    // タップ時、タイトル文字を軽快に一度だけ波打たせる。
-    // transformのみ(GPU合成・再描画なし)なのでFPSを落とさない。
+    // タップ時、タイトル文字を波紋に合わせて動かす。
+    //  WebGL水面があれば、波紋の波面が文字の位置に到達した瞬間に合わせて
+    //  文字をうねらせる(シェーダと同じ波の式をCPUで毎フレーム評価して transform 駆動)。
+    //  WebGL不可ならCSSの簡易波打ちでフォールバック。
     disturb() {
-        if (this.titleInner) {
-            // 素早い波打ち(skew主体の減衰オシレーション)。0.7秒で収束。
+        if (this.water) {
+            this._syncTextToRipple();
+        } else if (this.titleInner) {
             this.titleInner.style.animation = 'title-ripple 0.7s cubic-bezier(0.2, 0.8, 0.2, 1)';
         }
+    }
+
+    // 要素の中心をキャンバス左上原点の正規化座標(0..1)で返す
+    _centerUv(el) {
+        const r = el.getBoundingClientRect();
+        return [
+            (r.left + r.width / 2) / window.innerWidth,
+            (r.top + r.height / 2) / window.innerHeight,
+        ];
+    }
+
+    // 波面の通過に同期して文字を上下/せん断で動かす(波紋の寿命ぶん回す)
+    _syncTextToRipple() {
+        const tUv = this._centerUv(this.titleInner);
+        const sUv = this._centerUv(this.subtitle);
+        const AMP = 52;      // 上下振幅(px)
+        const SKEW = 12;     // せん断(deg)
+        const CLAMP = 26;    // 近距離タップでの振れ過ぎを抑える上限(px)
+        const clamp = (v, lim) => Math.max(-lim, Math.min(lim, v));
+        const start = performance.now();
+        const tick = () => {
+            this._titleRaf = 0;
+            if (!this.water) return;
+            // 文字向けは低周波・広め(うねり)で評価=細かいリングではなく波面の通過を大きく表現
+            const ht = this.water.sampleHeight(tUv[0], tUv[1], 10, 5);
+            const hs = this.water.sampleHeight(sUv[0], sUv[1], 10, 5);
+            const yt = clamp(-ht * AMP, CLAMP), ys = clamp(-hs * AMP * 0.7, CLAMP * 0.7);
+            this.titleInner.style.transform =
+                `translateY(${yt.toFixed(2)}px) skewX(${clamp(ht * SKEW, 14).toFixed(2)}deg) ` +
+                `scale(${(1 + Math.abs(ht) * 0.06).toFixed(3)})`;
+            this.subtitle.style.transform =
+                `translateY(${ys.toFixed(2)}px) skewX(${clamp(hs * SKEW * 0.6, 9).toFixed(2)}deg)`;
+            if (performance.now() - start < 2200) {
+                this._titleRaf = requestAnimationFrame(tick);
+            } else {
+                this.titleInner.style.transform = '';
+                this.subtitle.style.transform = '';
+            }
+        };
+        this._titleRaf = requestAnimationFrame(tick);
     }
 }

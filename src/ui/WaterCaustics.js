@@ -172,6 +172,31 @@ export class WaterCaustics {
         this.gl.uniform1fv(this.uRippleStart, this._starts);
     }
 
+    // 指定点(nx,ny=キャンバス左上原点の0..1)での波の高さをCPU側で再現して返す。
+    // シェーダの波紋と同じ式で、DOM(タイトル文字)を波面に合わせて動かすのに使う。
+    // freq を小さくすると、細かいリングではなく「波面が通過するうねり」になる(文字向け)。
+    sampleHeight(nx, ny, freq, bandK) {
+        if (!this.ok) return 0;
+        freq = freq || 50.0;
+        bandK = bandK || 11.0;
+        const aspect = (this._w || 1) / (this._h || 1);
+        const T = (performance.now() - this._t0) / 1000;
+        let h = 0;
+        for (let k = 0; k < RIPPLES; k++) {
+            const age = T - this._starts[k];
+            if (age < 0 || age > 2.0) continue;
+            let dx = nx - this._origins[k * 2];
+            let dy = (1 - ny) - this._origins[k * 2 + 1];   // GLは下原点
+            dx *= aspect;
+            const dist = Math.hypot(dx, dy);
+            const w = dist - age * 0.95;                    // 波面からの距離
+            const trail = Math.exp(-age * 1.35);
+            const band = Math.exp(-(w * w) * bandK) * (w < 0 ? 1.0 : 0.35);
+            h += Math.sin(w * freq) * band * trail;
+        }
+        return h;
+    }
+
     _ensureSize() {
         const gl = this.gl;
         const cw = this.canvas.clientWidth || this.canvas.parentElement?.clientWidth || 0;
