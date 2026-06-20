@@ -23,30 +23,56 @@ export class TitleScreen {
         this.container.style.transition = 'opacity 2s ease';
         this.container.style.overflow = 'hidden';
 
-        // 背景の水面レイヤー(はっきり・速めに揺らぐ)
-        this.waterLayer = document.createElement('div');
-        this.waterLayer.style.cssText = `
-            position: absolute; inset: -15%;
-            z-index: 0; pointer-events: none;
-            background:
-                radial-gradient(55% 40% at 28% 32%, rgba(140,205,240,0.30), rgba(140,205,240,0) 70%),
-                radial-gradient(50% 45% at 74% 62%, rgba(95,160,220,0.26), rgba(95,160,220,0) 72%),
-                repeating-linear-gradient(108deg, rgba(170,220,245,0.05) 0px, rgba(170,220,245,0) 80px, rgba(170,220,245,0.05) 170px);
-            background-size: 200% 200%, 220% 220%, 240% 240%;
-            background-repeat: no-repeat;
-            mix-blend-mode: screen;
-            animation: water-drift 16s ease-in-out infinite, water-bob 9s ease-in-out infinite;
-            will-change: background-position, transform;
-        `;
-        this.container.appendChild(this.waterLayer);
+        // ※ タップ演出はSVGの feDisplacementMap(毎フレーム大面積を歪ませる=重い)を使わず、
+        //   transformベースのキーフレーム(GPU合成・再描画ゼロ)で軽快に波打たせる。
+
+        // 背景の水面レイヤー(3層)。
+        //  動きは transform のみ(translate/scale/rotate/skew) = GPU合成で再描画ゼロ(軽い)。
+        //  「波長を大きく・周波数を小さく」=ゆったりした大波のイメージ:
+        //   - グラデの塊と縞を大きく取り(大波長)、周期を長く(低周波)してゆっくり動かす。
+        //   - skewは控えめにして、鋭い波立ちではなく広い大波のうねりにする。
+        //  inset を広めに取り、端が覗いてもグラデは透明へ抜ける。
+        //  ※ background-position アニメや mix-blend-mode はCPU再描画/背景合成で重いため不使用。
+        const layerDefs = [
+            {
+                bg: `radial-gradient(78% 60% at 28% 30%, rgba(158,216,248,0.60), rgba(158,216,248,0) 70%),
+                     radial-gradient(74% 64% at 76% 68%, rgba(98,168,226,0.56), rgba(98,168,226,0) 72%)`,
+                anim: 'water-swell 15s ease-in-out infinite',
+            },
+            {
+                bg: `radial-gradient(70% 58% at 54% 80%, rgba(132,202,242,0.46), rgba(132,202,242,0) 74%),
+                     radial-gradient(64% 54% at 16% 64%, rgba(150,212,245,0.42), rgba(150,212,245,0) 72%)`,
+                anim: 'water-flow 19s ease-in-out infinite',
+            },
+            {
+                // コントラストのある縞=コースティクス。これが動くと「水が流れている」と知覚できる。
+                // 縞は広め(大波長)・周期は11s(ゆったり)・移動量は約1縞分でゆっくり寄せて返す。
+                bg: `repeating-linear-gradient(104deg,
+                        rgba(205,236,252,0.22) 0px, rgba(205,236,252,0) 90px,
+                        rgba(205,236,252,0.22) 190px)`,
+                anim: 'water-churn 13s ease-in-out infinite',
+            },
+        ];
+        this.waterLayers = layerDefs.map(({ bg, anim }) => {
+            const layer = document.createElement('div');
+            layer.style.cssText = `
+                position: absolute; inset: -40%;
+                z-index: 0; pointer-events: none;
+                background: ${bg};
+                animation: ${anim};
+                will-change: transform;
+            `;
+            this.container.appendChild(layer);
+            return layer;
+        });
 
         this.title = document.createElement('h1');
         // 揺らぎは内側のspanに分離(フェードインのtransformと競合させない)
         this.titleInner = document.createElement('span');
         this.titleInner.innerText = 'Lake Sonare';
         this.titleInner.style.display = 'inline-block';
-        this.titleInner.style.animation = 'title-sway 13s ease-in-out infinite';
-        this.titleInner.style.willChange = 'transform';
+        // idleは文字を静止させる(波打たせない)。揺らぎ・歪みはタップ時のみ与える。
+        this.titleInner.style.willChange = 'transform, filter';
         this.title.appendChild(this.titleInner);
         this.title.style.position = 'relative';
         this.title.style.zIndex = '1';
@@ -81,23 +107,20 @@ export class TitleScreen {
                 }
                 .pulse-text { animation: pulse-opacity 3s infinite ease-in-out; }
 
-                /* 背景の水面: 横移動は控えめに、ゆっくり明暗が漂う程度 */
-                @keyframes water-drift {
-                    0%   { background-position: 42% 48%, 58% 52%, 38% 42%; }
-                    50%  { background-position: 52% 58%, 48% 44%, 46% 52%; }
-                    100% { background-position: 42% 48%, 58% 52%, 38% 42%; }
+                /* 背景の水面: transformのみで波打たせる(GPU合成・再描画なし=軽い)。
+                   波長を大きく・周波数を小さく=大きくゆったりした大波。translate/scaleの
+                   ストロークは大きめに保ちつつ、skew/rotateは控えめにして鋭さを消す。 */
+                @keyframes water-swell {
+                    0%, 100% { transform: translate3d(-9%, -6%, 0) scale(1.06) rotate(-1deg) skewX(-1.2deg); }
+                    50%      { transform: translate3d(9%,   7%, 0) scale(1.14) rotate(1deg)  skewX(1.2deg);  }
                 }
-                @keyframes water-bob {
-                    0%, 100% { transform: translateY(-1.5%) scale(1.06); }
-                    50%      { transform: translateY(3.5%)  scale(1.09); }
+                @keyframes water-flow {
+                    0%, 100% { transform: translate3d(10%,  6%, 0) scale(1.14) rotate(1deg)  skewY(-1.1deg); }
+                    50%      { transform: translate3d(-10%,-7%, 0) scale(1.06) rotate(-1deg) skewY(1.1deg);  }
                 }
-
-                /* タイトル: 背景より弱く・ゆっくり水面に乗って揺れる(振幅小・周期長) */
-                @keyframes title-sway {
-                    0%, 100% { transform: translate(0, 0)        rotate(0deg);    }
-                    25%      { transform: translate(3px, -7px)   rotate(-0.5deg); }
-                    50%      { transform: translate(0, -9px)     rotate(0deg);    }
-                    75%      { transform: translate(-3px, -7px)  rotate(0.5deg);  }
+                @keyframes water-churn {
+                    0%, 100% { transform: translate3d(-7%, -8%, 0) scale(1.08) rotate(-0.8deg) skewX(1deg);  }
+                    50%      { transform: translate3d(8%,   8%, 0) scale(1.16) rotate(0.8deg)  skewX(-1deg); }
                 }
 
                 /* タップ起点から広がる波紋 */
@@ -107,18 +130,13 @@ export class TitleScreen {
                     100% { transform: translate(-50%, -50%) scale(1);    opacity: 0;    }
                 }
 
-                /* 波が通過した瞬間、背景の水面が一拍強く明滅(filterのみ＝transformと非干渉) */
-                @keyframes water-disturb {
-                    0%   { filter: brightness(1)   saturate(1);   }
-                    28%  { filter: brightness(1.7) saturate(1.35);}
-                    100% { filter: brightness(1)   saturate(1);   }
-                }
-
-                /* 波が文字に到達した時の反応(一度だけゆったり盛り上がって戻る) */
+                /* タップ時の文字の波打ち: 軽快に一度ブルッと波打って素早く収束(transformのみ=軽い) */
                 @keyframes title-ripple {
-                    0%   { transform: translate(0, 0)     scale(1);     }
-                    50%  { transform: translate(0, -10px) scale(1.035); }
-                    100% { transform: translate(0, 0)     scale(1);     }
+                    0%   { transform: translateY(0)     scale(1)    skewX(0deg);   }
+                    22%  { transform: translateY(-9px)  scale(1.05) skewX(4deg);   }
+                    48%  { transform: translateY(3px)   scale(0.99) skewX(-2.6deg);}
+                    74%  { transform: translateY(-2px)  scale(1.01) skewX(1.2deg); }
+                    100% { transform: translateY(0)     scale(1)    skewX(0deg);   }
                 }
             `;
             document.head.appendChild(style);
@@ -186,15 +204,15 @@ export class TitleScreen {
         const x = e && e.clientX != null ? e.clientX : window.innerWidth / 2;
         const y = e && e.clientY != null ? e.clientY : window.innerHeight / 2;
         this.spawnRipple(x, y);
-        this.disturb(x, y);
+        this.disturb();
 
         // クレジットが開いていれば閉じ、ボタンも隠す
         if (this.credits) this.credits.close();
         this.creditsBtn.style.opacity = '0';
         this.creditsBtn.style.pointerEvents = 'none';
 
-        // 波紋・波打ちの出だしを見せたら、一定の速さで自然にフェードアウト
-        const fadeOut = 'opacity 1.1s ease-in-out';
+        // 波紋の広がりをひと目見せたら、素早くフェードアウト(もたつかせない)
+        const fadeOut = 'opacity 0.55s ease-in';
         setTimeout(() => {
             this.title.style.transition = fadeOut;
             this.subtitle.style.transition = fadeOut;
@@ -202,7 +220,7 @@ export class TitleScreen {
             this.title.style.opacity = '0';
             this.subtitle.style.opacity = '0';
             this.container.style.opacity = '0';
-        }, 700);
+        }, 420);
 
         setTimeout(() => {
             if (this.container.parentNode) {
@@ -211,7 +229,7 @@ export class TitleScreen {
             if (this.onComplete) {
                 this.onComplete();
             }
-        }, 1900);
+        }, 1050);
     }
 
     // タップ点から広がる単一の波紋
@@ -219,42 +237,31 @@ export class TitleScreen {
         // 画面端まで届くよう、最遠コーナーまでの距離から直径を決める
         const far = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
         const diameter = far * 2.2;
-        const duration = 1.8;
+        // ゆったり広がって消える。mix-blend-mode は毎フレーム背景合成で重いため不使用。
+        // transform/opacityのみ=GPUで軽い。
+        const duration = 1.25;
         const ring = document.createElement('div');
         ring.style.cssText = `
             position: absolute; left: ${x}px; top: ${y}px;
             width: ${diameter}px; height: ${diameter}px;
             margin: 0; border-radius: 50%;
-            border: 2px solid rgba(200,235,255,0.55);
-            background: radial-gradient(circle, rgba(200,235,255,0.18) 0%, rgba(200,235,255,0) 62%);
+            border: 3px solid rgba(220,242,255,0.85);
+            background: radial-gradient(circle, rgba(220,242,255,0.22) 0%, rgba(220,242,255,0) 60%);
             transform: translate(-50%, -50%) scale(0);
             opacity: 0; pointer-events: none; z-index: 3;
-            mix-blend-mode: screen;
-            animation: ripple-expand ${duration}s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+            animation: ripple-expand ${duration}s cubic-bezier(0.25, 0.5, 0.35, 1) forwards;
             will-change: transform, opacity;
         `;
         this.container.appendChild(ring);
         setTimeout(() => { if (ring.parentNode) ring.parentNode.removeChild(ring); }, duration * 1000 + 100);
     }
 
-    // 波の通過に合わせて背景の揺らぎ・文字の揺らぎへ干渉させる
-    disturb(x, y) {
-        // 背景の水面: 既存のdrift/bobは残したまま明滅を一拍重ねる(filterは非干渉)
-        if (this.waterLayer) {
-            const base = 'water-drift 16s ease-in-out infinite, water-bob 9s ease-in-out infinite';
-            this.waterLayer.style.animation = base + ', water-disturb 1.5s ease-out';
-            setTimeout(() => { if (this.waterLayer) this.waterLayer.style.animation = base; }, 1500);
-        }
-
-        // 文字: 波がタイトル中心に到達するまでの距離に応じて遅延させ、減衰する波打ちへ差し替える
+    // タップ時、タイトル文字を軽快に一度だけ波打たせる。
+    // transformのみ(GPU合成・再描画なし)なのでFPSを落とさない。
+    disturb() {
         if (this.titleInner) {
-            const rect = this.title.getBoundingClientRect();
-            const cx = rect.left + rect.width / 2;
-            const cy = rect.top + rect.height / 2;
-            const dist = Math.hypot(cx - x, cy - y);
-            const delay = Math.min(dist / 1100, 0.5); // 遠いほど遅れて反応(秒)
-            // ごくゆったり一度だけ波打たせる(ease-in-outで緩急をなだらかに)
-            this.titleInner.style.animation = `title-ripple 5s ease-in-out ${delay}s`;
+            // 素早い波打ち(skew主体の減衰オシレーション)。0.7秒で収束。
+            this.titleInner.style.animation = 'title-ripple 0.7s cubic-bezier(0.2, 0.8, 0.2, 1)';
         }
     }
 }
