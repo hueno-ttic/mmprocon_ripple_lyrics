@@ -15,23 +15,23 @@ attribute vec2 aPos;
 void main() { gl_Position = vec4(aPos, 0.0, 1.0); }
 `;
 
+const RIPPLES = 5;   // 同時に走らせられるタップ波紋の最大数
+
 const FRAG = `
 precision highp float;
 uniform vec2  uRes;
 uniform float uTime;
+uniform vec2  uRippleOrigin[${RIPPLES}];  // 波紋の中心(uv, y上向き)
+uniform float uRippleStart[${RIPPLES}];   // 波紋の発生時刻(uTime基準/秒)
 
 // コースティクス(屈折で揺らぐ水面の光) — 反復5回でGPU的に安価。
 // time を小さく進める=ゆっくり/低周波。uv のスケールを小さく=大波長。
-void main() {
-    vec2 uv = gl_FragCoord.xy / uRes.xy;
-    uv.x *= uRes.x / uRes.y;            // セルを正方に保つ(縦長でも崩れない)
-
+float caustic(vec2 uv) {
     float time = uTime * 0.16 + 23.0;   // 0.16 = ゆったりした流れ(低周波)
     vec2 p = mod(uv * 6.28318530718 * 0.95, 6.28318530718) - 250.0; // 0.95 = 大波長
     vec2 i = p;
     float c = 1.0;
     const float inten = 0.0045;
-
     for (int n = 0; n < 5; n++) {
         float t = time * (1.0 - (3.5 / float(n + 1)));
         i = p + vec2(cos(t - i.x) + sin(t + i.y),
@@ -41,16 +41,48 @@ void main() {
     }
     c /= 5.0;
     c = 1.17 - pow(c, 1.4);
-    float bright = pow(abs(c), 7.0);
+    return pow(abs(c), 7.0);
+}
+
+void main() {
+    float aspect = uRes.x / uRes.y;
+    vec2 baseUv = gl_FragCoord.xy / uRes.xy;   // 0..1, y上向き
+
+    // ── タップ波紋: 中心から拡大する同心円波。caustics の uv を屈折させ稜線を光らせる ──
+    vec2 disp = vec2(0.0);
+    float crest = 0.0;
+    for (int k = 0; k < ${RIPPLES}; k++) {
+        float age = uTime - uRippleStart[k];
+        if (age < 0.0 || age > 2.0) continue;    // 寿命2.0秒
+        vec2 d = baseUv - uRippleOrigin[k];
+        d.x *= aspect;
+        float dist = length(d);
+        float radius = age * 0.95;               // 波面の拡大速度(ゆったり)
+        float w = dist - radius;                 // 波面からの距離(<0=内側)
+        float trail = exp(-age * 1.35);          // 時間減衰
+        // 波面の後方に数本の同心リングが連なる波列(前方=外側はすぐ減衰)
+        float band = exp(-(w * w) * 11.0) * (w < 0.0 ? 1.0 : 0.35);
+        float ripple = sin(w * 50.0) * band * trail;
+        vec2 dir = dist > 1e-4 ? d / dist : vec2(0.0);
+        disp += dir * ripple;
+        crest += max(ripple, 0.0) * trail;
+    }
+
+    vec2 uv = baseUv + disp * 0.075;   // 波面でcausticsを屈折(屈折量を強め)
+    uv.x *= aspect;                    // セルを正方に保つ(縦長でも崩れない)
+
+    float bright = caustic(uv);
 
     // 湖面の配色: 深い青 → 明るいシアンの光条
     vec3 deep  = vec3(0.13, 0.38, 0.58);
     vec3 light = vec3(0.78, 0.93, 1.0);
     vec3 col = mix(deep, light, clamp(bright, 0.0, 1.0));
 
+    // 波紋の稜線を発光させる(同心リングの光)
+    col += crest * vec3(0.55, 0.74, 0.92) * 1.25;
+
     // 周辺をわずかに沈めて中央へ視線を集める
-    vec2 q = gl_FragCoord.xy / uRes.xy - 0.5;
-    float vig = smoothstep(0.95, 0.25, length(q));
+    float vig = smoothstep(0.95, 0.25, length(baseUv - 0.5));
     col *= mix(0.82, 1.0, vig);
 
     gl_FragColor = vec4(col, 0.92);
@@ -116,6 +148,28 @@ export class WaterCaustics {
 
         this.uRes = gl.getUniformLocation(prog, 'uRes');
         this.uTime = gl.getUniformLocation(prog, 'uTime');
+
+        // タップ波紋のリングバッファ(最大 RIPPLES 個)。startを過去遠方にして全て非アクティブに。
+        this.uRippleOrigin = gl.getUniformLocation(prog, 'uRippleOrigin[0]');
+        this.uRippleStart = gl.getUniformLocation(prog, 'uRippleStart[0]');
+        this._origins = new Float32Array(RIPPLES * 2);
+        this._starts = new Float32Array(RIPPLES);
+        this._starts.fill(-999);
+        this._next = 0;
+        gl.uniform2fv(this.uRippleOrigin, this._origins);
+        gl.uniform1fv(this.uRippleStart, this._starts);
+    }
+
+    // タップ波紋を追加。nx,ny はキャンバス左上原点の正規化座標(0..1)。
+    addRipple(nx, ny) {
+        if (!this.ok) return;
+        const k = this._next;
+        this._origins[k * 2] = nx;
+        this._origins[k * 2 + 1] = 1.0 - ny;   // GLは下原点なのでyを反転
+        this._starts[k] = (performance.now() - this._t0) / 1000;
+        this._next = (this._next + 1) % RIPPLES;
+        this.gl.uniform2fv(this.uRippleOrigin, this._origins);
+        this.gl.uniform1fv(this.uRippleStart, this._starts);
     }
 
     _ensureSize() {

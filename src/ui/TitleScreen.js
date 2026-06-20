@@ -208,7 +208,13 @@ export class TitleScreen {
         // タップ座標(無い場合は中央)を起点にする
         const x = e && e.clientX != null ? e.clientX : window.innerWidth / 2;
         const y = e && e.clientY != null ? e.clientY : window.innerHeight / 2;
-        this.spawnRipple(x, y);
+        // 水面シェーダがあれば、水面そのものを屈折させる同心円波紋を起こす(参考の水面波紋)。
+        // 無い環境ではDOMの拡大リングでフォールバック。
+        if (this.water) {
+            this.water.addRipple(x / window.innerWidth, y / window.innerHeight);
+        } else {
+            this.spawnRipple(x, y);
+        }
         this.disturb();
 
         // クレジットが開いていれば閉じ、ボタンも隠す
@@ -216,7 +222,7 @@ export class TitleScreen {
         this.creditsBtn.style.opacity = '0';
         this.creditsBtn.style.pointerEvents = 'none';
 
-        // 波紋の広がりをひと目見せたら、素早くフェードアウト(もたつかせない)
+        // 波紋の広がりを少し見せてから、素早くフェードアウト(もたつかせない)
         const fadeOut = 'opacity 0.55s ease-in';
         setTimeout(() => {
             this.title.style.transition = fadeOut;
@@ -225,7 +231,7 @@ export class TitleScreen {
             this.title.style.opacity = '0';
             this.subtitle.style.opacity = '0';
             this.container.style.opacity = '0';
-        }, 420);
+        }, 620);
 
         setTimeout(() => {
             if (this.water) { this.water.stop(); this.water = null; }
@@ -235,7 +241,7 @@ export class TitleScreen {
             if (this.onComplete) {
                 this.onComplete();
             }
-        }, 1050);
+        }, 1300);
     }
 
     // タップ点から広がる単一の波紋
