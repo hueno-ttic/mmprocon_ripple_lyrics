@@ -6,6 +6,7 @@ import { settleSpringBones } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { addRipple, getRipples } from '../lake/lakeMemory.js';
+import { buildBrightLake, buildNightLake } from '../lake/kotaeteLakes.js';
 
 /**
  * こたえて (imie / 初音ミク) — 「問いの回廊」
@@ -1883,18 +1884,11 @@ export class SongKotaete extends BaseSong {
                     13 + Math.random() * 8, '#eaf6ff', 0.75, 1 + Math.random());
             }
         } else if (key === 'day') {
-            addDisc(7, 12, 44, 34, '#FFE49A', 0.95);   // 太陽
-            for (let i = 0; i < 7; i++) {
-                addCloud((Math.random() - 0.5) * 46, 3 + Math.random() * 12, 20 + i * 6,
-                    15 + Math.random() * 8, '#fff6e6', 0.85, 1 + Math.random());
-            }
+            // 晴天の湖(光の森): design_drafts「明るい湖」を回廊カメラ枠へ移植
+            buildBrightLake(THREE, this, group, items);
         } else if (key === 'night') {
-            addDisc(-7, 13, 46, 16, '#e6ecff', 0.9);   // 月
-            items.push(this._makeStarBurst(group));
-            for (let i = 0; i < 4; i++) {
-                addCloud((Math.random() - 0.5) * 40, 2 + Math.random() * 8, 24 + i * 7,
-                    17, '#2a3170', 0.45, 0.6);
-            }
+            // 夜空の湖: design_drafts「夜の湖をThree.jsで表現」を移植
+            buildNightLake(THREE, this, group, items);
         } else if (key === 'cavern') {
             this._makeCaveScene(group, items);
         } else {
@@ -2138,6 +2132,8 @@ export class SongKotaete extends BaseSong {
     }
 
     _disposeEnv(e) {
+        // item 固有の後始末(シェーダ uniform 内テクスチャ等。traverse では拾えない)
+        if (e.items) { for (const it of e.items) { if (it && it.dispose) it.dispose(); } }
         this.scene.remove(e.group);
         e.group.traverse((o) => {
             if (o.geometry) o.geometry.dispose();
@@ -2691,8 +2687,11 @@ export class SongKotaete extends BaseSong {
         // 湖に対応する3D空間背景を確実に出す(空/夜空/洞窟)
         if (lake.env) this.activateEnvironment(lake.env);
 
-        // 湖を3D構築(地底湖はケイブ・ウォーター環境が水面を持つので汎用湖は出さない)
-        if (lake.env !== 'cavern') this._createLake(lake, lake.env);
+        // 湖を3D構築。地底湖(ケイブ)・晴天/夜空の湖(kotaeteLakes)は
+        // それぞれの環境が独自の水面を持つので、汎用の簡易湖は出さない。
+        if (lake.env !== 'cavern' && lake.env !== 'day' && lake.env !== 'night') {
+            this._createLake(lake, lake.env);
+        }
         this.camPitchTarget = -0.12;
         this.camYawTarget = 0;
 
