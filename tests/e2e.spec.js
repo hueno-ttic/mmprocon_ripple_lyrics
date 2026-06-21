@@ -117,6 +117,11 @@ test.describe('Magical Mirai 2026 E2E App Behavior - Full 6 Song Suite', () => {
     test('3. シャッターチャンス (shutter) - Click to capture polaroid lyrics', async ({ page }) => {
         test.setTimeout(180000);
         page.on('console', msg => console.log(`[Shutter] ${msg.type()}: ${msg.text()}`));
+        page.on('pageerror', error => console.error(`[Shutter ERROR] ${error.stack || error.message}`));
+        page.on('requestfailed', request => console.error(`[Request Failed] ${request.url()}: ${request.failure() ? request.failure().errorText : 'unknown'}`));
+        page.on('response', response => {
+            console.log(`[Response] ${response.status()} ${response.url()}`);
+        });
         
         await enterLakeUI(page);
         
@@ -124,7 +129,25 @@ test.describe('Magical Mirai 2026 E2E App Behavior - Full 6 Song Suite', () => {
         await selectSongHumanWay(page, 'シャッターチャンス');
         
         await waitForLoadComplete(page);
-        await startPlaybackAndSkipIntro(page, 28000); // Skip intro to lyrics
+        
+        // Click the tutorial start button which triggers the cast selector
+        const startBtn = page.locator('.song-tutorial-btn');
+        await expect(startBtn).toBeVisible();
+        await startBtn.click();
+        
+        // Wait for the cast selector to appear and click Miku
+        const mikuBtn = page.locator('.shutter-cast-btn[data-key="miku"]');
+        await mikuBtn.waitFor({ state: 'visible', timeout: 15000 });
+        await mikuBtn.click();
+        await page.waitForTimeout(1000);
+        
+        // Skip intro to lyrics
+        await page.evaluate((ms) => {
+            if (window.app && window.app.playerManager && window.app.playerManager.player) {
+                window.app.playerManager.player.requestMediaSeek(ms);
+            }
+        }, 28000);
+        await page.waitForTimeout(1500);
         
         // Interaction: Trigger polaroid capture clicks
         // This takes a "snapshot" of current lyrics and spawns dropping photo sprites

@@ -1,12 +1,33 @@
 import * as THREE from 'three';
 import { quality } from '../core/quality.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin } from '@pixiv/three-vrm';
-import { settleSpringBones } from '../utils/vrm.js';
+import { MMDLoader } from '../utils/MMDLoader.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
 import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
+
+const VRM_TO_MMD_BONES = {
+    hips: '下半身',
+    spine: '上半身',
+    chest: '上半身2',
+    upperChest: '上半身2',
+    head: '頭',
+    neck: '首',
+    leftUpperArm: '左腕',
+    rightUpperArm: '右腕',
+    leftLowerArm: '左ひじ',
+    rightLowerArm: '右ひじ',
+    leftHand: '左手首',
+    rightHand: '右手首',
+    leftUpperLeg: '左足',
+    rightUpperLeg: '右足',
+    leftLowerLeg: '左ひざ',
+    rightLowerLeg: '右ひざ',
+    leftFoot: '左足首',
+    rightFoot: '右足首',
+    leftShoulder: '左肩',
+    rightShoulder: '右肩'
+};
 
 // 被写体ミクのポーズプリセット（正規化ヒューマノイドボーンのオイラー回転）
 // 新VRMモデルは上腕/前腕のロール軸(z)が旧モデルと逆。
@@ -179,8 +200,8 @@ export class SongShutter extends BaseSong {
         // baseRotY=π: このVRM群は素のrotation.y=0だとカメラ(+Z)に背を向けるため、
         // 180°回してカメラ(撮影者)に正面を向ける。
         this.subjectLayout = [
-            { key: 'miku', model: 'model_miku.vrm', baseX: 0, baseRotY: Math.PI, scale: 6.0 },
-            { key: 'rin',  model: 'model_rin.vrm',  baseX: 0, baseRotY: Math.PI, scale: 3.9 },
+            { key: 'miku', model: 'nendo_miku/nendo_miku.pmx', baseX: 0, baseRotY: 0, scale: 2.0 },
+            { key: 'rin',  model: 'nendo_rin/nendo_rin.pmx',  baseX: 0, baseRotY: 0, scale: 2.0 },
         ];
         this.activeVocal = 'none';   // 歌唱中パート（メーター表示などに使用）
         this.shownKey = 'miku';      // 現在表示中の被写体
@@ -223,8 +244,8 @@ export class SongShutter extends BaseSong {
         this.vrmUpdateAccum = 0;
 
         // --- カメラズーム（写真の拡大縮小範囲）制御システム ---
-        this.zoomLevel = 1.0;
-        this.targetZoom = 1.0;
+        this.zoomLevel = 2.2;
+        this.targetZoom = 2.2;
         this.touchStartDist = 0;
 
         this.boundOnWheel = this.onWheel.bind(this);
@@ -240,10 +261,10 @@ export class SongShutter extends BaseSong {
                     this.takePhoto();
                 }
             } else if (e.code === 'KeyW' || e.code === 'ArrowUp') {
-                this.targetZoom = Math.min(2.5, this.targetZoom + 0.15);
+                this.targetZoom = Math.min(3.2, this.targetZoom + 0.15);
                 e.preventDefault();
             } else if (e.code === 'KeyS' || e.code === 'ArrowDown') {
-                this.targetZoom = Math.max(0.6, this.targetZoom - 0.15);
+                this.targetZoom = Math.max(1.2, this.targetZoom - 0.15);
                 e.preventDefault();
             } else if (e.code === 'BracketRight') {
                 this.cycleDancePreset(1);   // ] 次のダンス（ストックをブラウズ）
@@ -347,11 +368,17 @@ export class SongShutter extends BaseSong {
     }
 
     init() {
+        console.log("[SHUTTER] init start");
         this.initThree();
+        console.log("[SHUTTER] initThree done");
         this.initEnvironment();
+        console.log("[SHUTTER] initEnvironment done");
         this.loadSubjects();
+        console.log("[SHUTTER] loadSubjects done");
         this.injectCustomStyles();
+        console.log("[SHUTTER] injectCustomStyles done");
         this.createViewfinderUI();
+        console.log("[SHUTTER] createViewfinderUI done");
         
         // ズームスライダーのイベント登録
         const slider = document.getElementById('shutter-zoom-slider');
@@ -388,6 +415,7 @@ export class SongShutter extends BaseSong {
 
         // 曲終了オーバーレイに表示される撮影成果を初期登録
         this.updateResultSummary();
+        console.log("[SHUTTER] init finished completely");
     }
 
     // 撮影成果サマリーの登録（撮影のたびに最新値で上書き）
@@ -418,7 +446,7 @@ export class SongShutter extends BaseSong {
             if (this.swap) this.swap = null;
             this.subjects.forEach((s) => {
                 if (s.key !== key) this.restoreSubjectMaterials(s);
-                s.vrm.scene.visible = (s.key === key);
+                s.mesh.visible = (s.key === key);
             });
             super._autoStartPlayback();
         });
@@ -468,72 +496,150 @@ export class SongShutter extends BaseSong {
         });
     }
 
-    // 被写体VRM（ミク&リン）をステージ奥にロードして横並びに配置（orchestraの実績パターンを踏襲）
+    // 被写体MMD（ミク&リン）をステージ奥にロードして横並びに配置（orchestraの実績パターンを踏襲）
     loadSubjects() {
+        console.log("[SHUTTER] loadSubjects start, layout:", this.subjectLayout);
         this.subjectLayout.forEach((def) => {
-            const loader = new GLTFLoader();
-            loader.register((parser) => new VRMLoaderPlugin(parser));
+            const modelUrl = import.meta.env.BASE_URL + 'assets/models/' + def.model;
+            console.log(`[SHUTTER] Starting load for ${def.key} from URL: ${modelUrl}`);
+            const loader = new MMDLoader();
             loader.load(
-                import.meta.env.BASE_URL + 'assets/models/' + def.model,
-                (gltf) => {
+                modelUrl,
+                (mesh) => {
+                    console.log(`[SHUTTER] Loaded mesh successfully for ${def.key}`);
+                    
+                    // Convert MMDToonMaterial to standard MeshPhongMaterial to prevent WebGL shader compilation errors
+                    mesh.traverse((child) => {
+                        if (child.isMesh && child.material) {
+                            const convertMat = (m) => {
+                                const newMat = new THREE.MeshPhongMaterial({
+                                    name: m.name || '',
+                                    color: m.color ? m.color.clone() : (m.diffuse ? m.diffuse.clone() : new THREE.Color(0xffffff)),
+                                    specular: m.specular ? m.specular.clone() : new THREE.Color(0x111111),
+                                    shininess: m.shininess !== undefined ? m.shininess : 30,
+                                    emissive: m.emissive ? m.emissive.clone() : new THREE.Color(0x000000),
+                                    transparent: m.transparent !== undefined ? m.transparent : false,
+                                    opacity: m.opacity !== undefined ? m.opacity : 1.0,
+                                    side: m.side !== undefined ? m.side : THREE.DoubleSide, // double side for clothes/hair
+                                    depthWrite: m.depthWrite !== undefined ? m.depthWrite : true,
+                                });
+                                if (m.map) {
+                                    newMat.map = m.map;
+                                }
+                                return newMat;
+                            };
+
+                            if (Array.isArray(child.material)) {
+                                child.material = child.material.map(convertMat);
+                            } else {
+                                child.material = convertMat(child.material);
+                            }
+                        }
+                    });
+
                     if (!this.isActive) {
-                        this.disposeVRM(gltf.userData.vrm);
+                        console.log(`[SHUTTER] Scene inactive, disposing loaded mesh for ${def.key}`);
+                        this.disposeMMD(mesh);
                         return;
                     }
-                    const vrm = gltf.userData.vrm;
-                    this.scene.add(vrm.scene);
-                    vrm.scene.position.set(def.baseX, this.mikuBaseY, this.mikuBaseZ);
-                    vrm.scene.rotation.y = def.baseRotY; // カメラ正面
-                    vrm.scene.scale.setScalar(def.scale);
-                    vrm.scene.visible = (def.key === this.shownKey); // 表示中の1体だけ可視
+                    this.scene.add(mesh);
+                    mesh.position.set(def.baseX, this.mikuBaseY, this.mikuBaseZ);
+                    mesh.rotation.y = def.baseRotY; // カメラ正面
+
+                    // Calculate native model height and auto-scale (target height: 5.6, twice the previous 2.8 size)
+                    const box = new THREE.Box3().setFromObject(mesh);
+                    const size = new THREE.Vector3();
+                    box.getSize(size);
+                    console.log(`[SHUTTER] Loaded model native size for ${def.key}:`, size);
+
+                    const targetHeight = 5.6;
+                    let scaleFactor = def.scale;
+                    if (size.y > 0.1) {
+                        scaleFactor = targetHeight / size.y;
+                        console.log(`[SHUTTER] Auto-scaled ${def.key} by factor: ${scaleFactor} to achieve height ${targetHeight}`);
+                    }
+                    mesh.scale.setScalar(scaleFactor);
+
+                    mesh.visible = (def.key === this.shownKey); // 表示中の1体だけ可視
 
                     const subject = {
-                        key: def.key, vrm, baseX: def.baseX, baseRotY: def.baseRotY,
+                        key: def.key, mesh, vrm: mesh, baseX: def.baseX, baseRotY: def.baseRotY,
                         poseIndex: 0,
                         smile: 0, smileTimer: 0,      // にっこり（happy表情）のエンベロープ
-                        matCache: this.buildSubjectMatCache(vrm), // フェード/発光復元用
+                        matCache: this.buildSubjectMatCache(mesh), // フェード/発光復元用
                     };
                     // 初期ポーズ（リラックス）を即適用
                     this.applySubjectPoseImmediate(subject, SHUTTER_MIKU_POSES[0]);
-                    settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
                     this.subjects.push(subject);
-                    if (def.key === 'miku') this.mikuVRM = vrm; // ライト/破棄の後方互換参照
-                    console.log(`[SHUTTER] ${def.key} VRM loaded successfully.`);
+                    if (def.key === 'miku') this.mikuVRM = mesh; // ライト/破棄の後方互換参照
+                    console.log(`[SHUTTER] ${def.key} MMD loaded and initialized successfully.`);
                 },
-                undefined,
+                (xhr) => {
+                    if (xhr.total) {
+                        console.log(`[SHUTTER] Loading progress for ${def.key}: ${(xhr.loaded / xhr.total * 100).toFixed(1)}%`);
+                    } else {
+                        console.log(`[SHUTTER] Loading progress for ${def.key}: ${xhr.loaded} bytes`);
+                    }
+                },
                 (error) => {
-                    console.error(`[SHUTTER] Failed to load ${def.key} VRM:`, error);
+                    console.error(`[SHUTTER] Failed to load ${def.key} MMD:`, error);
                 }
             );
         });
+        console.log("[SHUTTER] loadSubjects trigger loop completed");
+    }
+
+    getMMDBone(subject, vrmBoneName) {
+        const mesh = subject.mesh;
+        if (!mesh) return null;
+        const mmdBoneName = VRM_TO_MMD_BONES[vrmBoneName];
+        if (!mmdBoneName) return null;
+        return mesh.getObjectByName(mmdBoneName);
     }
 
     applySubjectPoseImmediate(subject, pose) {
-        if (!subject.vrm || !subject.vrm.humanoid) return;
+        if (!subject.mesh) return;
         Object.keys(pose).forEach(boneName => {
-            const bone = subject.vrm.humanoid.getNormalizedBoneNode(boneName);
+            const bone = this.getMMDBone(subject, boneName);
             if (bone) {
-                bone.rotation.set(pose[boneName].x, pose[boneName].y, pose[boneName].z);
+                let rx = pose[boneName].x;
+                let ry = pose[boneName].y;
+                let rz = pose[boneName].z;
+                // MMDの初期Aポーズに対する補正
+                if (boneName === 'leftUpperArm') {
+                    rz = rz - 0.5;
+                } else if (boneName === 'rightUpperArm') {
+                    rz = rz + 0.5;
+                }
+                bone.rotation.set(rx, ry, rz);
             }
         });
     }
 
     // 目標ポーズへ毎フレーム滑らかにイージング補間
     lerpSubjectPose(subject, pose, t) {
-        if (!subject.vrm || !subject.vrm.humanoid) return;
+        if (!subject.mesh) return;
         Object.keys(pose).forEach(boneName => {
-            const bone = subject.vrm.humanoid.getNormalizedBoneNode(boneName);
+            const bone = this.getMMDBone(subject, boneName);
             if (!bone) return;
-            bone.rotation.x += (pose[boneName].x - bone.rotation.x) * t;
-            bone.rotation.y += (pose[boneName].y - bone.rotation.y) * t;
-            bone.rotation.z += (pose[boneName].z - bone.rotation.z) * t;
+            let targetX = pose[boneName].x;
+            let targetY = pose[boneName].y;
+            let targetZ = pose[boneName].z;
+            if (boneName === 'leftUpperArm') {
+                targetZ = targetZ - 0.5;
+            } else if (boneName === 'rightUpperArm') {
+                targetZ = targetZ + 0.5;
+            }
+            bone.rotation.x += (targetX - bone.rotation.x) * t;
+            bone.rotation.y += (targetY - bone.rotation.y) * t;
+            bone.rotation.z += (targetZ - bone.rotation.z) * t;
         });
     }
 
     // 切替トランジション用に各マテリアルの基準値（不透明度・発光色）を記録
-    buildSubjectMatCache(vrm) {
+    buildSubjectMatCache(mesh) {
         const cache = [];
-        vrm.scene.traverse((o) => {
+        mesh.traverse((o) => {
             if (!o.material) return;
             const mats = Array.isArray(o.material) ? o.material : [o.material];
             mats.forEach((m) => {
@@ -589,8 +695,8 @@ export class SongShutter extends BaseSong {
         }
         subject.poseIndex = next;
         // ポーズ切替時に髪の物理が暴れないようリセット
-        if (subject.vrm.springBoneManager) {
-            subject.vrm.springBoneManager.reset();
+        if (subject.mesh && subject.mesh.springBoneManager) {
+            subject.mesh.springBoneManager.reset();
         }
     }
 
@@ -636,11 +742,10 @@ export class SongShutter extends BaseSong {
     // 腕の型(armStyle)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
     // （song-kotaete.js の applyGroove を被写体1体構成向けに移植・調整）
     applySubjectGroove(subject, t, deltaSec, beatPulse) {
-        const vrm = subject.vrm;
-        if (!vrm || !vrm.humanoid) return;
+        if (!subject.mesh) return;
         const cfg = this.grooveConfig;
-        const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
-        const hips = get('hips'), spine = get('spine'), chest = get('upperChest') || get('chest'), head = get('head');
+        const get = (n) => this.getMMDBone(subject, n);
+        const hips = get('hips'), spine = get('spine'), chest = get('upperChest') || get('chest') || get('spine'), head = get('head');
         if (!spine && !hips) return;
         const gain = cfg.gain * (this.isClimax ? cfg.climaxGain * 1.5 : 1.0);
         const g = this._groove;
@@ -704,9 +809,9 @@ export class SongShutter extends BaseSong {
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
     }
 
-    disposeVRM(vrm) {
-        if (!vrm) return;
-        vrm.scene.traverse((obj) => {
+    disposeMMD(mesh) {
+        if (!mesh) return;
+        mesh.traverse((obj) => {
             if (obj.geometry) obj.geometry.dispose();
             if (obj.material) {
                 if (Array.isArray(obj.material)) {
@@ -1128,7 +1233,7 @@ export class SongShutter extends BaseSong {
             <!-- Vertical Zoom Slider (Right Side) -->
             <div style="position: absolute; right: 200px; top: 50%; transform: translateY(-50%); height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; pointer-events: auto; z-index: 35;" id="shutter-zoom-slider-container">
                 <span style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; user-select: none;">[+]</span>
-                <input type="range" id="shutter-zoom-slider" min="0.6" max="2.5" step="0.01" value="1.0" style="
+                <input type="range" id="shutter-zoom-slider" min="1.2" max="3.2" step="0.01" value="2.2" style="
                     -webkit-appearance: none;
                     appearance: none;
                     width: 6px;
@@ -1378,13 +1483,13 @@ export class SongShutter extends BaseSong {
         if (zoomLabel) {
             zoomLabel.innerText = `ZOOM ${this.zoomLevel.toFixed(1)}x`;
             // ズームしている時はカラーをイエロー系にして警告感を出す
-            zoomLabel.style.color = this.zoomLevel > 1.2 ? '#FFEE11' : this.themeColor;
-            zoomLabel.style.textShadow = this.zoomLevel > 1.2 ? '0 0 5px #FFEE11' : `0 0 5px ${this.themeColor}`;
+            zoomLabel.style.color = this.zoomLevel > 2.2 ? '#FFEE11' : this.themeColor;
+            zoomLabel.style.textShadow = this.zoomLevel > 2.2 ? '0 0 5px #FFEE11' : `0 0 5px ${this.themeColor}`;
         }
         if (apertureLabel) {
             // ズームするほどF値が開き（小さく）、引くほど絞られる（大きく）リアルな設定
-            // ズーム範囲 0.6 〜 2.5 ➔ F値 8.0 〜 1.8
-            const fVal = (8.0 - (this.zoomLevel - 0.6) * (6.2 / 1.9)).toFixed(1);
+            // ズーム範囲 1.2 〜 3.2 ➔ F値 8.0 〜 1.8
+            const fVal = (8.0 - (this.zoomLevel - 1.2) * (6.2 / 2.0)).toFixed(1);
             const clampedF = Math.min(8.0, Math.max(1.4, parseFloat(fVal))).toFixed(1);
             let stateStr = 'NORMAL';
             if (clampedF <= 2.0) stateStr = 'OPEN';
@@ -1609,7 +1714,8 @@ export class SongShutter extends BaseSong {
                 // 散布レイアウトはピボット基準の「局所オフセット」として扱う(スコープ周りの広がり)。
                 const lx = (startPos.x - P.x) + dirX * speed * elapsedSeconds;
                 const ly = (startPos.y - P.y) + dirY * speed * elapsedSeconds;
-                const lz = (startPos.z - P.z) + elapsedSeconds * 0.2; // 手前へ浮かび上がる
+                // キャラクターの奥（-Z方向）に配置し、さらに奥へと流れていくように変更
+                const lz = (startPos.z - P.z) - 4.5 - elapsedSeconds * 0.2;
 
                 // カメラの回り込みに合わせて局所オフセットを回転 → 歌詞は常にカメラ正面に居続ける。
                 // スプライトなので向きは自動でカメラ正面(ビルボード)。world座標のままなので写真描画も正しい。
@@ -1730,10 +1836,10 @@ export class SongShutter extends BaseSong {
 
             // --- 表示する被写体は曲開始前に選んだ1体で固定（曲中の切替はしない） ---
             if (this.selectedKey) this.shownKey = this.selectedKey;
-            this.subjects.forEach(s => { s.vrm.scene.visible = (s.key === this.shownKey); });
+            this.subjects.forEach(s => { s.mesh.visible = (s.key === this.shownKey); });
 
             // 表示中の被写体（トランジション中は両方）をアニメーション
-            const animateList = this.subjects.filter(s => s.vrm.scene.visible);
+            const animateList = this.subjects.filter(s => s.mesh.visible);
             animateList.forEach((subject) => {
                 const isShown = subject.key === this.shownKey;
 
@@ -1749,8 +1855,11 @@ export class SongShutter extends BaseSong {
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
                 const smileTarget = subject.smileTimer > 0 ? 1 : 0;
                 subject.smile += (smileTarget - subject.smile) * 0.25;
-                if (subject.vrm.expressionManager) {
-                    subject.vrm.expressionManager.setValue('happy', subject.smile);
+                if (subject.mesh.morphTargetDictionary) {
+                    const morphIndex = subject.mesh.morphTargetDictionary['笑い'] || subject.mesh.morphTargetDictionary['にっこり'] || subject.mesh.morphTargetDictionary['E_Happy'];
+                    if (morphIndex !== undefined) {
+                        subject.mesh.morphTargetInfluences[morphIndex] = subject.smile;
+                    }
                 }
 
                 // ステージ内を動き回る（撮影者が追って構図を作れるよう画面内を移動）
@@ -1758,23 +1867,20 @@ export class SongShutter extends BaseSong {
                 const sz = Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1;        // 前後移動 ~±3.5
                 const px = subject.baseX + sx;
                 const pz = this.mikuBaseZ + sz;
-                subject.vrm.scene.position.x = px;
+                subject.mesh.position.x = px;
                 // 浮遊bob ＋ 拍頭で腰を落とす沈み込み（膝バウンス連動）＋ 小節頭の軽いホップ
-                subject.vrm.scene.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.05
+                subject.mesh.position.y = this.mikuBaseY + Math.sin(floatT * 1.8) * 0.05
                     - beatPulse * this.grooveConfig.hipDrop * (this.isClimax ? 1.4 : 1.0)
                     + this._barAccent * this.grooveConfig.hop * (this.isClimax ? 1.4 : 0.6);
-                subject.vrm.scene.position.z = pz;
+                subject.mesh.position.z = pz;
                 // 常にカメラ（撮影者）の方へ正面を向ける（既定カメラでは π=正面。回り込んでも正面を維持）
-                subject.vrm.scene.rotation.y =
-                    Math.atan2(this.camera.position.x - px, this.camera.position.z - pz) + Math.PI;
-                subject.vrm.scene.rotation.z = Math.sin(floatT * 0.7) * 0.012;
+                subject.mesh.rotation.y =
+                    Math.atan2(this.camera.position.x - px, this.camera.position.z - pz);
+                subject.mesh.rotation.z = Math.sin(floatT * 0.7) * 0.012;
 
                 // 被写体ライトを追従させ、移動中も立体的に照らす
                 if (this.keyLight) this.keyLight.target.position.set(px, this.mikuBaseY + 1.2, pz);
                 if (this.rimLight) this.rimLight.target.position.set(px, this.mikuBaseY + 1.2, pz);
-
-                // VRM内部更新（表情・スプリングボーン等）
-                if (runVrmUpdate) subject.vrm.update(vrmStep);
             });
         }
 
@@ -2281,9 +2387,6 @@ export class SongShutter extends BaseSong {
         ctx.rect(photoX, photoY, photoW, photoH);
         ctx.clip();
 
-        // --- 0. 被写体ミクVRMの焼き付け（実際のWebGLレンダリングをミクのみ表示で抽出） ---
-        this.burnMikuIntoPhoto(ctx, photoX, photoY, photoW, photoH);
-
         // --- 1. 背景のすべての浮遊フレーム（ワイヤーフレーム ＆ 過去の写真）の焼き付け ---
         ctx.save();
         ctx.strokeStyle = activeVocal === 'miku' ? 'rgba(57, 197, 187, 0.22)' : (activeVocal === 'rin' ? 'rgba(255, 238, 17, 0.22)' : 'rgba(185, 84, 60, 0.25)');
@@ -2471,6 +2574,10 @@ export class SongShutter extends BaseSong {
             ctx.fillText(spriteText, textX, textY);
             ctx.restore();
         });
+
+        // --- 4. 被写体ミクVRMの焼き付け（実際のWebGLレンダリングをミクのみ表示で抽出） ---
+        // 歌詞の描画の後に重ねることで、モデルが一番手前に描画され、歌詞が隠れるようにする
+        this.burnMikuIntoPhoto(ctx, photoX, photoY, photoW, photoH);
         
         ctx.restore(); // クリップ設定を復元
 
@@ -2879,11 +2986,11 @@ export class SongShutter extends BaseSong {
         this.filmStripEl = null;
         this.photoLog = [];
 
-        // 被写体VRM（ミク&リン）の完全解放
+        // 被写体MMD（ミク&リン）の完全解放
         this.subjects.forEach((subject) => {
-            if (subject.vrm) {
-                this.scene.remove(subject.vrm.scene);
-                this.disposeVRM(subject.vrm);
+            if (subject.mesh) {
+                this.scene.remove(subject.mesh);
+                this.disposeMMD(subject.mesh);
             }
         });
         this.subjects = [];
