@@ -2118,6 +2118,11 @@ export class SongShutter extends BaseSong {
             return;
         }
 
+        // 写真のトランジション中（正面ホールド中および赤い枠への吸い込み移動中）は連射撮影をガード！
+        if (this.transitioningPhotos && this.transitioningPhotos.length > 0) {
+            return;
+        }
+
         // 高精度に補間された描画時間（smoothed time）を使用し、画面描画とミリ秒レベルで同期させる
         const position = this.getSmoothedTime();
         if (position <= 0) {
