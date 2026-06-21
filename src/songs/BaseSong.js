@@ -101,6 +101,180 @@ export class BaseSong {
         playerManager.seek(0);
         playerManager.fadeIn(1200); // 曲の頭出しをなめらかに
         playerManager.play();
+
+        // 再生開始直後、各曲固有の操作ヒントを一瞬だけ再提示する(共通機構)。
+        // チュートリアルを読み飛ばしたユーザーでも固有操作に気づけるようにする狙い。
+        // 文言は各曲から showStartHint(text) で注入できるが、未指定でも汎用文言で動作する。
+        this.showStartHint();
+    }
+
+    /**
+     * 再生開始直後に短い操作ヒントを一瞬(約3.6秒)だけ表示してフェードアウトする共通機構。
+     * 各曲は固有の文言を渡すだけで利用できる(例: this.showStartHint('歌詞をタップ'))。
+     * 文言が無い場合は songConfig の startHint / hint、チュートリアル手順、
+     * 最終的に汎用文言へとフォールバックするため、引数なしでも必ず何かを提示する。
+     *
+     * - pointer-events:none で操作の邪魔をしない
+     * - 数秒で自動フェードアウト
+     * - モバイルでも収まるよう横幅と折返しを許容
+     *
+     * @param {string} [text] 表示する操作ヒント文言(HTML可)。省略時はフォールバック。
+     */
+    showStartHint(text) {
+        const songConfig = SONGS.find(s => s.id === this.songId);
+        const color = (songConfig && songConfig.color) || '#7F77DD';
+
+        const hintText = this._resolveStartHintText(text, songConfig);
+        if (!hintText) return; // 念のため(基本は汎用文言で必ず埋まる)
+
+        this._ensureStartHintStyles();
+
+        // 連打や再呼び出しで重複表示されないよう、既存分は片付ける
+        if (this._startHintEl && this._startHintEl.parentNode) {
+            clearTimeout(this._startHintFadeTimer);
+            clearTimeout(this._startHintRemoveTimer);
+            this._startHintEl.parentNode.removeChild(this._startHintEl);
+            this._startHintEl = null;
+        }
+
+        const overlay = document.createElement('div');
+        overlay.className = 'song-start-hint';
+        overlay.style.setProperty('--start-hint-color', color);
+        overlay.innerHTML = `
+            <span class="song-start-hint-icon" aria-hidden="true">✦</span>
+            <span class="song-start-hint-text">${hintText}</span>
+        `;
+
+        this.songWrapper.appendChild(overlay);
+        this._startHintEl = overlay;
+
+        // フェードイン
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => overlay.classList.add('visible'));
+        });
+
+        // 表示維持 → フェードアウト → 除去
+        const HOLD_MS = 3600;
+        const FADE_MS = 700;
+        this._startHintFadeTimer = setTimeout(() => {
+            overlay.classList.remove('visible');
+            overlay.classList.add('fade-out');
+            this._startHintRemoveTimer = setTimeout(() => {
+                if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+                if (this._startHintEl === overlay) this._startHintEl = null;
+            }, FADE_MS);
+        }, HOLD_MS);
+    }
+
+    /**
+     * showStartHint の文言フォールバック解決。
+     * 優先順: 明示引数 → songConfig.startHint → songConfig.hint
+     *          → チュートリアル手順から操作系の一行 → 汎用文言。
+     */
+    _resolveStartHintText(text, songConfig) {
+        const explicit = typeof text === 'string' ? text.trim() : '';
+        if (explicit) return explicit;
+
+        if (songConfig) {
+            if (typeof songConfig.startHint === 'string' && songConfig.startHint.trim()) {
+                return songConfig.startHint.trim();
+            }
+            if (typeof songConfig.hint === 'string' && songConfig.hint.trim()) {
+                return songConfig.hint.trim();
+            }
+            // チュートリアル手順から操作を示唆する一行を拾う(タップ/ドラッグ/タッチ/撮影など)
+            const steps = songConfig.tutorial && Array.isArray(songConfig.tutorial.steps)
+                ? songConfig.tutorial.steps
+                : [];
+            const actionKeywords = ['タッチ', 'タップ', 'ドラッグ', 'スワイプ', '撮影', '押', '触', '選', 'なぞ'];
+            const actionStep = steps.find(s =>
+                s && typeof s.text === 'string' &&
+                actionKeywords.some(k => s.text.includes(k))
+            );
+            if (actionStep) return actionStep.text;
+            if (steps.length && typeof steps[0].text === 'string') return steps[0].text;
+        }
+
+        // 汎用フォールバック文言
+        return '画面や流れる歌詞にタッチして、演出を楽しもう';
+    }
+
+    /**
+     * 開始ヒント用のスタイルを1度だけ注入する(CSS-in-JS)。
+     * 既存のチュートリアル/ヒント CSS(theme.css)とは独立。
+     */
+    _ensureStartHintStyles() {
+        if (document.getElementById('song-start-hint-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'song-start-hint-styles';
+        style.textContent = `
+            .song-start-hint {
+                position: absolute;
+                top: 18%;
+                left: 50%;
+                transform: translate(-50%, -16px);
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                max-width: min(86vw, 560px);
+                padding: 11px 22px;
+                border-radius: 999px;
+                border: 1px solid color-mix(in srgb, var(--start-hint-color, #7F77DD) 55%, rgba(255,255,255,0.25));
+                background: rgba(8, 10, 18, 0.5);
+                backdrop-filter: blur(14px) saturate(150%);
+                -webkit-backdrop-filter: blur(14px) saturate(150%);
+                color: #ffffff;
+                font-family: 'Inter', 'Noto Sans JP', sans-serif;
+                font-size: 14px;
+                font-weight: 600;
+                line-height: 1.45;
+                text-align: center;
+                letter-spacing: 0.4px;
+                pointer-events: none;
+                opacity: 0;
+                z-index: 1000;
+                box-shadow: 0 10px 36px rgba(0,0,0,0.4),
+                            0 0 18px color-mix(in srgb, var(--start-hint-color, #7F77DD) 40%, transparent);
+                transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.55s ease;
+            }
+            .song-start-hint.visible {
+                transform: translate(-50%, 0);
+                opacity: 1;
+            }
+            .song-start-hint.fade-out {
+                transform: translate(-50%, -24px);
+                opacity: 0;
+            }
+            .song-start-hint-icon {
+                font-size: 16px;
+                color: var(--start-hint-color, #7F77DD);
+                filter: drop-shadow(0 0 6px var(--start-hint-color, #7F77DD));
+                animation: songStartHintPulse 1.8s infinite ease-in-out;
+            }
+            .song-start-hint-text {
+                text-shadow: 0 2px 6px rgba(0,0,0,0.55);
+            }
+            @keyframes songStartHintPulse {
+                0%, 100% { transform: scale(1); opacity: 0.9; }
+                50% { transform: scale(1.25); opacity: 1; }
+            }
+            @media (max-width: 600px) {
+                .song-start-hint {
+                    top: 14%;
+                    font-size: 13px;
+                    padding: 10px 18px;
+                    max-width: 90vw;
+                }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .song-start-hint,
+                .song-start-hint-icon {
+                    transition-duration: 0.2s;
+                    animation: none;
+                }
+            }
+        `;
+        document.head.appendChild(style);
     }
 
     showTutorial(songConfig) {
@@ -333,6 +507,14 @@ export class BaseSong {
         if (this.boundOnTimerReady) {
             eventBus.off('timerReady', this.boundOnTimerReady);
         }
+
+        // 開始ヒントのタイマー/要素を後始末(曲切替時のリーク防止)
+        clearTimeout(this._startHintFadeTimer);
+        clearTimeout(this._startHintRemoveTimer);
+        if (this._startHintEl && this._startHintEl.parentNode) {
+            this._startHintEl.parentNode.removeChild(this._startHintEl);
+        }
+        this._startHintEl = null;
         
         if (this.lyricRenderer) {
             this.lyricRenderer.destroy();
