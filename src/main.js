@@ -7,6 +7,9 @@ import { VolumeControl } from './ui/VolumeControl.js';
 import { SONGS } from './config/songs.js';
 import { BaseSong } from './songs/BaseSong.js';
 import { CompletionScreen } from './ui/CompletionScreen.js';
+import { LoadingScreen } from './ui/LoadingScreen.js';
+import { ErrorScreen } from './ui/ErrorScreen.js';
+import './core/sfx.js'; // 全曲共通UIの効果音(eventBus/DOM購読で自己登録)
 
 // 曲シーンは1曲ずつしか遊ばないので、静的importで全曲(+pixi/three-vrm)を
 // 初回バンドルに同梱するのは無駄。曲ごとに dynamic import() し、選んだ曲の
@@ -60,6 +63,13 @@ class Application {
     }
 
     async init() {
+        // フォント先読みを開始(歌詞テクスチャが代替フォントで焼き付くのを防ぐ)
+        this.ensureFonts();
+
+        // ローディング/エラー画面(index.html の #loading-screen / #error-screen を管理)
+        this.loadingScreen = new LoadingScreen();
+        this.errorScreen = new ErrorScreen();
+
         // Initialize PlayerControls
         this.playerControls = new PlayerControls();
 
@@ -123,23 +133,52 @@ class Application {
         // ──────────────────────────────────────────────────────────────
     }
 
+    // フォント先読み: 主要4ウェイトを明示ロードし、完了Promiseを保持。
+    // 取得が詰まってもゲーム開始を妨げないよう最大3.5秒で打ち切る(フォールバック)。
+    ensureFonts() {
+        const specs = [
+            '400 16px "Noto Sans JP"', '700 16px "Noto Sans JP"',
+            '400 16px "Noto Serif JP"', '700 16px "Noto Serif JP"',
+        ];
+        let load;
+        try {
+            load = (document.fonts && document.fonts.load)
+                ? Promise.all(specs.map(s => document.fonts.load(s))).then(() => document.fonts.ready)
+                : Promise.resolve();
+        } catch (e) { load = Promise.resolve(); }
+        this.fontsReady = Promise.race([load, new Promise(r => setTimeout(r, 3500))]);
+    }
+
     bindEvents() {
         eventBus.on('loadingStateChange', (isLoading) => {
-            const ls = document.getElementById('loading-screen');
-            if (!ls) return;
             if (isLoading) {
-                ls.style.display = 'flex';
-                void ls.offsetWidth; // commit display/opacity:0 so the fade animates
-                ls.style.opacity = '1';
+                this.loadingScreen.show();
             } else {
-                ls.style.opacity = '0';
-                setTimeout(() => { if (!appState.isLoading) ls.style.display = 'none'; }, 450);
-                // A song finished loading behind the curtain — reveal the scene.
+                this.loadingScreen.hide();
+                // 曲がカーテン裏で読込完了 — フォント準備を待ってからシーンを現す。
+                // (歌詞テクスチャが代替フォントで焼き付くのを防ぐ。最大3.5秒で打ち切り)
                 if (this._revealOnLoad) {
                     this._revealOnLoad = false;
-                    screenFade.fadeIn(550);
+                    (this.fontsReady || Promise.resolve()).then(() => screenFade.fadeIn(550));
                 }
             }
+        });
+
+        // 歌詞データの読込失敗 — 無言の停止を避け、原因とリトライ/戻る導線を示す
+        eventBus.on('songLoadError', ({ song } = {}) => {
+            this._revealOnLoad = false;
+            screenFade.fadeIn(400); // カーテンを開けてエラーを見せる
+            const target = song || SONGS.find(s => s.id === appState.currentSongId);
+            this.errorScreen.show({
+                title: '歌詞データを読み込めませんでした',
+                message: '通信状況をご確認のうえ、もう一度お試しください。',
+                actions: [
+                    { label: 'もう一度試す', primary: true, onClick: () => {
+                        if (target) { this._revealOnLoad = true; playerManager.loadSong(target); }
+                    } },
+                    { label: '湖へ戻る', onClick: () => eventBus.emit('backToLake', { markComplete: false }) },
+                ],
+            });
         });
 
         eventBus.on('loadSong', (song) => {

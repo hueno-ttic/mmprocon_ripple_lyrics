@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
@@ -675,6 +676,7 @@ export class SongTakeover extends BaseSong {
             this.combo = 1;
         }
         this._lastDecodeAt = now;
+        sfx.play('takeover_decode');
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
 
         if (this.comboEl && this.combo >= 2) {
@@ -1020,6 +1022,7 @@ export class SongTakeover extends BaseSong {
         schedule(() => {
             this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3');
             this.songWrapper.classList.add('to-reclaim');
+            sfx.play('takeover_reclaim');
             this._erosionStage = 0;
             // シーンを深いシアンへ
             if (this.scene && this.scene.background && this.scene.background.isColor) {

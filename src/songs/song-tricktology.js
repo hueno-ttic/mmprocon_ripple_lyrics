@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
@@ -874,6 +875,7 @@ export class SongTricktology extends BaseSong {
 
     triggerInversion() {
         this.invertCount++;
+        sfx.play('trick_flip');
         this.invertFlash = 1.0;
         this.waveEnergy = 1.4;
         this.swapSmooth = 1;
@@ -999,6 +1001,7 @@ export class SongTricktology extends BaseSong {
     chooseWorld(side) {
         if (this.worldChosen) return;
         this.chosenSide = side;
+        sfx.play('trick_choose');
         const groundUp = (this.invertCount % 2 === 0);
         const upperWorld = groundUp ? 'ground' : 'water';
         const lowerWorld = groundUp ? 'water' : 'ground';

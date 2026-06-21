@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { MMDLoader } from '../utils/MMDLoader.js';
 import { BaseSong } from './BaseSong.js';
@@ -1973,6 +1974,8 @@ export class SongShutter extends BaseSong {
 
     // 撮影写真をフィルムストリップ用に内部記録（小型サムネイル化・最大12枚で古い順に間引き）
     recordPhotoToFilm(canvas, starred, timeStr) {
+        sfx.play('shutter_click');
+        if (starred) sfx.play('shutter_star');
         const thumbSize = this.isMobile ? 112 : 160;
         const thumb = document.createElement('canvas');
         thumb.width = thumbSize;

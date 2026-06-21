@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
@@ -948,6 +949,7 @@ export class SongKotaete extends BaseSong {
     }
 
     resonate(sprite, clientX, clientY) {
+        sfx.play('kotaete_resonance');
         sprite.userData.resonated = true;
         sprite.userData.resonateFlash = 1.4; // 強めにポップ
         sprite.userData.settle = 0;          // 0→1: 応答済みの「落ち着いた軌跡」へ変化
@@ -1758,6 +1760,7 @@ export class SongKotaete extends BaseSong {
 
     commitFork(side) {
         if (!this.forkActive || !this.fork) return;
+        sfx.play('kotaete_choice');
         const b = this.fork[side];
         const cfg = this._forkConfig;
         const preset = b.preset;
@@ -2330,6 +2333,7 @@ export class SongKotaete extends BaseSong {
 
     applyChoice(colorHex) {
         if (!this.choiceActive) return;
+        sfx.play('kotaete_choice');
 
         // 選んだオーブが弾けて世界へ色が広がる(はっきりした手応え)
         if (this.choiceOrbs) {
