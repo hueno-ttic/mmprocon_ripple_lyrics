@@ -69,6 +69,7 @@ export class WorldUI {
         this.phaseIndicator.className = 'world-phase-indicator';
         this.labelsContainer.appendChild(this.phaseIndicator);
 
+        this._injectAffordanceStyles();
         this._initPhase(this.currentPhaseIndex);
         this._createLabels();
         this._createSelectionPanel();
@@ -83,6 +84,156 @@ export class WorldUI {
         this._clockStart = Date.now();
         this.animate = this.animate.bind(this);
         this.animationId = requestAnimationFrame(this.animate);
+    }
+
+    // 「ここを押せる」と一目で分かるアフォーダンスをまとめて注入する。
+    // 評価レポート(20260617_224647)で「湖上のどこを押せるか分からない」が
+    // 離脱要因として複数挙がっていたため、ホバー/フォーカス時のリング・発光・
+    // ラベルを強化し、ホバーが無いタッチ環境でも常時うっすら手がかりが
+    // 見えるようにする(coarse pointer 向けの控えめな常時パルス)。
+    // 制約上 WorldUI.js のみ編集可のため、スタイルは <style> として自前注入する。
+    _injectAffordanceStyles() {
+        if (document.getElementById('world-affordance-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'world-affordance-styles';
+        style.textContent = `
+        /* ── 選曲UIの「押せる」アフォーダンス強化 ───────────────── */
+
+        /* 共通: フォーカスリング(キーボード/スクリーンリーダ操作で押せる事を明示) */
+        .world-nav-btn:focus-visible,
+        .world-selection-start:focus-visible,
+        .song-label:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.85),
+                        0 0 18px color-mix(in srgb, var(--selection-color, #7F77DD) 70%, transparent);
+        }
+
+        /* ◀▶ ナビ: ホバー/フォーカスで明るいリングと拡大、押せる感を強調 */
+        .world-nav-btn {
+            position: relative;
+            transition: background 0.18s, border-color 0.18s, transform 0.12s, box-shadow 0.18s;
+        }
+        .world-nav-btn:hover,
+        .world-nav-btn:focus-visible {
+            transform: scale(1.08);
+            border-color: rgba(255,255,255,0.85);
+            box-shadow: 0 0 16px color-mix(in srgb, var(--selection-color, #7F77DD) 55%, transparent);
+        }
+
+        /* 「この曲をはじめる」: ホバー/フォーカスでわずかに浮き上がり発光を強める */
+        .world-selection-start {
+            position: relative;
+            overflow: hidden;
+        }
+        .world-selection-start:hover,
+        .world-selection-start:focus-visible {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 24px color-mix(in srgb, var(--selection-color, #7F77DD) 55%, transparent),
+                        0 0 0 1px color-mix(in srgb, var(--selection-color, #7F77DD) 80%, transparent);
+        }
+        /* ボタン上を一度だけ光が走り、主要導線である事を示す */
+        .world-selection-start::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -60%;
+            width: 40%;
+            height: 100%;
+            background: linear-gradient(100deg, transparent, rgba(255,255,255,0.28), transparent);
+            transform: skewX(-18deg);
+            pointer-events: none;
+            opacity: 0;
+        }
+        .world-selection-start--attention::after {
+            animation: world-start-sheen 1.1s ease;
+        }
+        @keyframes world-start-sheen {
+            0%   { left: -60%; opacity: 0; }
+            20%  { opacity: 1; }
+            80%  { opacity: 1; }
+            100% { left: 140%; opacity: 0; }
+        }
+
+        /* 曲名ラベル: ホバー/フォーカスで光輪のリングを敷き、押せる範囲を可視化 */
+        .song-label {
+            border-radius: 12px;
+            transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.12s ease;
+        }
+        .song-label--hovered,
+        .song-label:hover,
+        .song-label:focus-visible {
+            background: radial-gradient(closest-side,
+                        rgba(255,255,255,0.10), rgba(255,255,255,0) 78%);
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.22) inset,
+                        0 0 20px color-mix(in srgb, var(--selection-color, #7F77DD) 35%, transparent);
+        }
+
+        /* タッチ(coarse pointer)環境ではホバーが効かないため、
+           主要導線に常時うっすら「触れる」サインを灯し続ける。 */
+        @media (hover: none), (pointer: coarse) {
+            .world-selection-start {
+                animation: world-start-breathe 2.6s ease-in-out infinite;
+            }
+            .world-nav-btn {
+                border-color: rgba(255,255,255,0.5);
+                background: rgba(255,255,255,0.12);
+            }
+            /* 選択中の曲名は常に光輪を薄く出して「触れる対象」と示す */
+            .song-label.song-label--front {
+                box-shadow: 0 0 0 1px rgba(255,255,255,0.16) inset,
+                            0 0 16px color-mix(in srgb, var(--selection-color, #7F77DD) 28%, transparent);
+                border-radius: 12px;
+            }
+        }
+        @keyframes world-start-breathe {
+            0%, 100% { box-shadow: 0 0 0 color-mix(in srgb, var(--selection-color, #7F77DD) 0%, transparent); }
+            50%      { box-shadow: 0 0 18px color-mix(in srgb, var(--selection-color, #7F77DD) 45%, transparent); }
+        }
+
+        /* 「タップで選ぶ」ヒント: サムネイル横に小さく出す押下案内 */
+        .world-tap-hint {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: 999px;
+            background: rgba(6,10,22,0.5);
+            border: 1px solid rgba(255,255,255,0.22);
+            color: rgba(255,255,255,0.82);
+            font-size: 11.5px;
+            letter-spacing: 0.12em;
+            font-family: 'Noto Sans JP', 'Inter', sans-serif;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 99;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+            animation: world-tap-hint-pulse 2.4s ease-in-out infinite;
+        }
+        .world-tap-hint .world-tap-hint-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: color-mix(in srgb, var(--selection-color, #7F77DD) 70%, #fff);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--selection-color, #7F77DD) 80%, transparent);
+        }
+        @keyframes world-tap-hint-pulse {
+            0%, 100% { opacity: 0.55; }
+            50%      { opacity: 1; }
+        }
+        .world-tap-hint--hide { opacity: 0; transition: opacity 0.5s ease; }
+
+        @media (prefers-reduced-motion: reduce) {
+            .world-selection-start,
+            .world-tap-hint,
+            .world-selection-start--attention::after {
+                animation: none !important;
+            }
+        }
+        `;
+        document.head.appendChild(style);
+        this._affordanceStyleEl = style;
     }
 
     _initPhase(phaseIndex) {
@@ -145,19 +296,35 @@ export class WorldUI {
 
             label.style.pointerEvents = 'auto';
             label.style.cursor = 'pointer';
+            // 押せる事をスクリーンリーダ/キーボードにも明示(Tabで巡回・Enter/Spaceで選択)
+            label.setAttribute('role', 'button');
+            label.setAttribute('tabindex', '0');
+            label.setAttribute('aria-label', `${song.title} ${song.artist} を選ぶ`);
 
-            label.addEventListener('mouseenter', () => {
+            const onEnter = () => {
                 label.classList.add('song-label--hovered');
                 labelData._hovered = true;
                 if (this.currentPhase && i !== this.selectedIndex) this.currentPhase.onHover(i);
                 this.hoveredIndex = i;
-            });
-
-            label.addEventListener('mouseleave', () => {
+            };
+            const onLeave = () => {
                 label.classList.remove('song-label--hovered');
                 labelData._hovered = false;
                 if (this.currentPhase && i !== this.selectedIndex) this.currentPhase.onUnhover(i);
                 this.hoveredIndex = -1;
+            };
+            label.addEventListener('mouseenter', onEnter);
+            label.addEventListener('mouseleave', onLeave);
+            // フォーカス時もホバーと同じ手がかり(3Dマーカー強調)を与える
+            label.addEventListener('focus', onEnter);
+            label.addEventListener('blur', onLeave);
+            label.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ' || e.code === 'Space') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (i === this.selectedIndex) this.selectSong(song, i);
+                    else this._setSelected(i);
+                }
             });
 
             label.addEventListener('click', (e) => {
@@ -181,6 +348,9 @@ export class WorldUI {
             this.currentPhase.onHover(index);
         }
         this.selectedIndex = index;
+        // 実際に選択が動いた=ユーザーが操作した時だけ手がかりヒントを引っ込める
+        // (構築時の初期 _setSelected(0) では prev===index なので残す)
+        if (prev !== index) this._dismissTapHint?.();
         this._updateSelectionPanel();
     }
 
@@ -220,6 +390,28 @@ export class WorldUI {
             e.stopPropagation();
             this.selectSong(SONGS[this.selectedIndex], this.selectedIndex);
         });
+
+        // タッチ環境向け: 「どこを押せば良いか」の最初の手がかりを一度だけ提示。
+        // ホバーで気付けない端末でも、湖上の光が押せる対象だと分かるようにする。
+        // 既に一度見た人には出さない(冪等)。
+        const coarse = window.matchMedia
+            && window.matchMedia('(hover: none), (pointer: coarse)').matches;
+        if (coarse && !localStorage.getItem('worldTapHintShown')) {
+            this.tapHint = document.createElement('div');
+            this.tapHint.className = 'world-tap-hint';
+            this.tapHint.innerHTML = `<span class="world-tap-hint-dot"></span><span>湖の光をタップして曲を選ぶ</span>`;
+            this.container.appendChild(this.tapHint);
+            this._dismissTapHint = () => {
+                if (!this.tapHint) return;
+                localStorage.setItem('worldTapHintShown', '1');
+                this.tapHint.classList.add('world-tap-hint--hide');
+                const el = this.tapHint;
+                this.tapHint = null;
+                setTimeout(() => el.parentNode?.removeChild(el), 600);
+            };
+            // 最初のタップ操作、または12秒で静かに引っ込める
+            this._tapHintTimer = setTimeout(() => this._dismissTapHint?.(), 12000);
+        }
 
         // Lock the panel width to the longest title (incl. the ✓ mark)
         // so it doesn't resize every time the selection changes
@@ -773,6 +965,13 @@ export class WorldUI {
         }
         if (this.thumbCard?.parentNode) {
             this.thumbCard.parentNode.removeChild(this.thumbCard);
+        }
+        if (this._tapHintTimer) clearTimeout(this._tapHintTimer);
+        if (this.tapHint?.parentNode) {
+            this.tapHint.parentNode.removeChild(this.tapHint);
+        }
+        if (this._affordanceStyleEl?.parentNode) {
+            this._affordanceStyleEl.parentNode.removeChild(this._affordanceStyleEl);
         }
     }
 }
