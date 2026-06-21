@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
@@ -826,6 +827,12 @@ export class SongOrchestra extends BaseSong {
      * intensity=1.0 が従来規模、0.35前後=控えめな単発、2.2=大輪。
      */
     spawnCustomColorFirework(color, targetPos, intensity = 1.0) {
+        // 一斉に多数上がるため、SEは短間隔でスロットルして鳴らし過ぎを防ぐ
+        const _now = (performance && performance.now) ? performance.now() : Date.now();
+        if (!this._lastFireworkSfx || _now - this._lastFireworkSfx > 130) {
+            this._lastFireworkSfx = _now;
+            sfx.play('orchestra_firework');
+        }
         const clamped = Math.min(2.4, Math.max(0.3, intensity));
         const isMobile = window.innerWidth < 768;
         const geo = new THREE.BufferGeometry();

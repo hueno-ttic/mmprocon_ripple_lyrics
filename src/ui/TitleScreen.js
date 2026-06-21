@@ -189,17 +189,22 @@ export class TitleScreen {
         // 水面シェーダの描画ループ開始(コンテナがステージへ追加され寸法が確定した後)
         if (this.water) this.water.start();
 
-        // Trigger initial fade-in
-        setTimeout(() => {
+        // クリックは「即」受付する。以前はフェードイン完了(約2.5秒)まで
+        // リスナーを付けず、それ以前のクリックが無反応で「壊れた?」と誤解される
+        // 初見離脱の主因だった(評価レポート指摘)。最初のクリックから必ず反応させる。
+        this.container.addEventListener('click', this.boundOnClick);
+
+        // フェードイン(transitionを確実に走らせるため次フレームで発火)
+        requestAnimationFrame(() => {
             this.title.style.opacity = '1';
             this.title.style.transform = 'translateY(0)';
-            
-            setTimeout(() => {
-                this.subtitle.style.opacity = '1';
-                this.creditsBtn.style.opacity = '1';
-                this.container.addEventListener('click', this.boundOnClick);
-            }, 2000);
-        }, 500);
+        });
+
+        // 「画面をクリック」のヒントは早めに提示し、何をすればよいか3秒以内に伝える
+        setTimeout(() => {
+            this.subtitle.style.opacity = '1';
+            this.creditsBtn.style.opacity = '1';
+        }, 700);
     }
 
     onClick(e) {

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
@@ -458,6 +459,7 @@ export class SongAfter extends BaseSong {
     // ─── 紙吹雪: 照らし切った歌詞が破裂して生まれ、舞い降りて床に積もる ───
     // 歌詞の位置から一度パッと弾け飛び(初速の外向き+上向き)、その後ふわりと降る。
     burstLyricToConfetti(origin) {
+        sfx.play('after_ignite');
         const count = this.isMobile ? 12 : 20;
         for (let i = 0; i < count; i++) {
             const mat = this.petalMaterials[Math.random() > 0.5 ? 0 : 1];
@@ -903,6 +905,11 @@ export class SongAfter extends BaseSong {
         if (duration > 0) {
             const finaleStart = duration - 7000;
             this.finaleP = Math.max(0, Math.min(1, (position - finaleStart) / 4000));
+            // 終演入り(バラの舞い降り)に一度だけ余韻のSE
+            if (!this._finalePetalSfx && this.finaleP > 0.02) {
+                this._finalePetalSfx = true;
+                sfx.play('after_petal', 0.8);
+            }
         }
         const f = this.finaleP;
         const stageDim = 1 - f;

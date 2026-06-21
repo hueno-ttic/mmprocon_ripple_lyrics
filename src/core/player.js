@@ -134,6 +134,17 @@ class PlayerManager {
             
             onThrottledTimeUpdate: (position) => {
                 eventBus.emit('throttledTimeUpdate', position);
+            },
+
+            // 読込/再生中の致命的エラー。読込中(またはタイマー未準備)なら
+            // エラー画面でリトライ/戻るを案内する(無言の停止を防ぐ)。
+            onError: (e) => {
+                console.error('[Lake Sonare] TextAlive error:', e);
+                if (appState.isLoading || !this.isTimerReady) {
+                    if (this._loadTimeout) { clearTimeout(this._loadTimeout); this._loadTimeout = null; }
+                    appState.setLoading(false);
+                    eventBus.emit('songLoadError', { song: this._currentSong, reason: 'error', error: e });
+                }
             }
         });
     }
@@ -142,21 +153,22 @@ class PlayerManager {
         this.isTimerReady = false;
         this._userStop = false;
         this._songEndEmitted = false;
+        this._currentSong = song;   // リトライ用に保持
         if (!this.managed && this.player) {
             appState.setLoading(true);
 
-            // Fallback: if TextAlive never fires onTimerReady (no token / offline),
-            // unlock the UI after 10 s so the 3D scene is never permanently hidden.
+            // Fallback: TextAlive(歌詞データ)が一定時間で読込完了しない場合、
+            // 「何も出ない」まま放置せず、原因とリトライ導線を示すエラー画面へ。
+            // (評価レポート: 審査員が直URLで開いた際に何も見えないリスクの解消)
             if (this._loadTimeout) clearTimeout(this._loadTimeout);
             this._loadTimeout = setTimeout(() => {
                 this._loadTimeout = null;
-                if (appState.isLoading) {
-                    console.warn('[Lake Sonare] TextAlive load timeout — showing scene anyway');
-                    this.isTimerReady = true;
-                    eventBus.emit('timerReady');
+                if (appState.isLoading && !this.isTimerReady) {
+                    console.warn('[Lake Sonare] TextAlive load timeout');
                     appState.setLoading(false);
+                    eventBus.emit('songLoadError', { song: this._currentSong, reason: 'timeout' });
                 }
-            }, 10000);
+            }, 15000);
 
             const options = {};
             if (song.video) {
