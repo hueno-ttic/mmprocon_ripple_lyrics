@@ -17,6 +17,11 @@ export class SongOrchestra extends BaseSong {
         this.stars = null;
         this.starGeometry = null;
         this.starMaterial = null;
+        this.starTwinkle = null;
+        this.starBaseSizes = null;
+        this.milkyWay = null;
+        this.auroras = [];
+        this._chorusOpen = 0; // サビで夜空が開く量(0..1)を滑らかに補間するための係数
         this.activeSprites = [];
         this.drawnLines = [];
         
@@ -77,6 +82,7 @@ export class SongOrchestra extends BaseSong {
         this.glowTexture = this.createGlowTexture();
         this.initThree();
         this.initStars();
+        this.initNightSky();
         this.initOrbGauge();
         this.updateResultSummary(); // 0個の状態でも成果サマリーを初期登録
         window.addEventListener('resize', this.boundOnResize);
@@ -201,8 +207,140 @@ export class SongOrchestra extends BaseSong {
             opacity: 0.8
         });
         
+        // またたきを与えるため、各星に固有の位相/速度を持たせる
+        const twinkle = new Float32Array(count * 2);
+        for (let i = 0; i < count; i++) {
+            twinkle[i * 2] = Math.random() * Math.PI * 2;       // phase
+            twinkle[i * 2 + 1] = 0.6 + Math.random() * 1.4;     // speed
+        }
+        this.starTwinkle = twinkle;
+        this.starBaseSizes = sizes;
+
         this.stars = new THREE.Points(this.starGeometry, this.starMaterial);
         this.scene.add(this.stars);
+    }
+
+    // 夜空そのものの演出強化: 天の川の淡い帯とオーロラ状の光のカーテン。
+    // 花火は使わず、f0_start のスクショで世界観が一目で伝わる「静かな掴み」を作る。
+    initNightSky() {
+        // --- 天の川: 斜めに横切る淡い星の帯 ---
+        const isMobile = window.innerWidth < 768;
+        const mwCount = isMobile ? 1200 : 3500;
+        const mwGeo = new THREE.BufferGeometry();
+        const mwPos = new Float32Array(mwCount * 3);
+        for (let i = 0; i < mwCount; i++) {
+            // 帯に沿った座標(t)＋帯幅方向のガウス的ばらつきで天の川らしい密度勾配を作る
+            const t = (Math.random() - 0.5) * 120;
+            const spread = (Math.random() - 0.5) + (Math.random() - 0.5); // 中央に集まる近似ガウス
+            mwPos[i * 3] = t;
+            mwPos[i * 3 + 1] = t * 0.45 + spread * 9.0 + 14.0; // 斜め上方へ流す
+            mwPos[i * 3 + 2] = -38 - Math.random() * 18;
+        }
+        mwGeo.setAttribute('position', new THREE.BufferAttribute(mwPos, 3));
+        const mwMat = new THREE.PointsMaterial({
+            color: new THREE.Color(0xaecbff),
+            size: 0.32,
+            map: this.glowTexture,
+            transparent: true,
+            opacity: 0.0, // フェードインで「光が満ちる」演出
+            blending: THREE.AdditiveBlending,
+            depthWrite: false
+        });
+        this.milkyWay = new THREE.Points(mwGeo, mwMat);
+        this.scene.add(this.milkyWay);
+
+        // --- オーロラ状の光のカーテン: 緩く脈動する2枚の縦帯 ---
+        this.auroras = [];
+        const auroraDefs = [
+            { hex: 0x2f7fff, x: -10, w: 22, h: 34, op: 0.10 },
+            { hex: 0x18c79a, x: 10, w: 20, h: 30, op: 0.08 }
+        ];
+        for (const d of auroraDefs) {
+            const tex = this.createAuroraTexture(d.hex);
+            const mat = new THREE.SpriteMaterial({
+                map: tex,
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.0,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            const sp = new THREE.Sprite(mat);
+            sp.position.set(d.x, 6, -34);
+            sp.scale.set(d.w, d.h, 1);
+            sp.userData = { baseOpacity: d.op, phase: Math.random() * Math.PI * 2, baseX: d.x };
+            this.scene.add(sp);
+            this.auroras.push(sp);
+        }
+    }
+
+    // オーロラのカーテン用に、上方ほど淡く消える縦グラデのソフトテクスチャを生成
+    createAuroraTexture(hex) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        const c = new THREE.Color(hex);
+        const r = Math.round(c.r * 255), g = Math.round(c.g * 255), b = Math.round(c.b * 255);
+        const grad = ctx.createLinearGradient(0, 128, 0, 0);
+        grad.addColorStop(0.0, `rgba(${r},${g},${b},0.0)`);
+        grad.addColorStop(0.35, `rgba(${r},${g},${b},0.55)`);
+        grad.addColorStop(0.7, `rgba(${r},${g},${b},0.22)`);
+        grad.addColorStop(1.0, `rgba(${r},${g},${b},0.0)`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 64, 128);
+        // 横方向もソフトに減衰させてカーテンの縁をぼかす
+        const hgrad = ctx.createLinearGradient(0, 0, 64, 0);
+        hgrad.addColorStop(0.0, 'rgba(0,0,0,1)');
+        hgrad.addColorStop(0.5, 'rgba(0,0,0,0)');
+        hgrad.addColorStop(1.0, 'rgba(0,0,0,1)');
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.fillStyle = hgrad;
+        ctx.fillRect(0, 0, 64, 128);
+        const texture = new THREE.CanvasTexture(canvas);
+        return texture;
+    }
+
+    // 夜空の演出更新。intro でゆっくり光が満ち、サビ(open)で天の川/オーロラが一段華やぐ。
+    updateNightSky(position, open) {
+        const t = position * 0.001;
+
+        // 星のまたたき: 各星の固有位相でサイズを揺らし、生きた夜空にする(60fps配慮で軽量)
+        if (this.starGeometry && this.starTwinkle && this.starBaseSizes) {
+            const sizeAttr = this.starGeometry.getAttribute('size');
+            if (sizeAttr) {
+                const arr = sizeAttr.array;
+                const tw = this.starTwinkle;
+                const base = this.starBaseSizes;
+                for (let i = 0; i < arr.length; i++) {
+                    const flick = 0.65 + 0.35 * Math.sin(t * tw[i * 2 + 1] + tw[i * 2]);
+                    arr[i] = base[i] * flick;
+                }
+                sizeAttr.needsUpdate = true;
+            }
+        }
+
+        // 天の川: 開幕からゆっくりフェードイン、サビでさらに明るく
+        if (this.milkyWay) {
+            const introFade = Math.min(1.0, position / 6000); // 最初の6秒で満ちる
+            const target = (0.30 + 0.45 * open) * introFade;
+            const m = this.milkyWay.material;
+            m.opacity += (target - m.opacity) * 0.04;
+            this.milkyWay.rotation.z += 0.00012; // ごく緩やかに流す
+        }
+
+        // オーロラのカーテン: 脈動しつつサビで濃く立ち上がる
+        if (this.auroras) {
+            const introFade = Math.min(1.0, position / 5000);
+            for (const a of this.auroras) {
+                const u = a.userData;
+                const pulse = 0.6 + 0.4 * Math.sin(t * 0.5 + u.phase);
+                const target = u.baseOpacity * (0.7 + 1.6 * open) * pulse * introFade;
+                a.material.opacity += (target - a.material.opacity) * 0.05;
+                // ゆらめき: 横にゆっくり漂わせる
+                a.position.x = u.baseX + Math.sin(t * 0.3 + u.phase) * 1.6;
+            }
+        }
     }
 
     onResize() {
@@ -780,6 +918,9 @@ export class SongOrchestra extends BaseSong {
         this.scene.add(orb);
         this.resonateOrbs.push(orb);
 
+        // オーブ化の瞬間に「これが後で花火になる」予兆として、尾を引く小さな光芒を放つ
+        this.spawnOrbBirthFlare(newColor, orb.position);
+
         // 蓄積の可視化: 左端のオーブゲージへ色の層を積み、成果サマリーを更新
         this.collectedColors.push(nextColorHex);
         this.totalCollectedCount++;
@@ -888,6 +1029,10 @@ export class SongOrchestra extends BaseSong {
                 .orchestra-orb-gauge-label { writing-mode:vertical-rl; font:500 ${isMobile ? 9 : 10}px/1 "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif; color:rgba(255,255,255,0.55); letter-spacing:0.22em; margin-top:8px; text-shadow:0 0 6px rgba(0,0,0,0.85); }
                 .orchestra-orb-gauge-burst .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-flash 0.7s ease; }
                 @keyframes orchestra-orb-gauge-flash { 0% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35); } 30% { box-shadow:0 0 26px rgba(255,255,255,0.95); border-color:#fff; } 100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35); } }
+                /* ゲージ満タン手前の「もうすぐ花火」期待を可視化する脈動発光 */
+                .orchestra-orb-gauge-charged .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-charge 1.4s ease-in-out infinite; border-color:rgba(255,255,255,0.6); }
+                @keyframes orchestra-orb-gauge-charge { 0%,100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35), 0 0 8px rgba(255,255,255,0.25); } 50% { box-shadow:inset 0 0 16px rgba(120,180,255,0.6), 0 0 22px rgba(255,255,255,0.7); } }
+                .orchestra-orb-gauge-charged .orchestra-orb-gauge-count { color:#fff; text-shadow:0 0 10px rgba(180,220,255,0.95); }
             `;
             document.head.appendChild(style);
         }
@@ -917,12 +1062,19 @@ export class SongOrchestra extends BaseSong {
         const n = this.orbGaugeFillEl.children.length;
         this.orbGaugeFillEl.style.height = `${Math.min(100, (n / this.GAUGE_CAPACITY) * 100)}%`;
         if (this.orbGaugeCountEl) this.orbGaugeCountEl.textContent = String(n);
+
+        // 満タンの75%を超えたら「もうすぐ花火」の脈動発光を点灯し、期待を可視化する
+        if (this.orbGaugeEl) {
+            const charged = n >= Math.ceil(this.GAUGE_CAPACITY * 0.75);
+            this.orbGaugeEl.classList.toggle('orchestra-orb-gauge-charged', charged);
+        }
     }
 
     // サビでオーブを消費した瞬間にゲージをフラッシュ→空にして「次のサビへまた集める」ループを作る
     resetOrbGauge(consumedCount) {
         if (!this.orbGaugeEl) return;
         clearTimeout(this._gaugeResetTimer);
+        this.orbGaugeEl.classList.remove('orchestra-orb-gauge-charged'); // 消費したら期待発光を解除
         if (consumedCount > 0) {
             this.orbGaugeEl.classList.add('orchestra-orb-gauge-burst');
         }
@@ -993,13 +1145,25 @@ export class SongOrchestra extends BaseSong {
         // --- Climax (Chorus) logic ---
         const chorus = playerManager.player.findChorus(position);
         this.isClimax = !!chorus || position > 180000; // fallback climax at 3min
-        
+
+        // サビで「画面全体が変わる」演出量。突入で素早く開き、抜けると緩やかに閉じる(軸6)
+        const chorusOpenTarget = this.isClimax ? 1.0 : 0.0;
+        this._chorusOpen += (chorusOpenTarget - this._chorusOpen) * (this.isClimax ? 0.06 : 0.03);
+        const open = this._chorusOpen;
+
         if (this.isClimax) {
-            this.camera.position.z += (15 - this.camera.position.z) * 0.01;
+            // カメラを軽く引きつつ、わずかに上(夜空)を仰がせて空が一段開く感覚を出す
+            this.camera.position.z += (16 - this.camera.position.z) * 0.012;
+            this.camera.position.y += ((1.4 * open) - this.camera.position.y) * 0.03;
+            this.camera.rotation.x += ((0.06 * open) - this.camera.rotation.x) * 0.03;
             this.stars.rotation.y += 0.002;
         } else {
+            // 通常時はカメラをホーム(z=10,y=0,無回転)へ滑らかに戻す
+            this.camera.position.z += (10 - this.camera.position.z) * 0.02;
+            this.camera.position.y += (0 - this.camera.position.y) * 0.03;
+            this.camera.rotation.x += (0 - this.camera.rotation.x) * 0.03;
             this.stars.rotation.y += 0.0005;
-            
+
             // Smoothly fade star color back to white when not in climax
             if (this.starMaterial && this.starMaterial.color) {
                 const c = this.starMaterial.color;
@@ -1007,21 +1171,27 @@ export class SongOrchestra extends BaseSong {
                 c.g += (1.0 - c.g) * 0.05;
                 c.b += (1.0 - c.b) * 0.05;
             }
-            
-            // Smoothly fade background back to original deep space dark blue (0x050510)
-            if (this.scene && this.scene.background) {
-                const bg = this.scene.background;
-                bg.r += (0.0196 - bg.r) * 0.05;
-                bg.g += (0.0196 - bg.g) * 0.05;
-                bg.b += (0.0627 - bg.b) * 0.05;
-            }
-            if (this.scene && this.scene.fog) {
-                const fg = this.scene.fog.color;
-                fg.r += (0.0196 - fg.r) * 0.05;
-                fg.g += (0.0196 - fg.g) * 0.05;
-                fg.b += (0.0627 - fg.b) * 0.05;
-            }
         }
+
+        // 背景色: サビで一段明るい夜明け前の藍へ開き、抜けると深宇宙の闇へ戻す
+        if (this.scene && this.scene.background) {
+            const bg = this.scene.background;
+            const tr = 0.0196 + 0.055 * open;
+            const tg = 0.0196 + 0.075 * open;
+            const tb = 0.0627 + 0.140 * open;
+            bg.r += (tr - bg.r) * 0.05;
+            bg.g += (tg - bg.g) * 0.05;
+            bg.b += (tb - bg.b) * 0.05;
+        }
+        if (this.scene && this.scene.fog) {
+            const fg = this.scene.fog.color;
+            fg.r += (0.0196 - fg.r) * 0.05;
+            fg.g += (0.0196 - fg.g) * 0.05;
+            fg.b += (0.0627 - fg.b) * 0.05;
+        }
+
+        // --- Night sky ambience (twinkle / milky way / aurora) ---
+        this.updateNightSky(position, open);
 
         // --- 3D Lyrics logic (Pre-cached Word-Group granularity for rhythmic touch interaction) ---
         if (!this.lyricsCacheBuilt) {
@@ -1029,12 +1199,16 @@ export class SongOrchestra extends BaseSong {
         }
 
         if (this.lyricsCacheBuilt) {
-            // Filter groups that should be visible on screen
-            // Start showing 250ms before singing to give user time to click, and keep visible until 800ms (or 2500ms for future_memory) after singing
+            // Filter groups that should be visible on screen.
+            // 歌詞同期の詰め: スプライトは発話の少し前に出してタップ猶予を作るが、
+            // サビは語句の入れ替わりが速いためリード(LEAD)を短くして「発話とぴったり」感を高める。
+            // 実視認はスプライトの birth=startTime からの150msフェードインで揃うため、
+            // ここでのリードは出現タイミング(=タップ可能になる先読み量)の調整。
+            const LEAD = this.isClimax ? 150 : 250; // サビは短め(8→9の同期詰め)
             let activeGroups = this.allWordGroups.filter(g => {
                 const category = this.getWordCategory(g.text);
                 const extraLife = category === 'future_memory' ? 2500 : 800;
-                return position >= g.startTime - 250 && position <= g.endTime + extraLife;
+                return position >= g.startTime - LEAD && position <= g.endTime + extraLife;
             });
 
             // Deduplicate activeGroups by text if their startTimes are extremely close (duet/unison overlaps within 200ms)
@@ -1105,9 +1279,15 @@ export class SongOrchestra extends BaseSong {
             const pulse = s.userData.pulseProgress;
             const pulseScaleFactor = 1.0 + pulse * 0.25; // 1.25倍バウンド
 
+            // 出現演出: 「光が集まって文字が現れる」よう、誕生直後(350ms)に
+            // わずかに小さい状態から実寸へ膨らませて立ち上がりの印象を強める。
+            const birthAge = Math.max(0, position - s.userData.birth);
+            const birthGrow = birthAge < 350 ? (0.78 + 0.22 * (birthAge / 350)) : 1.0;
+            const scaleFactor = pulseScaleFactor * birthGrow;
+
             const baseScale = s.userData.baseScale || 2.0;
             const aspect = s.userData.aspect || 8.0;
-            s.scale.set(baseScale * aspect * pulseScaleFactor, baseScale * pulseScaleFactor, 1);
+            s.scale.set(baseScale * aspect * scaleFactor, baseScale * scaleFactor, 1);
             
             // 歌唱中は純白にフラッシュさせて光らせる
             s.material.color.setRGB(1.0, 1.0 - pulse * 0.3, 1.0 - pulse * 0.3);
@@ -1969,6 +2149,22 @@ export class SongOrchestra extends BaseSong {
             this.glowTexture = null;
         }
 
+        if (this.milkyWay) {
+            this.scene.remove(this.milkyWay);
+            this.milkyWay.geometry.dispose();
+            if (this.milkyWay.material.map) this.milkyWay.material.map.dispose();
+            this.milkyWay.material.dispose();
+            this.milkyWay = null;
+        }
+        if (this.auroras) {
+            this.auroras.forEach(a => {
+                this.scene.remove(a);
+                if (a.material.map) a.material.map.dispose();
+                a.material.dispose();
+            });
+            this.auroras = [];
+        }
+
         if (this.starGeometry) this.starGeometry.dispose();
         if (this.starMaterial) this.starMaterial.dispose();
         if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
@@ -2081,6 +2277,43 @@ export class SongOrchestra extends BaseSong {
             peakTime: 0.9,   // タッチ接点に手が到達する時間 (秒) - 0.9秒かけて滑らかに接近
             sublimated: false
         };
+    }
+
+    // オーブ誕生時の予兆フレア。上向きに尾を引く少数の火花で「花火の種」感を出す(軽量)。
+    // 既存の fireworks 更新ループ(寿命1800ms/加算合成)にそのまま乗せて使い回す。
+    spawnOrbBirthFlare(color, targetPos) {
+        const geo = new THREE.BufferGeometry();
+        const count = 18; // ごく軽量
+        const positions = new Float32Array(count * 3);
+        const velocities = [];
+        for (let i = 0; i < count; i++) {
+            positions[i*3] = targetPos.x;
+            positions[i*3+1] = targetPos.y;
+            positions[i*3+2] = targetPos.z;
+            // 上方へ尾を引く扇状の弱い噴き上がり
+            const theta = Math.random() * Math.PI * 2;
+            const up = 0.18 + Math.random() * 0.22;
+            const lateral = 0.06 + Math.random() * 0.10;
+            velocities.push(new THREE.Vector3(
+                Math.cos(theta) * lateral,
+                up,
+                Math.sin(theta) * lateral
+            ));
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const mat = new THREE.PointsMaterial({
+            color: color,
+            size: 0.22,
+            map: this.glowTexture,
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false
+        });
+        const particles = new THREE.Points(geo, mat);
+        particles.userData = { velocities, birth: Date.now() };
+        this.scene.add(particles);
+        this.fireworks.push(particles);
     }
 
     // 接触接点でのきらめきスパークルエフェクト生成
