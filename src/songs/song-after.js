@@ -41,6 +41,10 @@ export class SongAfter extends BaseSong {
         this.mouse = new THREE.Vector2(0, 0);
         this._beamDir = new THREE.Vector3();   // スポットライトのビーム軸(毎フレーム再利用)
         this._toLyric = new THREE.Vector3();   // ビーム始点→歌詞ベクトル(毎フレーム再利用)
+        // ミクの「顔だけ」注視: 最も強く照らされている歌詞の方を向く(本体は正面のまま)
+        this._lyricFocus = new THREE.Vector3(0, 3, 0); // 注視対象(照らされている歌詞)のワールド位置
+        this._lyricFocusW = 0;                         // 注視の重み(=照射度)。0で正面へ戻る
+        this._headWorld = new THREE.Vector3();         // 頭のワールド位置(毎フレーム再利用)
 
         // スポットライト: 押している(クリック/タップ)間だけ照らす
         this.isPointerDown = false;
@@ -267,9 +271,10 @@ export class SongAfter extends BaseSong {
                 const vrm = gltf.userData.vrm;
                 this.currentVRM = vrm;
                 this.scene.add(vrm.scene);
-                // ステージ中央、床の上に立たせる (orchestra実績: rotation.y=0でカメラ正面)
+                // ステージ中央、床の上に立たせ、客席(カメラ)へ正面を向ける。
+                // このVRMは rotation.y=0 だと背中がカメラを向くため、π回して正面に。
                 vrm.scene.position.set(0, this.mikuBaseY, this.mikuBaseZ);
-                vrm.scene.rotation.y = 0;
+                vrm.scene.rotation.y = Math.PI;
                 vrm.scene.scale.setScalar(2.6);
                 vrm.scene.traverse((obj) => {
                     if (obj.isMesh) obj.castShadow = !this.isMobile;
@@ -841,28 +846,28 @@ export class SongAfter extends BaseSong {
             if (rL) rL.rotation.y += (-1.2 - rL.rotation.y) * wv; // 肘を曲げ手を顔の横へ
         }
 
-        // 頭: スポットライトがミク付近に当たると顔をそちらへ (クランプ付き)
+        // 頭: 本体は正面のまま、照らされている歌詞の方へ「顔だけ」向ける (クランプ付き)
         const head = vrm.humanoid.getNormalizedBoneNode('head');
         if (head) {
             let targetYaw = 0;
             let targetPitch = 0;
 
-            const spot = this.mouseLight.target.position;
-            const dx = spot.x - vrm.scene.position.x;
-            const dz = spot.z - vrm.scene.position.z;
-            const distToMiku = Math.sqrt(dx * dx + dz * dz);
-
-            if (distToMiku < 5.0 && this.finaleP < 0.3) {
-                // 光の差す方向(客席側の操作者方向)を見る
-                const lookPoint = new THREE.Vector3(spot.x * 0.9, 4.0, 11);
-                const headWorld = head.getWorldPosition(new THREE.Vector3());
-                const diff = lookPoint.sub(headWorld);
-                // ミク正面はローカル+Z (rotation.y=0)
-                targetYaw = Math.atan2(diff.x, diff.z);
-                targetPitch = -Math.atan2(diff.y, Math.sqrt(diff.x * diff.x + diff.z * diff.z));
-                // 人間らしい可動域にクランプ
-                targetYaw = Math.max(-0.65, Math.min(0.65, targetYaw));
-                targetPitch = Math.max(-0.45, Math.min(0.35, targetPitch));
+            // 注視対象(_lyricFocus)と重み(_lyricFocusW=照射度)は歌詞更新ループで決定済み。
+            if (this._lyricFocusW > 0.06 && this.finaleP < 0.3) {
+                const headWorld = head.getWorldPosition(this._headWorld);
+                const dirX = this._lyricFocus.x - headWorld.x;
+                const dirY = this._lyricFocus.y - headWorld.y;
+                const dirZ = this._lyricFocus.z - headWorld.z;
+                const horiz = Math.sqrt(dirX * dirX + dirZ * dirZ);
+                // 正面=ローカル+Z(本体 rotation.y=π)。ワールド方向→頭ローカルyawは atan2(x, z)。
+                let yaw = Math.atan2(dirX, dirZ);
+                let pitch = -Math.atan2(dirY, horiz);
+                // 人間らしい可動域にクランプし、照射の強さ(重み)で向ける度合いを決める
+                yaw = Math.max(-0.65, Math.min(0.65, yaw));
+                pitch = Math.max(-0.45, Math.min(0.35, pitch));
+                const w = Math.min(1, this._lyricFocusW);
+                targetYaw = yaw * w;
+                targetPitch = pitch * w;
             }
 
             // サビ: 開いたカーテンの向こうの星空を見上げる
@@ -976,6 +981,7 @@ export class SongAfter extends BaseSong {
         const spotCos = Math.cos(Math.min(Math.PI / 2, this.mouseLight.angle * 1.2));
 
         // 2. Update Interactive 3D Lyrics
+        let focusW = 0; // このフレームで最も強く照らされている歌詞の照射度(ミクの注視対象選び)
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const mesh = this.activeSprites[i];
             const ud = mesh.userData;
@@ -1032,6 +1038,9 @@ export class SongAfter extends BaseSong {
             mesh.position.y = ud.baseY + Math.sin(position * 0.0015 + ud.birth) * 0.25 * p + (age * 0.00025);
             mesh.rotation.y = Math.sin(position * 0.001) * 0.12 * p + (ud.spinFactor * p);
 
+            // 現在いちばん強く照らされている歌詞を、ミクが顔を向ける対象にする
+            if (p > focusW) { focusW = p; this._lyricFocus.copy(mesh.position); }
+
             // 歌唱パルス
             const isWordActive = word && ud.text && ud.text.includes(word.text)
                               && position >= word.startTime && position <= word.endTime;
@@ -1066,6 +1075,8 @@ export class SongAfter extends BaseSong {
                 this.activeSprites.splice(i, 1);
             }
         }
+        // 照らされている歌詞が無ければ重み0 → ミクは正面へ戻る
+        this._lyricFocusW = focusW;
 
         // 3. 紙吹雪(破裂した歌詞由来): 舞い降りて床に積もり、曲が終わるまで残る
         for (let i = this.petals.length - 1; i >= 0; i--) {
