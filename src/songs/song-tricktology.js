@@ -87,11 +87,21 @@ export class SongTricktology extends BaseSong {
         this.moonArcH = this.isMobile ? 7 : 9;   // 天頂の高さ
         this.moonZ = -17;
         this.moonScale = this.isMobile ? 3.2 : 4.0;
-        this.worldFull = { ground: 0, water: 0 };          // 0..1 満ち
-        this.worldTarget = this.isMobile ? 7 : 9;          // 満タンに必要なタップ重み
-        this.worldCollected = { ground: 0, water: 0 };
+        // 現実(ground)と鏡像(water)の月は一つの天秤を奪い合う。
+        // balance: 1=現実の月が満月／鏡像は新月、0=その逆。0.5=互いに半月。
+        this.balance = 0.5;
+        this.tugStep = this.isMobile ? 0.15 : 0.12;        // 1タップで動く満ち欠け量
+        this.worldFull = { ground: 0.5, water: 0.5 };      // balance から導出（0..1 満ち）
         this.moonPulse = { ground: 0, water: 0 };
         this.invertFlash = 0;
+
+        // ── 世界の差別化エフェクト（タップで増減し、自然減衰）──
+        this.grayPulse = 0;   // 現実の反転歌詞タップ → 一時的に世界がグレーアウト
+        this.vividPulse = 0;  // 鏡像の反転歌詞タップ → 一時的に鮮やかな色が戻る
+        this.waterLevel = 0;  // 現実の歌詞タップで水面が少しずつ上がる
+        this.maxWaterRise = this.isMobile ? 1.4 : 1.8;
+        this.crackLevel = 0;  // 曲が進むほど世界に走るヒビ
+        this.mirrorAlpha = 0.62; // 鏡像のリンは姿が透ける
 
         // ── 終盤の選択 ──
         this.choiceShown = false;
@@ -316,8 +326,9 @@ export class SongTricktology extends BaseSong {
             up.position.set(x, y, z);
             this.upperGroup.add(up);
 
+            // 鏡像側はくすんだグレーで、現実との差を出す
             const loMat = new THREE.MeshBasicMaterial({
-                color: 0x4f9fc8, wireframe: true, transparent: true, opacity: 0.20,
+                color: 0x6f7d86, wireframe: true, transparent: true, opacity: 0.18,
             });
             const lo = new THREE.Mesh(geo, loMat);
             lo.position.set(x, -y, z);
@@ -496,41 +507,80 @@ export class SongTricktology extends BaseSong {
         return { texture: new THREE.CanvasTexture(canvas), aspect: w / 128 };
     }
 
+    // 曲の進行から歌詞の出現パターンを決める
+    //   序盤=水面からゆっくり浮かぶ / 中盤=左右から流れてくる /
+    //   反転後=上から(逆さ世界は下から)落ちる / 終盤=中央の水面ラインへ集まる
+    lyricEntry(position) {
+        if (this.choiceShown || position >= T_CHOICE - 14000) return 'gather';
+        if (this.invertCount > 0 || position >= T_INVERT) return 'fall';
+        if (position >= T_INVERT * 0.45) return 'side';
+        return 'rise';
+    }
+
     // 1句を地上 or 水面のどちらか一方の世界に浮かべる
     spawnLyric(phrase, position) {
         const maxLyrics = this.isMobile ? 5 : 7;
         while (this.lyrics.length >= maxLyrics) {
             this.disposeLyric(this.lyrics.shift());
         }
+        // 当該パートが終わったらすぐ消えるよう、既存句は素早くフェードへ送る
+        for (const ex of this.lyrics) {
+            if (!ex.collected) ex.life = Math.min(ex.life, (position - ex.birth) + 260);
+        }
 
         // 句ごとに地上／水面へ交互配分
         const world = (this._worldToggle++ % 2 === 0) ? 'ground' : 'water';
         const mirrored = (world === 'water');
+        const sign = mirrored ? -1 : 1;
         const { texture, aspect } = this.createTextTexture(phrase.text, mirrored);
 
         let scale = 1.1 + Math.random() * 0.3;
         if (aspect > 9) scale *= 9 / aspect;
         scale = Math.max(0.6, scale);
 
-        const x = (Math.random() - 0.5) * 9;
-        const yAbs = 1.6 + Math.random() * 2.6;
+        const entry = this.lyricEntry(position);
         const z = -4 - Math.random() * 4;
-        const y = mirrored ? -yAbs : yAbs;
+
+        // 最終的な定位置（target）
+        let tx = (Math.random() - 0.5) * 9;
+        let ty = sign * (1.6 + Math.random() * 2.6);
+        // 出現パターンごとの初期オフセット（target からの差分）
+        let offX = 0, offY = 0;
+        if (entry === 'rise') {
+            // 水面ラインからゆっくり浮かぶ（まだ言葉が沈んでいる）
+            ty = sign * (1.2 + Math.random() * 1.8);
+            offY = sign * -(2.4 + Math.random() * 1.2);
+        } else if (entry === 'side') {
+            // 左右から流れ込む（現実と鏡像が引っ張り合う）
+            const fromLeft = Math.random() < 0.5;
+            tx = (Math.random() - 0.5) * 5;
+            offX = (fromLeft ? -1 : 1) * (11 + Math.random() * 4);
+        } else if (entry === 'fall') {
+            // 上から（逆さ世界は下から）落ちてくる（重力が壊れた）
+            offY = sign * (6 + Math.random() * 3);
+        } else { // gather: 中央の水面ラインへ収束していく
+            tx = (Math.random() - 0.5) * 3.2;
+            ty = sign * (0.5 + Math.random() * 0.9);
+            offX = (Math.random() - 0.5) * 12;
+            offY = sign * (3.5 + Math.random() * 2.5);
+        }
 
         const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0, depthWrite: false });
         const sprite = new THREE.Sprite(mat);
-        sprite.position.set(x, y, z);
+        sprite.position.set(tx + offX, ty + offY, z);
         sprite.scale.set(scale * aspect, scale, 1);
         (mirrored ? this.lowerGroup : this.upperGroup).add(sprite);
 
         const duration = (phrase.endTime - phrase.startTime) || 2500;
         this.lyrics.push({
-            sprite, tex: texture, world, mirrored,
+            sprite, tex: texture, world, mirrored, entry,
             text: phrase.text,
             birth: position,
-            life: duration + 1600,
+            life: duration + 350,   // パート終了後はすぐ消える
             baseScale: scale, aspect,
-            baseX: x, baseY: y,
+            baseX: tx, baseY: ty,
+            offX0: offX, offY0: offY,   // 初期オフセット
+            entryT: 0, entryDur: entry === 'fall' ? 0.55 : 0.85,
             drift: (Math.random() - 0.5) * 0.004,
             pulse: 0,
             collected: false, shatter: false, shatterT: 0,
@@ -641,29 +691,50 @@ export class SongTricktology extends BaseSong {
         l.shatterT = 0;
         l.pulse = 1;
 
-        // 句の所属世界の月が満ちる
+        // 句の所属世界の月が満ち、もう一方が欠ける
         this.fillMoon(l.world, 1);
 
         // 月へ収束する光の粒
         const worldPos = new THREE.Vector3().setFromMatrixPosition(l.sprite.matrixWorld);
         this.spawnLightMotes(worldPos, l.world);
 
+        // タップ位置から波紋が広がる
+        const local = this.water ? this.water.worldToLocal(worldPos.clone()) : null;
+        if (local) this.addRipple(local.x, local.y, 0.9);
+
+        // 反転歌詞タップの世界別演出
+        if (l.world === 'ground') {
+            // 現実 → 一時的に世界がグレーアウトし、水面が少しだけ上がる
+            this.grayPulse = Math.min(1.2, this.grayPulse + 0.7);
+            this.waterLevel = Math.min(this.maxWaterRise, this.waterLevel + 0.16);
+        } else {
+            // 鏡像 → 鮮やかな色が一気に戻る
+            this.vividPulse = Math.min(1.2, this.vividPulse + 0.8);
+        }
+        // 全体に少しずつヒビが走る
+        this.crackLevel = Math.min(1, this.crackLevel + 0.04);
+
         this.waveEnergy = Math.min(1.4, this.waveEnergy + 0.16);
     }
 
+    // ある世界の歌詞をタップ → その世界の月が満ち、もう一方の月が欠ける（天秤）
     fillMoon(world, weight) {
-        if (this.worldFull[world] >= 1) {
-            this.moonPulse[world] = Math.min(1.6, this.moonPulse[world] + 0.3);
-            return;
+        const dir = (world === 'ground') ? +1 : -1;
+        const before = this.balance;
+        this.balance = Math.max(0, Math.min(1, this.balance + dir * this.tugStep * weight));
+        if (Math.abs(this.balance - before) > 0.0005) {
+            this.worldFull.ground = this.balance;
+            this.worldFull.water = 1 - this.balance;
+            this.redrawMoon('ground');
+            this.redrawMoon('water');
         }
-        this.worldCollected[world] += weight;
-        const next = Math.min(1, this.worldCollected[world] / this.worldTarget);
-        if (Math.abs(next - this.worldFull[world]) > 0.003 || next >= 1) {
-            this.worldFull[world] = next;
-            this.redrawMoon(world);
-        }
-        this.moonPulse[world] = Math.min(1.6, this.moonPulse[world] + 0.28);
-        if (next >= 1) {
+        // タップした世界の月が脈動、欠ける側もわずかに反応
+        this.moonPulse[world] = Math.min(1.6, this.moonPulse[world] + 0.3);
+        const other = world === 'ground' ? 'water' : 'ground';
+        this.moonPulse[other] = Math.min(1.6, this.moonPulse[other] + 0.12);
+        // 満月に達したらフラッシュ
+        const full = (world === 'ground') ? this.balance >= 0.999 : this.balance <= 0.001;
+        if (full) {
             this.moonPulse[world] = 1.6;
             this.flashScreen();
         }
@@ -675,8 +746,9 @@ export class SongTricktology extends BaseSong {
         this.moonGroup = new THREE.Group();
         this.scene.add(this.moonGroup); // worldGroupの反転に巻き込まれないようscene直下
 
+        // 現実の月＝従来の青白い月／鏡像の月＝別物としてオレンジに色づける
         this.moonGround = this._makeMoon('#eaf4ff');
-        this.moonWater = this._makeMoon('#cfeeff');
+        this.moonWater = this._makeMoon('#ffa64d');
         this.moonGroup.add(this.moonGround.root);
         this.moonGroup.add(this.moonWater.root);
 
@@ -906,6 +978,12 @@ export class SongTricktology extends BaseSong {
         flash.className = 'tricktology-flash';
         this.songWrapper.appendChild(flash);
         this.flashEl = flash;
+
+        // 世界に少しずつ走るヒビ（曲が進むほど濃くなる）
+        const cracks = document.createElement('div');
+        cracks.className = 'tricktology-cracks';
+        this.songWrapper.appendChild(cracks);
+        this.crackEl = cracks;
     }
 
     // ───────────────────────── 終盤の選択UI ─────────────────────────
@@ -962,6 +1040,19 @@ export class SongTricktology extends BaseSong {
             .tricktology-flash.fire { animation: tricktology-flash-anim 0.85s ease-out; }
             @keyframes tricktology-flash-anim {
                 0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; }
+            }
+            .tricktology-cracks {
+                position: absolute; inset: 0; z-index: 44; pointer-events: none;
+                opacity: 0; mix-blend-mode: screen;
+                transition: opacity 0.8s linear;
+                background-image:
+                    linear-gradient(115deg, transparent 49.6%, rgba(210,238,255,0.55) 49.8%, transparent 50.1%),
+                    linear-gradient(58deg, transparent 49.6%, rgba(210,238,255,0.4) 49.85%, transparent 50.1%),
+                    linear-gradient(150deg, transparent 49.7%, rgba(190,228,255,0.35) 49.9%, transparent 50.15%),
+                    linear-gradient(20deg, transparent 49.7%, rgba(190,228,255,0.3) 49.9%, transparent 50.1%);
+                background-size: 240px 320px, 320px 260px, 180px 200px, 280px 300px;
+                background-position: 20% 30%, 70% 60%, 45% 80%, 85% 15%;
+                background-repeat: no-repeat;
             }
         `;
         document.head.appendChild(this.styleEl);
@@ -1106,6 +1197,20 @@ export class SongTricktology extends BaseSong {
         // ── 減衰 ──
         this.waveEnergy *= Math.exp(-delta * 1.6);
         this.invertFlash *= Math.exp(-delta * 1.4);
+        this.grayPulse *= Math.exp(-delta * 1.5);   // グレーアウトは一時的
+        this.vividPulse *= Math.exp(-delta * 1.5);   // 鮮やかさの戻りも一時的
+        this.waterLevel *= Math.exp(-delta * 0.25);  // 上がった水面はゆっくり引く
+
+        // 上がった水面を反映（境界ライン＋水面メッシュを少し持ち上げる）
+        if (this.surfaceLine) this.surfaceLine.position.y = this.waterLevel;
+        if (this.water) this.water.position.y = this.waterLevel;
+
+        // ヒビは曲の進行でもじわじわ濃くなる
+        const crackProg = Math.min(1, position / T_CHOICE);
+        this.crackLevel = Math.max(this.crackLevel, crackProg * 0.5);
+        if (this.crackEl) {
+            this.crackEl.style.opacity = (this.crackLevel * 0.55 + this.invertFlash * 0.3).toFixed(3);
+        }
 
         // 環境オブジェ
         if (this.ambientShapes) {
@@ -1133,8 +1238,20 @@ export class SongTricktology extends BaseSong {
         }
         this._sectionBlend += ((this.isClimax ? 1 : 0) - this._sectionBlend) * Math.min(1, delta * 1.8);
         const wc = this._waterColMix.copy(this._waterColA).lerp(this._waterColB, this._sectionBlend);
+        const sc = this._starColMix.copy(this._starColA).lerp(this._starColB, this._sectionBlend);
+
+        // 鏡像世界が優勢なほど空が褪せ、現実の反転歌詞タップで一時グレーアウト。
+        // 鏡像の反転歌詞タップ(vividPulse)は鮮やかさを取り戻す。月だけは別管理で色を保つ。
+        const gray = Math.max(0, Math.min(1,
+            this.grayPulse + (1 - this.balance) * 0.4 - this.vividPulse));
+        if (gray > 0.001) {
+            const lw = 0.299 * wc.r + 0.587 * wc.g + 0.114 * wc.b;
+            wc.lerp(this._grayTmp ? this._grayTmp.setRGB(lw, lw, lw) : (this._grayTmp = new THREE.Color(lw, lw, lw)), gray);
+            const ls = 0.299 * sc.r + 0.587 * sc.g + 0.114 * sc.b;
+            sc.lerp(this._grayTmpS ? this._grayTmpS.setRGB(ls, ls, ls) : (this._grayTmpS = new THREE.Color(ls, ls, ls)), gray * 0.85);
+        }
         this.waterUniforms.uColor.value.set(wc.r, wc.g, wc.b);
-        this.starMaterial.color.copy(this._starColMix.copy(this._starColA).lerp(this._starColB, this._sectionBlend));
+        this.starMaterial.color.copy(sc);
         const swapTarget = THREE.MathUtils.smoothstep(this.waveEnergy, 0.55, 1.1);
         this.swapSmooth += (swapTarget - this.swapSmooth) * 0.12;
         this.waterUniforms.uTime.value = t;
@@ -1243,10 +1360,16 @@ export class SongTricktology extends BaseSong {
                 l.pulse = Math.max(l.pulse, 1 - st * 0.6);
             }
 
+            // 出現パターンの寄せ（初期オフセット → 定位置へイージング）
+            l.entryT = Math.min(1, l.entryT + delta / (l.entryDur || 0.85));
+            const ee = l.entryT * l.entryT * (3 - 2 * l.entryT);
+            const offX = l.offX0 * (1 - ee);
+            const offY = l.offY0 * (1 - ee);
+
             l.baseX += l.drift;
             const sway = l.mirrored ? Math.sin(t * 3.0 + l.baseY * 2.0) * wobbleAmp : 0;
             const bob = Math.sin(t * 0.8 + Math.abs(l.baseY)) * 0.08;
-            l.sprite.position.set(l.baseX + sway, l.baseY + (l.mirrored ? -bob : bob), l.sprite.position.z);
+            l.sprite.position.set(l.baseX + offX + sway, l.baseY + offY + (l.mirrored ? -bob : bob), l.sprite.position.z);
             l.sprite.scale.set(l.baseScale * l.aspect * pulseScale * shatterScale, l.baseScale * pulseScale * shatterScale, 1);
 
             // 発光（地上=白／水面=氷シアン）
@@ -1320,6 +1443,13 @@ export class SongTricktology extends BaseSong {
                     collapseT * 0.7 * flick);
                 e.material.transparent = true;
                 e.material.opacity = Math.max(0, (e.baseOpacity ?? 1) * (1 - collapseT));
+            } else if (world === 'water') {
+                // 鏡像のリンは姿が透け、わずかにグレーへ寄る（輪郭が曖昧）
+                const lum = 0.299 * e.baseColor.r + 0.587 * e.baseColor.g + 0.114 * e.baseColor.b;
+                const g = this._mScratch || (this._mScratch = new THREE.Color());
+                e.material.color.copy(e.baseColor).lerp(g.setRGB(lum, lum, lum), 0.28).multiplyScalar(brightness);
+                e.material.transparent = true;
+                e.material.opacity = (e.baseOpacity ?? 1) * this.mirrorAlpha;
             } else {
                 e.material.color.copy(e.baseColor).multiplyScalar(brightness);
                 if (e.material.opacity !== (e.baseOpacity ?? 1)) {
@@ -1449,7 +1579,7 @@ export class SongTricktology extends BaseSong {
         [this.moonGround, this.moonWater].forEach((m) => { if (m && m.tex) m.tex.dispose(); });
 
         // HUD・キャプション
-        [this.flashEl, this._invCap].forEach((el) => {
+        [this.flashEl, this.crackEl, this._invCap].forEach((el) => {
             if (el && el.parentNode) el.parentNode.removeChild(el);
         });
 
