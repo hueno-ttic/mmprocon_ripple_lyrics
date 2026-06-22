@@ -244,6 +244,30 @@ export class SongShutter extends BaseSong {
         this.lastVrmRealTime = undefined;
         this.vrmUpdateAccum = 0;
 
+        // --- オープニングの掴み（曲頭3秒の「構図が決まる」導入演出） ---
+        // 再生開始(position=0)から OPENING_DURATION までを使い、AFが寄って合焦→[REC]点灯→
+        // 被写体がキメ顔/ポーズ、という流れで「撮る遊び」を最初の一瞬で直感させる。
+        this.OPENING_DURATION = 3000;     // 導入演出の長さ(ms)
+        this.openingDone = false;         // 導入完了フラグ(以後は通常更新)
+        this.openingFocusFlash = 0;       // 合焦の瞬間に走る一閃(0..1で減衰)
+        this._recIgnited = false;         // [REC]点灯の発火済みフラグ(SE等の1回限り発火に使用)
+
+        // --- AFロック「今だ！」合図（lockShots成立の発見性を上げる） ---
+        // スコープ上に被写体ワードが吸着している間 _lockReady=1 へ滑らかに上がり、
+        // スコープが赤→緑＋NOW! 表示で「今撮ると高得点」を直感させる。
+        this._lockReady = 0;              // ロック可能度(0..1の平滑値)
+        this._lockHot = false;           // 直近フレームでロック圏内か
+
+        // --- ボーカルパート色（歌詞・被写体ハイライトの同期に共通利用） ---
+        this.VOCAL_COLORS = {
+            miku: new THREE.Color('#39C5BB'),
+            rin:  new THREE.Color('#FFEE11'),
+            duet: new THREE.Color('#FF7A4D'), // サビ＝サンセット(themeColor寄りの暖色)
+        };
+        // LEAD先読み補正(ms)。歌詞の発光/被写体ハイライトを実唱より僅かに先取りして
+        // サビ(duet)の畳み掛けで遅れて見えないようにする。
+        this.vocalLeadMs = 90;
+
         // --- カメラズーム（写真の拡大縮小範囲）制御システム ---
         this.zoomLevel = 2.2;
         this.targetZoom = 2.2;
@@ -1231,6 +1255,9 @@ export class SongShutter extends BaseSong {
             <!-- Alert Display -->
             <div id="shutter-alert-display" style="position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%); font-family: monospace; font-size: 14px; font-weight: bold; color: #ff3333; background: rgba(0,0,0,0.85); padding: 6px 16px; border: 1px solid #ff3333; border-radius: 3px; display: none; text-shadow: 0 0 5px #ff3333; letter-spacing: 2px; transition: all 0.1s;">ALERT: EXPOSURE</div>
 
+            <!-- NOW! Lock Cue (AFロック圏内で「今撮ると高得点」を直感させる合図) -->
+            <div id="shutter-now-cue" style="position: absolute; top: calc(50% - 64px); left: 50%; transform: translate(-50%, -50%) scale(0.6); font-family: 'Inter', monospace; font-size: 30px; font-weight: 900; color: #22FF66; opacity: 0; letter-spacing: 4px; text-shadow: 0 0 12px #22FF66, 0 0 26px #00ff88; pointer-events: none; transition: opacity 0.12s ease, transform 0.12s ease;">NOW!</div>
+
             <!-- Vertical Zoom Slider (Right Side) -->
             <div style="position: absolute; right: 200px; top: 50%; transform: translateY(-50%); height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; pointer-events: auto; z-index: 35;" id="shutter-zoom-slider-container">
                 <span style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; user-select: none;">[+]</span>
@@ -1450,6 +1477,9 @@ export class SongShutter extends BaseSong {
         const position = this.getSmoothedTime();
         this.lastPosition = position;
 
+        // --- オープニングの掴み（曲頭の「構図が決まる」導入。zoom/scope/RECを駆動） ---
+        this.updateOpening(position);
+
         // --- ズーム制御とイージング補間 ---
         this.zoomLevel += (this.targetZoom - this.zoomLevel) * 0.15;
         if (this.camera) {
@@ -1514,11 +1544,14 @@ export class SongShutter extends BaseSong {
         }
 
         // --- 液晶ライブメーターのアニメーション制御 ---
-        const currentWord = isPlaying ? (playerManager.player.video.findWord(position) || playerManager.player.video.findChar(position)) : null;
+        // LEAD先読み: 実唱より僅かに先取りして判定し、サビ(duet)で遅れて見えないようにする。
+        const lead = this.vocalLeadMs || 0;
+        const leadPos = position + lead;
+        const currentWord = isPlaying ? (playerManager.player.video.findWord(leadPos) || playerManager.player.video.findChar(leadPos)) : null;
         let activeVocal = 'none';
-        
+
         if (currentWord) {
-            const cached = this.allWordGroups.find(g => g.startTime <= position && position <= g.endTime);
+            const cached = this.allWordGroups.find(g => g.startTime - lead <= position && position <= g.endTime);
             if (cached) {
                 activeVocal = this.isClimax ? 'duet' : cached.vocal;
             } else {
@@ -1741,29 +1774,53 @@ export class SongShutter extends BaseSong {
             }
 
             // Vocal singing pulse (bounce & color transition based on singer)
-            const isWordActive = position >= birthTime - 450 && position <= deathTime - 450;
+            // 先読み補正で「今まさに歌っている単語」を僅かに先取りハイライト。
+            const wLead = this.vocalLeadMs || 0;
+            const isWordActive = (position + wLead) >= birthTime - 450 && (position + wLead) <= deathTime - 450;
             if (!s.userData.pulseProgress) s.userData.pulseProgress = 0;
             const targetPulse = isWordActive ? 1.0 : 0.0;
             s.userData.pulseProgress += (targetPulse - s.userData.pulseProgress) * 0.2;
             const pulse = s.userData.pulseProgress;
             const pulseScaleFactor = 1.0 + pulse * 0.25; // 1.25x bounce
-            
+
             const baseScale = s.userData.baseScale || 3.0;
             const aspect = s.userData.aspect || 1.0;
             s.scale.set(baseScale * aspect * pulseScaleFactor, baseScale * pulseScaleFactor, 1);
-            
-            // 歌い手に応じた発光色 (ミク=シアン, リン=イエロー, サビ=深紅)
-            const vocal = s.userData.vocal;
-            if (this.isClimax) {
-                s.material.color.setRGB(1.0, 1.0 - pulse * 0.4, 1.0 - pulse * 0.4); // Gold-Sunset Red
-            } else if (vocal === 'miku') {
-                s.material.color.setRGB(1.0 - pulse * 0.6, 1.0, 1.0 - pulse * 0.1); // Cyan Glow
-            } else {
-                s.material.color.setRGB(1.0, 1.0 - pulse * 0.1, 1.0 - pulse * 0.8); // Yellow Glow
-            }
+
+            // 歌い手に応じた発光色（パート色に統一: ミク=シアン / リン=イエロー / サビduet=サンセット）。
+            // 非歌唱中は白(=可読性)、歌唱中はパート色へ寄せて「誰が歌っているか」を一目で示す。
+            const vocal = this.isClimax ? 'duet' : (s.userData.vocal || 'miku');
+            const partCol = this.VOCAL_COLORS[vocal] || this.VOCAL_COLORS.miku;
+            const tint = pulse * (this.isClimax ? 0.95 : 0.8); // サビは更に色を強く乗せる
+            s.material.color.setRGB(
+                1.0 - (1.0 - partCol.r) * tint,
+                1.0 - (1.0 - partCol.g) * tint,
+                1.0 - (1.0 - partCol.b) * tint
+            );
         }
 
-        // ターゲットスコープのパルス脈動（Beatシンクロ） ＆ 回転
+        // --- AFロック判定（「今だ！」合図用）: 歌詞ワードがスコープに吸着しているか毎フレーム評価 ---
+        let lockHot = false;
+        if (this.targetScope) {
+            for (let i = 0; i < this.activeSprites.length; i++) {
+                const sprite = this.activeSprites[i];
+                if (sprite.userData.frameTarget) continue;
+                const offset = sprite.userData.targetOffset;
+                const ox = offset ? offset.x : 0;
+                const oy = offset ? offset.y : 0;
+                const dx = sprite.position.x - (this.targetScope.position.x + ox);
+                const dy = sprite.position.y - (this.targetScope.position.y + oy);
+                // takePhoto と同じ判定基準(距離1.5・不透明0.5超)に合わせる
+                if (dx * dx + dy * dy <= 1.5 * 1.5 && sprite.material && sprite.material.opacity > 0.5) {
+                    lockHot = true;
+                    break;
+                }
+            }
+        }
+        this._lockHot = lockHot;
+        this._lockReady += ((lockHot ? 1 : 0) - this._lockReady) * 0.25;
+
+        // ターゲットスコープのパルス脈動（Beatシンクロ） ＆ 回転 ＆ パート色/ロック合図
         if (this.targetScope) {
             const beat = playerManager.player ? playerManager.player.findBeat(position) : null;
             let pulseScale = 1.0;
@@ -1772,11 +1829,31 @@ export class SongShutter extends BaseSong {
                 const beatProgress = Math.min(1.0, beatElapsed / beat.duration);
                 pulseScale = 1.0 + 0.25 * Math.exp(-beatProgress * 4.0); // 拍の頭でパッと広がり、指数減衰で縮む
             }
+            // ロック圏内は更にキュッと締まる(寄って合焦している感)
+            pulseScale *= 1.0 - this._lockReady * 0.12;
             this.targetScope.scale.set(pulseScale, pulseScale, 1.0);
 
-            // ターゲットサークル自体をゆっくり回転させてSFチックにする
-            this.targetScope.rotation.z += 0.01;
+            // ターゲットサークル自体をゆっくり回転させてSFチックにする(ロック時は加速して喰い付き感)
+            this.targetScope.rotation.z += 0.01 + this._lockReady * 0.05;
+
+            // スコープ色: 通常はパート色(待機状態)、ロック圏内では赤系→緑へ切替えて「今だ！」を強調。
+            // ベース色 = 待機時のパート色 / ロック色 = グリーン(GO!)
+            const baseCol = activeVocal !== 'none'
+                ? (this.VOCAL_COLORS[activeVocal] || this.VOCAL_COLORS.miku)
+                : this.VOCAL_COLORS.rin; // 待機時はリンイエロー(元実装色)
+            const lockCol = this._lockGreenScratch || (this._lockGreenScratch = new THREE.Color('#22FF66'));
+            const r = this._lockReady;
+            this.targetScope.material.color.setRGB(
+                baseCol.r + (lockCol.r - baseCol.r) * r,
+                baseCol.g + (lockCol.g - baseCol.g) * r,
+                baseCol.b + (lockCol.b - baseCol.b) * r
+            );
+            // ロック圏内は明滅で目立たせる(発見性)
+            this.targetScope.material.opacity = 0.8 + this._lockReady * (0.15 + 0.05 * Math.sin(position * 0.02));
         }
+
+        // 「NOW!」合図ラベルの表示制御（ロック圏内に入った瞬間に出す）
+        this.updateNowCue();
 
         // --- 被写体VRM（ミク&リン）のポーズ切替＆アイドルアニメーション ---
         if (this.subjects.length > 0) {
@@ -1863,6 +1940,19 @@ export class SongShutter extends BaseSong {
                     }
                 }
 
+                // サビ(山場)＝被写体を拍に合わせて発光させ、画面を華やがせる。
+                // 通常時は素のマテリアルへ戻す（撮影の見た目を保つ）。
+                if (isShown) {
+                    if (this.isClimax) {
+                        const climaxGlow = 0.14 + beatPulse * 0.18; // 拍頭で一段明るく
+                        this.applyFadeGlow(subject, 1.0, climaxGlow);
+                        subject._wasGlowing = true;
+                    } else if (subject._wasGlowing) {
+                        this.restoreSubjectMaterials(subject);
+                        subject._wasGlowing = false;
+                    }
+                }
+
                 // ステージ内を動き回る（撮影者が追って構図を作れるよう画面内を移動）
                 const sx = Math.sin(floatT * 0.55) * 3.8 + Math.sin(floatT * 0.27 + 1.3) * 1.8; // 横移動 ~±5.6
                 const sz = Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1;        // 前後移動 ~±3.5
@@ -1890,6 +1980,102 @@ export class SongShutter extends BaseSong {
         if (!this.filmStripVisible && video && video.duration > 0 &&
             position >= video.duration - 12000) {
             this.showFilmStrip();
+        }
+    }
+
+    // オープニングの掴み: 曲頭3秒で「カメラを構える→AFが寄って合焦→[REC]点灯→被写体キメ」流れを作る。
+    // position(再生ヘッド)で駆動するので、シーク/一時停止にも自然に追従する。
+    updateOpening(position) {
+        if (this.openingDone) {
+            // 終了後も合焦一閃の残りを減衰させる
+            if (this.openingFocusFlash > 0) {
+                this.openingFocusFlash *= 0.85;
+                if (this.openingFocusFlash < 0.01) this.openingFocusFlash = 0;
+            }
+            return;
+        }
+        // 再生前(=ヘッドが進んでいない)は構え状態。少し引いた画角で待機。
+        if (position <= 0) {
+            this.targetZoom = 1.6;
+            return;
+        }
+        const t = Math.min(1, position / this.OPENING_DURATION); // 0..1
+
+        // フェーズA(0〜55%): AFが寄って合焦。引き(1.6)→寄り(2.4)へズームイン。
+        // フェーズB(合焦の瞬間=55%付近): [REC]点灯＆合焦一閃。
+        // フェーズC(55〜100%): 規定ズーム(2.2)へ落ち着き、被写体がキメ顔/ポーズ。
+        const focusPoint = 0.55;
+        if (t < focusPoint) {
+            const a = t / focusPoint;
+            const eased = a * a * (3 - 2 * a); // smoothstep
+            this.targetZoom = 1.6 + (2.4 - 1.6) * eased;
+        } else {
+            const b = (t - focusPoint) / (1 - focusPoint);
+            const eased = b * b * (3 - 2 * b);
+            this.targetZoom = 2.4 + (2.2 - 2.4) * eased;
+            // 合焦の瞬間に一度だけ [REC] 点灯＆一閃＆被写体キメ顔
+            if (!this._recIgnited) {
+                this._recIgnited = true;
+                this.openingFocusFlash = 1.0;
+                const recLabel = document.getElementById('shutter-rec-label');
+                if (recLabel) {
+                    recLabel.style.color = '#ff3b30';
+                    recLabel.style.textShadow = '0 0 16px #ff3b30, 0 0 6px #fff';
+                    recLabel.innerText = '● REC';
+                }
+                const afLabel = document.getElementById('shutter-af-label');
+                if (afLabel) { afLabel.innerText = 'FOCUS LOCKED'; afLabel.style.opacity = '1'; }
+                // 被写体が一瞬キメ顔＋キメポーズ(peace)
+                const shown = this.subjects && this.subjects.find(s => s.key === this.shownKey);
+                if (shown) shown.smileTimer = 1200;
+                this.armStyle = 'peace';
+                try { sfx.play('shutter_click'); } catch (e) { /* SE未定義でも無害 */ }
+            }
+        }
+
+        // 合焦一閃の減衰(レティクルの強調に使用)
+        if (this.openingFocusFlash > 0) {
+            this.openingFocusFlash *= 0.9;
+            if (this.openingFocusFlash < 0.01) this.openingFocusFlash = 0;
+        }
+        // 中央レティクルを合焦に合わせて締める(寄って合焦している感)
+        const reticle = document.getElementById('shutter-center-reticle');
+        if (reticle) {
+            const focusScale = 1.0 + (1 - t) * 0.6 + this.openingFocusFlash * 0.4;
+            reticle.style.transform = `translate(-50%, -50%) scale(${focusScale.toFixed(3)})`;
+            reticle.style.opacity = (0.5 + 0.5 * t).toFixed(2);
+        }
+        // AFラベルを合焦前は走らせる
+        if (t < focusPoint) {
+            const afLabel = document.getElementById('shutter-af-label');
+            if (afLabel) {
+                afLabel.innerText = (Math.floor(position / 200) % 2 === 0) ? 'FOCUSING...' : 'FOCUSING';
+            }
+        }
+
+        if (t >= 1) {
+            this.openingDone = true;
+            // 既定ダンス(armStyle)へ戻し、レティクルのインラインscaleを解除して通常更新へ。
+            const preset = SHUTTER_DANCE_PRESETS.find(p => p.name === this.dancePresetName);
+            this.armStyle = (preset && preset.armStyle) || 'cheer';
+            const reticleEnd = document.getElementById('shutter-center-reticle');
+            if (reticleEnd) reticleEnd.style.transform = 'translate(-50%, -50%)';
+        }
+    }
+
+    // AFロック圏内で「NOW!」合図を出し、撮ると高得点であることを直感させる。
+    updateNowCue() {
+        const cue = document.getElementById('shutter-now-cue');
+        if (!cue) return;
+        const r = this._lockReady;
+        if (r > 0.4) {
+            // ロック度に応じて出現＆軽く鼓動
+            const beat = 1.0 + 0.12 * Math.sin(this.lastPosition * 0.02);
+            cue.style.opacity = Math.min(1, (r - 0.4) / 0.4).toFixed(2);
+            cue.style.transform = `translate(-50%, -50%) scale(${(0.8 + 0.4 * r * beat).toFixed(3)})`;
+        } else {
+            cue.style.opacity = '0';
+            cue.style.transform = 'translate(-50%, -50%) scale(0.6)';
         }
     }
 
