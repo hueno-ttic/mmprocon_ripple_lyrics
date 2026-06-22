@@ -74,7 +74,10 @@ export class TitleScreen {
         this.titleInner.innerText = 'Lake Sonare';
         this.titleInner.style.display = 'inline-block';
         // idleは文字を静止させる(波打たせない)。揺らぎ・歪みはタップ時のみ与える。
-        this.titleInner.style.willChange = 'transform, filter';
+        // ※ filter は実際には一度も適用しない。will-change:filter を残すと一部のGPU/ドライバで
+        //   文字が専用合成レイヤに昇格し、サブピクセルAA用の背景バッファが透明でなく黒で確保され、
+        //   タイトル背後に黒ボックスが出る環境がある。実際に使う transform のみをヒントにして根絶する。
+        this.titleInner.style.willChange = 'transform';
         this.title.appendChild(this.titleInner);
         this.title.style.position = 'relative';
         this.title.style.zIndex = '1';
