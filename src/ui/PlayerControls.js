@@ -107,15 +107,14 @@ export class PlayerControls {
         window.addEventListener('pointercancel', endScrub);
 
         const backWithFade = () => {
+            // 押下と同時に遷移(カーテン+transition SE)を起動し、押下フィードバックを即返す。
+            // 音楽はカーテンの裏で並行フェードアウトしてから停止する(ブツ切り防止)。
+            // 以前は「フェード→その後 backToLake」と直列化していたため、SE/カーテンが約450ms遅れていた。
+            eventBus.emit('backToLake');
             if (playerManager.isTimerReady && appState.isPlaying) {
-                // フェードアウトしてから停止(ブツ切り防止)
-                playerManager.fadeOutAnd(() => {
-                    playerManager.stop();
-                    eventBus.emit('backToLake');
-                });
-            } else {
-                if (playerManager.isTimerReady) playerManager.stop();
-                eventBus.emit('backToLake');
+                playerManager.fadeOutAnd(() => playerManager.stop());
+            } else if (playerManager.isTimerReady) {
+                playerManager.stop();
             }
         };
         this.backToLakeBtn.addEventListener('click', backWithFade);

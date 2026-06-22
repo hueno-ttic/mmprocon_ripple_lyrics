@@ -11,8 +11,8 @@
  *
  * 共通UIの対応:
  *   ripple     : タップのさざ波(タイトル/湖など 曲再生中以外のタップ)
- *   hover      : ボタンのホバー(スロットル)
- *   confirm    : 曲の決定(loadSong)
+ *   hover      : ボタンのクリック音(押下時。マウスオーバーでは鳴らさない)
+ *   confirm    : 曲の決定(songConfirm=押下の瞬間。loadSongだとフェード分遅れる)
  *   transition : 湖へ戻る遷移(backToLake)
  *   complete   : 1曲クリア / 全曲制覇(songEnd / allSongsComplete)
  *
@@ -50,7 +50,7 @@ class Sfx {
         this.master = null;
         this.buffers = {};
         this._loadStarted = false;
-        this._lastHover = 0;
+        this._lastBtnClick = 0;
     }
 
     _ensureCtx() {
@@ -125,18 +125,21 @@ window.addEventListener('pointerdown', (e) => {
     sfx.play('ripple', 0.9);
 }, { capture: true });
 
-// ボタンホバー(短間隔のスロットルで鳴り過ぎを防ぐ)
-window.addEventListener('pointerover', (e) => {
+// ボタンのクリック音。マウスオーバーでは鳴らさず、押下(pointerdown)時にだけ鳴らす。
+// (短間隔のスロットルで連打時の鳴り過ぎを防ぐ)
+window.addEventListener('pointerdown', (e) => {
     const t = e.target;
     if (!(t && t.closest && t.closest('button'))) return;
     const now = (performance && performance.now) ? performance.now() : Date.now();
-    if (now - sfx._lastHover < 90) return;
-    sfx._lastHover = now;
+    if (now - sfx._lastBtnClick < 90) return;
+    sfx._lastBtnClick = now;
     sfx.play('hover', 0.7);
 }, { capture: true });
 
 // 決定 / 遷移 / 達成
-eventBus.on('loadSong', () => sfx.play('confirm'));
+// 決定音は曲ロード(loadSong=画面フェード完了後)ではなく、押下の瞬間に発火する
+// songConfirm で鳴らす。loadSong に紐付けると約450ms遅れて聞こえてしまうため。
+eventBus.on('songConfirm', () => sfx.play('confirm'));
 eventBus.on('backToLake', () => sfx.play('transition'));
 eventBus.on('songEnd', () => sfx.play('complete'));
 eventBus.on('allSongsComplete', () => sfx.play('complete', 1.1));
