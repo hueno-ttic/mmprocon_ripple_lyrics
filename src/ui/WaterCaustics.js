@@ -59,16 +59,16 @@ void main() {
         float dist = length(d);
         float radius = age * 0.95;               // 波面の拡大速度(ゆったり)
         float w = dist - radius;                 // 波面からの距離(<0=内側)
-        float trail = exp(-age * 1.35);          // 時間減衰
-        // 波面の後方に数本の同心リングが連なる波列(前方=外側はすぐ減衰)
-        float band = exp(-(w * w) * 11.0) * (w < 0.0 ? 1.0 : 0.35);
-        float ripple = sin(w * 50.0) * band * trail;
+        float trail = exp(-age * 1.9);           // 時間減衰(水滴一滴ぶん、早めに収束)
+        // 水滴が1回落ちた程度: 帯を狭め・周波数を下げて、ほぼ単一のリングだけ残す
+        float band = exp(-(w * w) * 26.0) * (w < 0.0 ? 1.0 : 0.3);
+        float ripple = sin(w * 26.0) * band * trail;
         vec2 dir = dist > 1e-4 ? d / dist : vec2(0.0);
         disp += dir * ripple;
         crest += max(ripple, 0.0) * trail;
     }
 
-    vec2 uv = baseUv + disp * 0.075;   // 波面でcausticsを屈折(屈折量を強め)
+    vec2 uv = baseUv + disp * 0.04;    // 波面でcausticsを屈折(水滴一滴ぶんの控えめな屈折)
     uv.x *= aspect;                    // セルを正方に保つ(縦長でも崩れない)
 
     float bright = caustic(uv);
@@ -79,7 +79,7 @@ void main() {
     vec3 col = mix(deep, light, clamp(bright, 0.0, 1.0));
 
     // 波紋の稜線を発光させる(同心リングの光)
-    col += crest * vec3(0.55, 0.74, 0.92) * 1.25;
+    col += crest * vec3(0.55, 0.74, 0.92) * 0.8;
 
     // 周辺をわずかに沈めて中央へ視線を集める
     float vig = smoothstep(0.95, 0.25, length(baseUv - 0.5));
@@ -190,7 +190,7 @@ export class WaterCaustics {
             dx *= aspect;
             const dist = Math.hypot(dx, dy);
             const w = dist - age * 0.95;                    // 波面からの距離
-            const trail = Math.exp(-age * 1.35);
+            const trail = Math.exp(-age * 1.9);
             const band = Math.exp(-(w * w) * bandK) * (w < 0 ? 1.0 : 0.35);
             h += Math.sin(w * freq) * band * trail;
         }
