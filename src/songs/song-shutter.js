@@ -145,6 +145,15 @@ const SHUTTER_VOCAL_MAP = {
     45: 'duet'  // 再現出来ないストロボ
 };
 
+// 「シャッターチャンス」を象徴する歌詞ワード。撮影フレームにこれらが映っていれば、
+// 曲の世界観を切り取った“印象的な1枚”として評価を上げる（部分一致／助詞連結に強い）。
+// サビの核「いつだってシャッターチャンス」を筆頭に、曲のアイデンティティ語を厳選。
+const SHUTTER_SIGNATURE_LYRICS = [
+    'シャッターチャンス', 'シャッター', '完全無欠', 'flawless', 'モラトリアム',
+    '一瞬', '永遠', 'ファインダー', 'ピント', '焦点', 'フォーカス', 'レリーズ',
+    '切り取', '焼き付', 'スナップ', 'ストロボ',
+];
+
 export class SongShutter extends BaseSong {
     constructor(container, songId) {
         super(container, songId);
@@ -1068,99 +1077,157 @@ export class SongShutter extends BaseSong {
                 cursor: pointer;
                 box-shadow: 0 0 8px #FFEE11;
             }
-            /* --- シャッターチャンス: 終盤フィルムストリップ --- */
-            #shutter-filmstrip {
+            /* --- シャッターチャンス: 終盤フィナーレ（コンタクトシート集約） --- */
+            #shutter-contactsheet {
                 position: absolute;
-                bottom: 0;
-                left: 0;
-                width: 100%;
-                z-index: 45;
+                inset: 0;
+                z-index: 60;
                 display: flex;
+                align-items: center;
                 justify-content: center;
                 pointer-events: none;
-                transform: translateY(120%);
-                transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+                opacity: 0;
+                transition: opacity 0.6s ease;
             }
-            #shutter-filmstrip.shutter-filmstrip-visible {
-                transform: translateY(0);
-            }
-            #shutter-filmstrip-track {
-                display: flex;
-                gap: 8px;
-                align-items: center;
-                max-width: 96vw;
-                overflow-x: auto;
-                padding: 18px 22px;
-                background:
-                    repeating-linear-gradient(90deg, rgba(216,90,48,0.55) 0 6px, transparent 6px 22px) top / 100% 8px no-repeat,
-                    repeating-linear-gradient(90deg, rgba(216,90,48,0.55) 0 6px, transparent 6px 22px) bottom / 100% 8px no-repeat,
-                    rgba(12, 5, 3, 0.92);
-                border-top: 1px solid rgba(216, 90, 48, 0.6);
-                box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.6);
-                pointer-events: auto;
-            }
-            .shutter-film-cell {
-                position: relative;
-                flex: 0 0 auto;
-                width: 76px;
-                height: 76px;
-                border: 3px solid #f5f0ea;
-                background: #000;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.6);
-                transform: rotate(var(--film-tilt, 0deg));
-            }
-            .shutter-film-cell img {
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                display: block;
-            }
-            .shutter-film-cell.shutter-film-star {
-                border-color: #FFEE11;
-                box-shadow: 0 0 12px rgba(255, 238, 17, 0.75);
-            }
-            .shutter-film-badge {
+            #shutter-contactsheet.cs-in { opacity: 1; }
+            #shutter-contactsheet .cs-backdrop {
                 position: absolute;
-                top: -12px;
-                right: -9px;
-                font-size: 17px;
-                color: #FFEE11;
-                text-shadow: 0 0 6px #FFEE11, 0 0 2px #000;
-                font-family: monospace;
+                inset: 0;
+                background:
+                    radial-gradient(ellipse at center, rgba(20, 9, 5, 0.55) 0%, rgba(4, 2, 1, 0.94) 78%);
+                backdrop-filter: blur(3px);
             }
-            .shutter-film-time {
+            #shutter-contactsheet .cs-sheet {
+                position: relative;
+                box-sizing: border-box;
+                width: min(88vw, 760px);
+                max-height: 86%;
+                padding: 22px 20px 16px;
+                background:
+                    repeating-linear-gradient(90deg, rgba(255,210,120,0.5) 0 7px, transparent 7px 24px) top 7px left / 100% 9px no-repeat,
+                    repeating-linear-gradient(90deg, rgba(255,210,120,0.5) 0 7px, transparent 7px 24px) bottom 7px left / 100% 9px no-repeat,
+                    linear-gradient(160deg, #15100c 0%, #0c0806 100%);
+                border: 1px solid rgba(216, 90, 48, 0.55);
+                border-radius: 4px;
+                box-shadow: 0 18px 60px rgba(0,0,0,0.7), 0 0 0 8px rgba(0,0,0,0.35);
+                transform: scale(0.9) rotate(-0.6deg);
+                opacity: 0;
+                transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.6s ease;
+                overflow: hidden;
+            }
+            #shutter-contactsheet.cs-in .cs-sheet { transform: scale(1) rotate(-0.6deg); opacity: 1; }
+            .cs-header {
+                display: flex;
+                align-items: baseline;
+                justify-content: center;
+                gap: 12px;
+                margin: 6px 0 14px;
+            }
+            .cs-title {
+                font-family: monospace;
+                font-size: clamp(18px, 3.6vw, 30px);
+                font-weight: bold;
+                letter-spacing: 6px;
+                color: #FFEE11;
+                text-shadow: 0 0 12px rgba(255, 238, 17, 0.6), 0 0 3px #000;
+            }
+            .cs-sub {
+                font-family: monospace;
+                font-size: clamp(9px, 1.6vw, 12px);
+                letter-spacing: 3px;
+                color: #D85A30;
+                text-shadow: 0 0 8px #D85A30;
+            }
+            .cs-grid {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 10px;
+                max-height: 58vh;
+                overflow: hidden;
+            }
+            .cs-cell {
+                position: relative;
+                aspect-ratio: 1 / 1;
+                border: 2px solid #f1ece3;
+                background: #000;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.6);
+                /* 散らばり初期位置（インラインで --sx/--sy/--srot を付与）→ settle で整列 */
+                transform: translate(var(--sx, 0), var(--sy, 0)) rotate(var(--srot, 0deg)) scale(1.25);
+                opacity: 0;
+                transition: transform 0.85s cubic-bezier(0.18, 0.9, 0.28, 1), opacity 0.45s ease;
+            }
+            .cs-cell.cs-settled {
+                transform: translate(0, 0) rotate(var(--tilt, 0deg)) scale(1);
+                opacity: 1;
+            }
+            .cs-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+            .cs-frame-no {
+                position: absolute;
+                top: 2px;
+                left: 3px;
+                font-family: monospace;
+                font-size: 9px;
+                font-weight: bold;
+                color: #FF9A3C;
+                text-shadow: 0 0 3px #000, 0 0 6px rgba(255,154,60,0.7);
+            }
+            .cs-time {
                 position: absolute;
                 bottom: 1px;
-                left: 2px;
+                right: 3px;
                 font-family: monospace;
                 font-size: 8px;
-                color: rgba(255, 255, 255, 0.85);
+                color: rgba(255,255,255,0.85);
                 text-shadow: 0 0 3px #000;
             }
-            .shutter-film-empty {
-                color: rgba(216, 90, 48, 0.85);
-                font-family: monospace;
-                font-size: 12px;
-                letter-spacing: 2px;
-                padding: 28px 10px;
-                white-space: nowrap;
-            }
-            .shutter-film-label {
+            /* ベストショットのグリースペンシル風マーキング */
+            .cs-cell.cs-star { border-color: #FFEE11; }
+            .cs-grease {
                 position: absolute;
-                top: -22px;
-                left: 50%;
-                transform: translateX(-50%);
-                color: #D85A30;
+                inset: -7%;
+                border: 3px solid #FFEE11;
+                border-radius: 52% 48% 49% 51% / 49% 51% 49% 51%;
+                box-shadow: 0 0 10px rgba(255, 238, 17, 0.8);
+                transform: rotate(-8deg) scale(0.4);
+                opacity: 0;
+                transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+                pointer-events: none;
+            }
+            .cs-cell.cs-mark .cs-grease { transform: rotate(-8deg) scale(1); opacity: 1; }
+            .cs-footer {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-top: 14px;
+                padding-top: 10px;
+                border-top: 1px dashed rgba(216, 90, 48, 0.45);
                 font-family: monospace;
-                font-size: 12px;
+            }
+            .cs-stats {
+                font-size: clamp(10px, 1.8vw, 13px);
+                letter-spacing: 1px;
+                color: #f3ede1;
+            }
+            .cs-stats b { color: #FFEE11; }
+            .cs-sign {
+                font-size: clamp(12px, 2.2vw, 16px);
                 font-weight: bold;
-                letter-spacing: 3px;
-                text-shadow: 0 0 8px #D85A30;
-                white-space: nowrap;
+                color: #D85A30;
+                text-shadow: 0 0 8px rgba(216, 90, 48, 0.7);
+            }
+            .cs-empty {
+                grid-column: 1 / -1;
+                text-align: center;
+                color: rgba(216, 90, 48, 0.9);
+                font-family: monospace;
+                font-size: 13px;
+                letter-spacing: 2px;
+                padding: 40px 10px;
             }
             @media (max-width: 767px) {
-                .shutter-film-cell { width: 54px; height: 54px; border-width: 2px; }
-                #shutter-filmstrip-track { gap: 6px; padding: 14px 12px; }
+                #shutter-contactsheet .cs-sheet { width: 92vw; padding: 16px 12px 12px; }
+                .cs-grid { grid-template-columns: repeat(3, 1fr); gap: 7px; max-height: 52vh; }
+                .cs-title { letter-spacing: 4px; }
             }
         `;
         document.head.appendChild(this.customStyleElement);
@@ -2181,49 +2248,90 @@ export class SongShutter extends BaseSong {
         }
     }
 
-    // 曲終了が近づいたら画面下部に撮影成果をフィルムとして横一列表示
+    // 曲終了が近づいたら、撮った写真を画面全体に散らしてから1枚の
+    // コンタクトシート（印画紙）へ整列させるフィナーレを表示。
     showFilmStrip() {
         if (this.filmStripVisible || !this.songWrapper) return;
         this.filmStripVisible = true;
 
-        const strip = document.createElement('div');
-        strip.id = 'shutter-filmstrip';
-        strip.innerHTML = `
-            <div id="shutter-filmstrip-track" style="position: relative;">
-                <span class="shutter-film-label">— FILM ROLL : BEST MOMENTS —</span>
+        // 現像ラボ風の一閃でコンタクトシートへ切り替わる印象を作る
+        try { this.triggerShutterFlash(); } catch (e) { /* 無害 */ }
+
+        // ミク/リンは「被写体(Model)」。撮影したのはプレイヤー自身なので Photo by YOU。
+        const shownName = this.shownKey === 'rin' ? 'リン⚡' : 'ミク♡';
+        const sheet = document.createElement('div');
+        sheet.id = 'shutter-contactsheet';
+        sheet.innerHTML = `
+            <div class="cs-backdrop"></div>
+            <div class="cs-sheet">
+                <div class="cs-header">
+                    <span class="cs-title">CONTACT SHEET</span>
+                    <span class="cs-sub">— BEST MOMENTS —</span>
+                </div>
+                <div class="cs-grid" id="shutter-cs-grid"></div>
+                <div class="cs-footer">
+                    <span class="cs-stats" id="shutter-cs-stats"></span>
+                    <span class="cs-sign">Model ${shownName}　·　Photo by YOU</span>
+                </div>
             </div>
         `;
-        this.songWrapper.appendChild(strip);
-        this.filmStripEl = strip;
+        this.songWrapper.appendChild(sheet);
+        this.filmStripEl = sheet;
         this.renderFilmStripPhotos();
 
-        requestAnimationFrame(() => {
-            strip.classList.add('shutter-filmstrip-visible');
-        });
+        requestAnimationFrame(() => sheet.classList.add('cs-in'));
     }
 
     renderFilmStripPhotos() {
         if (!this.filmStripEl) return;
-        const track = this.filmStripEl.querySelector('#shutter-filmstrip-track');
-        if (!track) return;
+        const grid = this.filmStripEl.querySelector('#shutter-cs-grid');
+        const stats = this.filmStripEl.querySelector('#shutter-cs-stats');
+        if (!grid) return;
 
-        const label = '<span class="shutter-film-label">— FILM ROLL : BEST MOMENTS —</span>';
+        if (stats) {
+            stats.innerHTML = `撮影 <b>${this.totalShots}</b>枚 ・ ★ベスト <b>${this.starShots}</b>枚`
+                + (this.lockShots > 0 ? ` ・ ロック <b>${this.lockShots}</b>回` : '');
+        }
+
         if (this.photoLog.length === 0) {
-            track.innerHTML = `${label}<div class="shutter-film-empty">NO FILM — タップでシャッターを切ろう！</div>`;
+            grid.innerHTML = `<div class="cs-empty">NO FILM — タップでシャッターを切ろう！</div>`;
             return;
         }
 
+        // 各セルは画面外〜近傍にランダムに散らばった状態で生成し、整列させる
         const cells = this.photoLog.map((p, i) => {
+            const sx = (Math.random() * 2 - 1) * 90;   // vw
+            const sy = (Math.random() * 2 - 1) * 80 - 10; // vh（やや上方から舞い込む）
+            const srot = (Math.random() * 2 - 1) * 40;
             const tilt = ((i % 2 === 0) ? -1 : 1) * (1 + (i % 3));
+            const frameNo = String(i + 1).padStart(2, '0');
             return `
-                <div class="shutter-film-cell${p.starred ? ' shutter-film-star' : ''}" style="--film-tilt: ${tilt}deg;">
+                <div class="cs-cell${p.starred ? ' cs-star' : ''}"
+                     style="--sx:${sx.toFixed(1)}vw; --sy:${sy.toFixed(1)}vh; --srot:${srot.toFixed(1)}deg; --tilt:${tilt}deg;">
                     <img src="${p.url}" alt="">
-                    ${p.starred ? '<span class="shutter-film-badge">★</span>' : ''}
-                    <span class="shutter-film-time">${p.timeStr}</span>
+                    <span class="cs-frame-no">${frameNo}</span>
+                    <span class="cs-time">${p.timeStr}</span>
+                    ${p.starred ? '<span class="cs-grease"></span>' : ''}
                 </div>
             `;
         }).join('');
-        track.innerHTML = label + cells;
+        grid.innerHTML = cells;
+
+        // 散らばり → 整列（インデックス順にスタッガー）、整列後にベスト印を描画
+        const cellEls = grid.querySelectorAll('.cs-cell');
+        cellEls.forEach((el, i) => {
+            el.style.transitionDelay = `${i * 0.07}s`;
+            requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('cs-settled')));
+        });
+        const markDelay = 250 + cellEls.length * 70 + 350;
+        if (!this._csMarkTimers) this._csMarkTimers = [];
+        this._csMarkTimers.forEach(clearTimeout);
+        this._csMarkTimers = [];
+        cellEls.forEach((el) => {
+            if (el.classList.contains('cs-star')) {
+                this._csMarkTimers.push(setTimeout(() => el.classList.add('cs-mark'), markDelay));
+            }
+        });
     }
 
     triggerShutterFlash() {
@@ -2302,6 +2410,86 @@ export class SongShutter extends BaseSong {
         this.scene.fog = prevFog;
     }
 
+    // 撮影瞬間に「被写体(ミク/リン)が画面内に良く収まっているか」を構図評価する。
+    // 表示中の被写体の足元/頭をNDC(-1..1)へ投影し、画面内・中央寄り・適切な大きさ・
+    // 頭が切れていないか をスコア化(0..1)。score>=0.5 かつ顔が破綻していなければ wellFramed。
+    evaluateSubjectComposition() {
+        const subject = this.subjects && this.subjects.find(s => s.key === this.shownKey);
+        if (!subject || !subject.mesh || !this.camera) {
+            return { score: 0, wellFramed: false, reason: 'no-subject' };
+        }
+        const mesh = subject.mesh;
+        mesh.updateMatrixWorld(true);
+
+        // ねんどろ体型(頭が大きい)を正しく捉えるため、頭ボーンではなく実バウンディング
+        // ボックスから 頭頂(max.y)/足元(min.y)/中心 を取り、画面内の収まりを評価する。
+        // ※頭ボーンは胴体並みに低く、頭頂は遥か上にあるため、ボーン基準だと過小評価になる。
+        const box = new THREE.Box3().setFromObject(mesh);
+        if (box.isEmpty()) return { score: 0, wellFramed: false, reason: 'empty' };
+        const center = box.getCenter(new THREE.Vector3());
+        const crown = new THREE.Vector3(center.x, box.max.y, center.z);
+        const foot  = new THREE.Vector3(center.x, box.min.y, center.z);
+
+        const cNdc = center.clone().project(this.camera);
+        const crownNdc = crown.clone().project(this.camera);
+        const footNdc = foot.clone().project(this.camera);
+
+        // カメラ背面(被写体が後ろ)ならベスト不可
+        if (cNdc.z >= 1) {
+            return { score: 0, wellFramed: false, reason: 'behind' };
+        }
+
+        // 1) 横位置の中央寄り（三分割法を許容）
+        const ax = Math.abs(cNdc.x);
+        const centerScore = ax <= 0.34 ? 1 : Math.max(0, 1 - (ax - 0.34) / 0.5);
+
+        // 2) 画面に占める大きさ（頭頂〜足元のNDC高さ / 全画面高2.0）
+        const frac = Math.abs(crownNdc.y - footNdc.y) / 2; // 0..1
+        let sizeScore;
+        if (frac < 0.25) sizeScore = (frac / 0.25) * 0.4;                  // 小さすぎ(遠い)
+        else if (frac <= 1.0) sizeScore = 0.4 + (frac - 0.25) / (0.6 - 0.25) * 0.6; // 良好(寄るほど高評価)
+        else sizeScore = 1 - (frac - 1.0) / 0.6;                           // 寄りすぎ/見切れ
+        sizeScore = Math.max(0, Math.min(1, sizeScore));
+
+        // 3) 顔/頭の破綻チェック（頭頂の見切れ・被写体が画面横に外れる）
+        let faceScore = 1;
+        if (crownNdc.y > 1.0) faceScore = 0.25;        // 頭頂が画面上端より上＝頭が切れている
+        else if (crownNdc.y > 0.94) faceScore = 0.6;   // ギリギリ
+        if (ax > 1.0) faceScore *= 0.2;                // 被写体が画面横外
+
+        // 被写体そのものの写り(サイズ＋顔の破綻なさ)に、中央寄り係数を掛ける。
+        // 端に寄った絵は大きく/くっきり写っていても良い構図とは見なさない。
+        const framingQuality = 0.55 * sizeScore + 0.45 * faceScore;
+        const centerFactor = 0.4 + 0.6 * centerScore;
+        const score = Math.max(0, Math.min(1, framingQuality * centerFactor));
+        const wellFramed = score >= 0.5 && faceScore >= 0.5;
+        return { score, wellFramed, centerScore, sizeScore, faceScore, reason: 'ok' };
+    }
+
+    // 評価軸その2: 撮影フレームに「この曲を象徴する歌詞」が映っているかを判定。
+    // 表示中(不透明)かつ画面内のスプライトのうち、象徴ワードを含むものを探し、
+    // 最も中央寄りの1件を採用する。映っていれば印象的な1枚として評価を上げる。
+    evaluateSignatureLyric() {
+        if (!this.activeSprites || !this.activeSprites.length || !this.camera) {
+            return { has: false };
+        }
+        let best = null;
+        for (const sprite of this.activeSprites) {
+            const text = sprite.userData && sprite.userData.text;
+            if (!text) continue;
+            if (sprite.material && sprite.material.opacity <= 0.4) continue; // ほぼ消えかけは除外
+            const keyword = SHUTTER_SIGNATURE_LYRICS.find(k => text.includes(k));
+            if (!keyword) continue;
+            const ndc = sprite.position.clone().project(this.camera);
+            if (ndc.z >= 1) continue;                                         // カメラ背面
+            if (Math.abs(ndc.x) > 0.92 || Math.abs(ndc.y) > 0.92) continue;  // 画面外
+            const centrality = 1 - Math.min(1, Math.hypot(ndc.x, ndc.y) / 0.92);
+            if (!best || centrality > best.centrality) best = { text, keyword, centrality };
+        }
+        return best ? { has: true, text: best.text, keyword: best.keyword, centrality: best.centrality }
+                    : { has: false };
+    }
+
     takePhoto() {
         if (!playerManager.player || !playerManager.player.isPlaying || !playerManager.player.timer) {
             return;
@@ -2344,8 +2532,16 @@ export class SongShutter extends BaseSong {
             }
         }
 
-        // 【★ベストショット判定】サビ中（findChorus）またはミク＆リン両ボーカル同時パート中の撮影
-        const isBestShot = this.isClimax || activeVocal === 'duet';
+        // 【★ベストショット判定】タイミング(サビ/デュエット)だけでは人は納得しない。
+        // 被写体(ミク/リン)が画面内に良く収まっている=構図が良いことを必須条件にする。
+        const goodTiming = this.isClimax || activeVocal === 'duet';
+        const composition = this.evaluateSubjectComposition();
+        const isWellFramed = composition.wellFramed;
+        // 評価軸その2: 曲を象徴する歌詞が映っていれば“印象的な1枚”として加点する。
+        const signatureLyric = this.evaluateSignatureLyric();
+        // 構図が良いことが大前提。その上で「良い瞬間(サビ/デュエット)」「象徴歌詞が映る」
+        // 「構図が極上」のいずれかを満たせば★。
+        const isBestShot = isWellFramed && (goodTiming || signatureLyric.has || composition.score >= 0.82);
 
         // 【フォトスポット・ターゲットロック判定 (案B)】
         let isTargetLocked = false;
@@ -2378,6 +2574,18 @@ export class SongShutter extends BaseSong {
                 alertDisp.style.color = '#FFEE11';
                 alertDisp.style.borderColor = '#FFEE11';
                 alertDisp.style.textShadow = '0 0 15px #FFEE11, 0 0 5px #ffffff';
+            } else if (isWellFramed && signatureLyric.has) {
+                // 被写体も歌詞も決まった“名フレーズ”の1枚
+                alertDisp.innerText = `♪ 名フレーズ「${signatureLyric.keyword}」激写 ♪`;
+                alertDisp.style.color = '#FFEE11';
+                alertDisp.style.borderColor = '#FFEE11';
+                alertDisp.style.textShadow = '0 0 12px #FFEE11, 0 0 4px #fff';
+            } else if (goodTiming && !isWellFramed) {
+                // 絶好の瞬間なのに被写体が見切れ/小さすぎ＝★を逃した理由を伝える
+                alertDisp.innerText = 'FRAMING MISS — 被写体を画面に！';
+                alertDisp.style.color = '#FF7A4D';
+                alertDisp.style.borderColor = '#FF7A4D';
+                alertDisp.style.textShadow = '0 0 8px #FF7A4D';
             } else {
                 alertDisp.innerText = activeVocal === 'miku' ? 'SHOT: MIKU_CH' : (activeVocal === 'rin' ? 'SHOT: RIN_CH' : 'SHOT: DUET_MAX');
                 const alertColor = activeVocal === 'miku' ? '#39C5BB' : (activeVocal === 'rin' ? '#FFEE11' : '#B9543C');
@@ -3044,7 +3252,7 @@ export class SongShutter extends BaseSong {
             ctx.fillText('終わらない瞬間を、いつまでも。 ✨', photoX + 30, textYPos);
         }
 
-        // 【★ベストショット刻印】サビ／デュエット同時パート撮影は写真フレーム左上に★マークを付与
+        // 【★ベストショット刻印】構図が良く、かつ良い瞬間に撮れた1枚だけ左上に★マークを付与
         if (isBestShot) {
             ctx.save();
             ctx.shadowColor = '#FFEE11';
@@ -3057,6 +3265,14 @@ export class SongShutter extends BaseSong {
             ctx.shadowBlur = 0;
             ctx.font = 'bold 16px monospace';
             ctx.fillText('BEST', 24, 92);
+            // 象徴歌詞が映っていた1枚は、その名フレーズを焼き込んで“印象的な瞬間”を明示
+            if (signatureLyric.has) {
+                ctx.shadowColor = '#FFEE11';
+                ctx.shadowBlur = 10;
+                ctx.font = 'bold 30px "Inter", "Noto Sans JP", sans-serif';
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillText(`♪ ${signatureLyric.text}`, 22, 138);
+            }
             ctx.restore();
         }
 
@@ -3173,7 +3389,8 @@ export class SongShutter extends BaseSong {
             this.viewfinder.parentNode.removeChild(this.viewfinder);
         }
 
-        // フィルムストリップDOMと写真ログの解放
+        // コンタクトシートDOM・整列タイマー・写真ログの解放
+        if (this._csMarkTimers) { this._csMarkTimers.forEach(clearTimeout); this._csMarkTimers = []; }
         if (this.filmStripEl && this.filmStripEl.parentNode) {
             this.filmStripEl.parentNode.removeChild(this.filmStripEl);
         }
