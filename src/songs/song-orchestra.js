@@ -41,6 +41,13 @@ export class SongOrchestra extends BaseSong {
         this.resonateOrbs = [];
         this.hasTriggeredClimaxExplosion = false;
         this.orbGeometry = new THREE.SphereGeometry(0.12, 8, 8);
+
+        // 序盤の予兆(premonition): 再生開始直後、まだ歌詞も操作も無い「無音地帯」を
+        // 埋めるため、テーマ色のごく淡いオーブを数個ゆっくり漂わせ「触れられる」ことを示唆する。
+        this.premonitionOrbs = [];
+        this.PREMONITION_END = 10000;     // この時刻(ms)を過ぎたら予兆を畳んで破棄する
+        this._premonitionDone = false;    // 予兆オーブを全て破棄し終えたら true
+        this._premonitionFoldStart = undefined; // 昇華(消滅)フェーズ開始時刻(ms)
         this._tutCardTimer = null;
         this._introOverlay = null;
         this._mousePos = null;
@@ -84,6 +91,7 @@ export class SongOrchestra extends BaseSong {
         this.initStars();
         this.initNightSky();
         this.initOrbGauge();
+        this.initPremonitionOrbs(); // 開幕直後の予兆オーブを配置（操作前でも画面を動かす）
         this.updateResultSummary(); // 0個の状態でも成果サマリーを初期登録
         window.addEventListener('resize', this.boundOnResize);
         this.container.addEventListener('click', this.boundOnClick);
@@ -341,6 +349,158 @@ export class SongOrchestra extends BaseSong {
                 a.position.x = u.baseX + Math.sin(t * 0.3 + u.phase) * 1.6;
             }
         }
+    }
+
+    // 序盤の予兆オーブを生成。これから集まる色彩オーブを予感させる多色の微小な加算発光
+    // スプライトを数個、画面手前(カメラを塞がない z=-6〜-9)にゆるくクラスタ配置する。
+    // クリック判定(activeSprites)には含めないので歌詞タップとは一切干渉しない。
+    // 既存の glowTexture を共有し、新規ジオメトリは増やさない(マテリアルのみ dispose 経路へ)。
+    initPremonitionOrbs() {
+        if (!this.glowTexture || !this.scene) return;
+        const isMobile = window.innerWidth < 768;
+        const count = isMobile ? 3 : 5;
+        // 共鳴で実際に生まれるオーブ色(getSemanticColor の6色)＋テーマ青。
+        // これらを予兆に使うことで「触れるとこの色たちが集まる」と視覚的に予告する。
+        const PALETTE = ['#185FA5', '#ffb834', '#ff3b5c', '#00d4ff', '#00ffb0', '#d95bff'];
+        // 隣り合うオーブが別色になるようシャッフルしてから順に割り当てる
+        const shuffled = [...PALETTE].sort(() => Math.random() - 0.5);
+        for (let i = 0; i < count; i++) {
+            const hex = shuffled[i % shuffled.length];
+            const mat = new THREE.SpriteMaterial({
+                map: this.glowTexture,
+                color: new THREE.Color(hex),
+                transparent: true,
+                opacity: 0.0,            // フェードインで静かに現れる
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+            const sp = new THREE.Sprite(mat);
+            const baseX = (Math.random() - 0.5) * (isMobile ? 4.5 : 7.0);
+            const baseY = (Math.random() - 0.5) * 3.2 - 0.2;
+            const baseZ = -6.0 - Math.random() * 3.0;
+            sp.position.set(baseX, baseY, baseZ);
+            const s = 0.5 + Math.random() * 0.35;
+            sp.scale.set(s, s, 1);
+            sp.userData = {
+                baseX, baseY,
+                baseScale: s,
+                hex,
+                phase: Math.random() * Math.PI * 2,
+                driftX: 0.55 + Math.random() * 0.45, // 横ゆらぎの周期係数
+                driftY: 0.40 + Math.random() * 0.40, // 縦ゆらぎの周期係数
+                ampX: 0.5 + Math.random() * 0.6,
+                ampY: 0.35 + Math.random() * 0.4,
+                twinkle: 0.7 + Math.random() * 0.8,
+                foldDelay: i * 260 + Math.random() * 120 // 昇華を一斉でなく順番に始めるためのずらし(ms)
+            };
+            this.scene.add(sp);
+            this.premonitionOrbs.push(sp);
+        }
+    }
+
+    // 予兆オーブの更新: 開幕で静かにフェードイン→ゆっくり漂いつつ明滅。
+    // 歌詞が画面に出揃うほど自然に減光し、最初の色共鳴(操作) or 予兆時間切れで
+    // 「昇華フェーズ」へ移行する。常時5個以下なので 60fps への影響は無視できる。
+    updatePremonitionOrbs(position) {
+        if (this._premonitionDone || !this.premonitionOrbs.length) {
+            this._premonitionDone = this._premonitionDone || !this.premonitionOrbs.length;
+            return;
+        }
+
+        // 操作済み or 予兆時間切れで畳み(昇華)フェーズへ
+        const folding = this.hasResonatedColor || position > this.PREMONITION_END;
+        if (folding) {
+            if (this._premonitionFoldStart === undefined) this._premonitionFoldStart = position;
+            // ゲージの「序盤の脈動」も操作開始 or 時間切れで解除
+            if (this.orbGaugeEl) this.orbGaugeEl.classList.remove('orchestra-orb-gauge-intro');
+        }
+
+        // 歌詞(=本来の見せ場)が立ち上がるほど予兆は控えめに引いていく
+        const activeLyrics = this.activeSprites.filter(s => !s.userData.isNode).length;
+        const lyricDim = Math.max(0, 1 - activeLyrics * 0.34);
+
+        const t = position * 0.001;
+        const fadeIn = Math.min(1.0, position / 800);
+
+        for (let i = this.premonitionOrbs.length - 1; i >= 0; i--) {
+            const sp = this.premonitionOrbs[i];
+            const u = sp.userData;
+
+            // 常に：ゆっくりした漂い(横長のリサージュ風)
+            sp.position.x = u.baseX + Math.sin(t * u.driftX + u.phase) * u.ampX;
+            sp.position.y = u.baseY + Math.cos(t * u.driftY + u.phase) * u.ampY;
+
+            // 昇華が始まっているか(オーブごとに foldDelay だけ遅れて開始)
+            const sublimating = folding && (position - this._premonitionFoldStart >= u.foldDelay);
+
+            if (sublimating) {
+                // 幻想的な消滅: 夜空へゆっくり昇りながら、中盤で一度きらめき(残光)、
+                // ふわっと広がって星屑になって消える。
+                u.baseY += 0.012; // 夜空へ昇華
+                const k = Math.min(1.0, (position - this._premonitionFoldStart - u.foldDelay) / 1200); // 1.2秒で昇華
+                const bloom = Math.sin(Math.min(1.0, k * 1.6) * Math.PI); // 中盤で一瞬明るくなる残光
+                sp.material.opacity = Math.max(0, (0.55 * (1 - k) + 0.4 * bloom) * 0.95);
+                const sc = u.baseScale * (1.0 + k * 0.7); // 広がりながら薄れる
+                sp.scale.set(sc, sc, 1);
+
+                if (k >= 1.0 || sp.material.opacity < 0.01) {
+                    // 最後に同色の星屑をきらめかせて散らす(共通の花火更新ループで dispose)
+                    this.spawnPremonitionDissolve(sp.material.color, sp.position);
+                    this.scene.remove(sp);
+                    sp.material.dispose(); // map は共有の glowTexture なので触らない
+                    this.premonitionOrbs.splice(i, 1);
+                }
+            } else {
+                // 通常の漂い: フェードイン＋明滅＋わずかな呼吸スケール
+                const twinkle = 0.55 + 0.45 * Math.sin(t * u.twinkle + u.phase);
+                const target = 0.5 * fadeIn * twinkle * lyricDim;
+                sp.material.opacity += (target - sp.material.opacity) * 0.06;
+                const breathe = 1.0 + 0.12 * Math.sin(t * u.twinkle + u.phase);
+                const sc = u.baseScale * breathe;
+                sp.scale.set(sc, sc, 1);
+            }
+        }
+
+        if (folding && this.premonitionOrbs.length === 0) {
+            this._premonitionDone = true;
+        }
+    }
+
+    // 予兆オーブが「星屑になって夜空へ還る」幻想的な消滅エフェクト。
+    // 既存の花火更新ループ(this.fireworks)に載せるため、生成・破棄は完全に共通経路で安全。
+    spawnPremonitionDissolve(color, pos) {
+        const geo = new THREE.BufferGeometry();
+        const count = 16; // ごく軽量
+        const positions = new Float32Array(count * 3);
+        const velocities = [];
+        for (let i = 0; i < count; i++) {
+            positions[i * 3] = pos.x;
+            positions[i * 3 + 1] = pos.y;
+            positions[i * 3 + 2] = pos.z;
+            // 弱い拡散で「ふわっ」と外へ広がりつつ、上方へたなびく星屑
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos((Math.random() * 2) - 1);
+            const speed = 0.06 + Math.random() * 0.12;
+            velocities.push(new THREE.Vector3(
+                Math.sin(phi) * Math.cos(theta) * speed,
+                Math.abs(Math.sin(phi) * Math.sin(theta)) * speed + 0.05, // 上昇バイアス
+                Math.cos(phi) * speed
+            ));
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const mat = new THREE.PointsMaterial({
+            color: color,
+            size: 0.16,
+            map: this.glowTexture, // 共有テクスチャ(花火ループは material.dispose のみで map は残す)
+            blending: THREE.AdditiveBlending,
+            transparent: true,
+            opacity: 0.95,
+            depthWrite: false
+        });
+        const particles = new THREE.Points(geo, mat);
+        particles.userData = { velocities, birth: Date.now() };
+        this.scene.add(particles);
+        this.fireworks.push(particles);
     }
 
     onResize() {
@@ -1033,6 +1193,9 @@ export class SongOrchestra extends BaseSong {
                 .orchestra-orb-gauge-charged .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-charge 1.4s ease-in-out infinite; border-color:rgba(255,255,255,0.6); }
                 @keyframes orchestra-orb-gauge-charge { 0%,100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35), 0 0 8px rgba(255,255,255,0.25); } 50% { box-shadow:inset 0 0 16px rgba(120,180,255,0.6), 0 0 22px rgba(255,255,255,0.7); } }
                 .orchestra-orb-gauge-charged .orchestra-orb-gauge-count { color:#fff; text-shadow:0 0 10px rgba(180,220,255,0.95); }
+                /* 開幕の予兆: まだ何も集めていない序盤、ゲージ管が薄く脈動して「ここに色が溜まる」ことを予感させる */
+                .orchestra-orb-gauge-intro .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-introglow 2.4s ease-in-out infinite; }
+                @keyframes orchestra-orb-gauge-introglow { 0%,100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35); } 50% { box-shadow:inset 0 0 18px rgba(24,95,165,0.65), 0 0 12px rgba(80,150,220,0.4); } }
             `;
             document.head.appendChild(style);
         }
@@ -1044,6 +1207,7 @@ export class SongOrchestra extends BaseSong {
             <div class="orchestra-orb-gauge-tube"><div class="orchestra-orb-gauge-fill"></div></div>
             <div class="orchestra-orb-gauge-label">共鳴オーブ</div>
         `;
+        gauge.classList.add('orchestra-orb-gauge-intro'); // 開幕の予兆脈動（操作 or 時間切れで解除）
         this.songWrapper.appendChild(gauge);
         this.orbGaugeEl = gauge;
         this.orbGaugeFillEl = gauge.querySelector('.orchestra-orb-gauge-fill');
@@ -1192,6 +1356,9 @@ export class SongOrchestra extends BaseSong {
 
         // --- Night sky ambience (twinkle / milky way / aurora) ---
         this.updateNightSky(position, open);
+
+        // --- 序盤の予兆オーブ(開幕の無音地帯を埋める。操作 or 時間切れで自然に畳む) ---
+        this.updatePremonitionOrbs(position);
 
         // --- 3D Lyrics logic (Pre-cached Word-Group granularity for rhythmic touch interaction) ---
         if (!this.lyricsCacheBuilt) {
@@ -2117,6 +2284,13 @@ export class SongOrchestra extends BaseSong {
             this.disposeVRM(this.currentVRM);
             this.currentVRM = null;
         }
+
+        // 序盤の予兆オーブのクリーンアップ(map は共有の glowTexture なので個別 dispose しない)
+        this.premonitionOrbs.forEach(sp => {
+            this.scene.remove(sp);
+            if (sp.material) sp.material.dispose();
+        });
+        this.premonitionOrbs = [];
 
         // 色彩交響オーブのクリーンアップ
         this.resonateOrbs.forEach(orb => {
