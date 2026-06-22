@@ -532,6 +532,10 @@ export class WorldUI {
         if (this.isTransitioning) return;
         this.isTransitioning = true;
 
+        // 決定音は押下フィードバックなので、フェードを待たずこの瞬間に鳴らす。
+        // (実際の曲ロードは下の fadeOut 完了後に loadSong で行う)
+        eventBus.emit('songConfirm', song);
+
         if (this.currentPhase) {
             this.currentPhase.onSelect(index);
         }
