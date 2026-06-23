@@ -250,7 +250,7 @@ export class SongAfter extends BaseSong {
 
         // 上部の布(バランス/横幕): 画面上端に常に掛かる赤い布。下辺はスカラップ(波形)で
         // 金フリンジ付き。開いても閉じても常に上部に見えるよう、前面・大きめに配置する。
-        const valGeo = new THREE.PlaneGeometry(58, 22);
+        const valGeo = new THREE.PlaneGeometry(60, 20);
         const valMat = new THREE.MeshBasicMaterial({
             map: this.createValanceTexture(),
             alphaTest: 0.5,
@@ -258,7 +258,7 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
         this.valance = new THREE.Mesh(valGeo, valMat);
-        this.valance.position.set(0, 19, -4.6); // 上端から垂れ下がり、緞帳より手前
+        this.valance.position.set(0, 13, -4.6); // 上端から垂れ下がり、緞帳より手前
         this.scene.add(this.valance);
 
         // 緞帳の合わせ目(中央)から漏れる光 — 閉じている間だけ見え、破裂や進行で強まる。
@@ -517,20 +517,37 @@ export class SongAfter extends BaseSong {
 
     // ベロアの赤い折り目を塗る共通処理(縦ひだ + 上下の陰影)
     _drawVelvet(ctx, w, h, folds) {
+        // 不規則な縦ひだ: 2周波の合成で襞幅にゆらぎを与え、山は明るく光沢、谷は深く沈む。
         for (let x = 0; x < w; x++) {
-            const shade = Math.sin(x / w * folds * Math.PI * 2) * 0.5 + 0.5; // 0..1
-            const r = Math.round(70 + shade * 150);  // 深紅〜明るい劇場レッド
-            const g = Math.round(8 + shade * 26);
-            const b = Math.round(12 + shade * 30);
+            const u = x / w;
+            const base = Math.sin(u * folds * Math.PI * 2);
+            const f = base * 0.72 + Math.sin(u * folds * Math.PI * 4 + 1.7) * 0.28;
+            const t = f * 0.5 + 0.5;                                  // 0(谷)..1(山)
+            const ridge = Math.pow(t, 1.3);                           // 山のふくらみ
+            const crease = Math.pow(1 - t, 3.0) * 0.7;               // 谷の深い陰り
+            const crest = Math.pow(Math.max(0, base), 12) * 0.35;    // 山頂の細いハイライト
+            let L = 0.28 + ridge * 0.9 - crease + crest;
+            L = Math.max(0.05, Math.min(1.12, L));
+            const r = Math.min(255, Math.round(26 + 165 * L));
+            const g = Math.min(255, Math.round(5 + 24 * L));
+            const b = Math.min(255, Math.round(10 + 28 * L));
             ctx.fillStyle = `rgb(${r},${g},${b})`;
             ctx.fillRect(x, 0, 1, h);
         }
+        // 縦方向の陰影: 上端は寄せ集めで暗く、下端も軽く沈める
         const vg = ctx.createLinearGradient(0, 0, 0, h);
-        vg.addColorStop(0.0, 'rgba(0,0,0,0.5)');
-        vg.addColorStop(0.15, 'rgba(0,0,0,0)');
-        vg.addColorStop(0.85, 'rgba(0,0,0,0)');
-        vg.addColorStop(1.0, 'rgba(0,0,0,0.45)');
+        vg.addColorStop(0.0, 'rgba(0,0,0,0.55)');
+        vg.addColorStop(0.12, 'rgba(0,0,0,0.12)');
+        vg.addColorStop(0.5, 'rgba(0,0,0,0)');
+        vg.addColorStop(0.9, 'rgba(0,0,0,0.06)');
+        vg.addColorStop(1.0, 'rgba(0,0,0,0.4)');
         ctx.fillStyle = vg;
+        ctx.fillRect(0, 0, w, h);
+        // ほのかな光沢(上中央から柔らかく)
+        const sg = ctx.createRadialGradient(w * 0.5, h * 0.16, 0, w * 0.5, h * 0.16, w * 0.75);
+        sg.addColorStop(0.0, 'rgba(255,140,140,0.07)');
+        sg.addColorStop(1.0, 'rgba(255,140,140,0)');
+        ctx.fillStyle = sg;
         ctx.fillRect(0, 0, w, h);
     }
 
@@ -601,29 +618,79 @@ export class SongAfter extends BaseSong {
         return t;
     }
 
-    // 上部の布(横幕)のテクスチャ。縦ひだの赤い布 + 下辺の連なるスワッグ(波形)に
-    // 金フリンジ、各スワッグの継ぎ目に小さな金のしずく、上端に金の縁取り。
+    // 上部の布(横幕)のテクスチャ。自然に垂れ下がるフェストゥーン(swag)を連ね、
+    // 入れ子の襞で陰影、寄せ点に縦の陰、垂れ下辺に沿って金フリンジ、継ぎ目に金のしずく。
     createValanceTexture() {
-        const W = 1024, H = 320, baseY = 168, swags = 5;
+        const W = 1024, H = 512, swags = 5;
+        const sw = W / swags, topBody = 96, sag = 250;
         const c = document.createElement('canvas');
         c.width = W; c.height = H;
         const ctx = c.getContext('2d');
-        this._paintVelvetShape(ctx, W, H, baseY, swags, 22);
-        // 上端の金の縁取り
+        // 二次ベジエの下辺(垂れ)を返すヘルパ
+        const bez = (xL, xR, tt) => {
+            const cx = (xL + xR) / 2;
+            const mx = (1 - tt) * (1 - tt) * xL + 2 * (1 - tt) * tt * cx + tt * tt * xR;
+            const my = (1 - tt) * (1 - tt) * topBody + 2 * (1 - tt) * tt * (topBody + sag) + tt * tt * topBody;
+            return [mx, my];
+        };
+        // シルエット(上の帯 + 各フェストゥーンの垂れ)を clip
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, W, topBody);
+        for (let i = 0; i < swags; i++) {
+            const xL = i * sw, xR = (i + 1) * sw, cx = xL + sw / 2;
+            ctx.moveTo(xL, topBody);
+            ctx.quadraticCurveTo(cx, topBody + sag, xR, topBody);
+        }
+        ctx.clip();
+        this._drawVelvet(ctx, W, H, 16);
+        // 各フェストゥーンの襞(入れ子の垂れ曲線)と寄せ点の陰
+        for (let i = 0; i < swags; i++) {
+            const xL = i * sw, xR = (i + 1) * sw, cx = xL + sw / 2;
+            const nFolds = 7;
+            for (let k = 1; k <= nFolds; k++) {
+                const d = sag * (k / (nFolds + 1));
+                ctx.lineWidth = 2 + (1 - k / nFolds) * 4;
+                ctx.strokeStyle = (k % 2 === 0) ? 'rgba(255,205,205,0.07)' : 'rgba(0,0,0,0.20)';
+                ctx.beginPath();
+                ctx.moveTo(xL, topBody);
+                ctx.quadraticCurveTo(cx, topBody + d * 1.15, xR, topBody);
+                ctx.stroke();
+            }
+            for (const gx of [xL, xR]) {
+                const vg = ctx.createLinearGradient(gx - 14, 0, gx + 14, 0);
+                vg.addColorStop(0.0, 'rgba(0,0,0,0)');
+                vg.addColorStop(0.5, 'rgba(0,0,0,0.30)');
+                vg.addColorStop(1.0, 'rgba(0,0,0,0)');
+                ctx.fillStyle = vg;
+                ctx.fillRect(gx - 14, topBody - 16, 28, sag);
+            }
+        }
+        ctx.restore();
+        // 金フリンジ: 各フェストゥーンの垂れ下辺に沿ってビーズ + 短い房
+        for (let i = 0; i < swags; i++) {
+            const xL = i * sw, xR = (i + 1) * sw;
+            const N = 20;
+            for (let k = 0; k <= N; k++) {
+                const [mx, my] = bez(xL, xR, k / N);
+                this._goldBead(ctx, mx, my, 5.5);
+                if (k % 2 === 0) {
+                    ctx.strokeStyle = '#caa23e'; ctx.lineWidth = 2.5;
+                    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx, my + 13); ctx.stroke();
+                    this._goldBead(ctx, mx, my + 15, 3);
+                }
+            }
+        }
+        // 上端の金縁
         ctx.fillStyle = 'rgba(217,178,76,0.9)';
-        ctx.fillRect(0, 0, W, 10);
-        // 各スワッグの継ぎ目に金のしずく(布が寄せ集められた点)
-        const sw = W / swags;
+        ctx.fillRect(0, 0, W, 12);
+        // 継ぎ目(寄せ点)の金のしずく(布が束ねられた点)
         for (let i = 0; i <= swags; i++) {
             const jx = i * sw;
-            ctx.strokeStyle = '#caa23e';
-            ctx.lineWidth = 5;
-            ctx.beginPath();
-            ctx.moveTo(jx, baseY - 4);
-            ctx.lineTo(jx, baseY + 22);
-            ctx.stroke();
-            this._goldBead(ctx, jx, baseY + 28, 10);
-            this._goldBead(ctx, jx, baseY + 44, 6);
+            ctx.strokeStyle = '#caa23e'; ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.moveTo(jx, topBody - 8); ctx.lineTo(jx, topBody + 22); ctx.stroke();
+            this._goldBead(ctx, jx, topBody + 28, 11);
+            this._goldBead(ctx, jx, topBody + 46, 7);
         }
         const t = new THREE.CanvasTexture(c);
         t.anisotropy = 4;
