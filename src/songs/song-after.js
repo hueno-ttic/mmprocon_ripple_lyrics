@@ -73,9 +73,7 @@ export class SongAfter extends BaseSong {
         this._curtainLeak = 0;              // 合わせ目からの漏れ光(破裂でパルス)
         this.curtainLeft = null;
         this.curtainRight = null;
-        this.valance = null;                // 上部の横幕(スカラップ+金フリンジ)
-        this.tasselLeft = null;
-        this.tasselRight = null;
+        this.valance = null;                // 上部の布(横幕/スカラップ+金フリンジ)
         this.leakPlane = null;
         this.lake = null;                   // 夜→晴天の湖背景(self-contained / 共有依存なし)
 
@@ -250,8 +248,9 @@ export class SongAfter extends BaseSong {
         this.scene.add(this.curtainLeft);
         this.scene.add(this.curtainRight);
 
-        // 上部バランス(横幕): 画面上端に固定。下辺はスカラップ(波形)で金フリンジ付き。
-        const valGeo = new THREE.PlaneGeometry(56, 14);
+        // 上部の布(バランス/横幕): 画面上端に常に掛かる赤い布。下辺はスカラップ(波形)で
+        // 金フリンジ付き。開いても閉じても常に上部に見えるよう、前面・大きめに配置する。
+        const valGeo = new THREE.PlaneGeometry(58, 22);
         const valMat = new THREE.MeshBasicMaterial({
             map: this.createValanceTexture(),
             alphaTest: 0.5,
@@ -259,22 +258,8 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
         this.valance = new THREE.Mesh(valGeo, valMat);
-        this.valance.position.set(0, 22, -4.9);
+        this.valance.position.set(0, 19, -4.6); // 上端から垂れ下がり、緞帳より手前
         this.scene.add(this.valance);
-
-        // 金のタッセル(房付きの締め紐): 緞帳が開いて束ねられている時に内側端へ現れる。
-        const tasselTex = this.createTasselTexture();
-        const tasselGeo = new THREE.PlaneGeometry(3.4, 7.5);
-        const mkTassel = () => new THREE.Mesh(tasselGeo.clone(), new THREE.MeshBasicMaterial({
-            map: tasselTex, transparent: true, opacity: 1, depthWrite: false, side: THREE.DoubleSide
-        }));
-        this.tasselLeft = mkTassel();
-        this.tasselRight = mkTassel();
-        // 開演前は束ねられた側幕の生地の上(内側端より外側)へ表示(全開位置)
-        this.tasselLeft.position.set(-this.openInner - 2.0, this.curtainCenterY - 1.5, -4.7);
-        this.tasselRight.position.set(this.openInner + 2.0, this.curtainCenterY - 1.5, -4.7);
-        this.scene.add(this.tasselLeft);
-        this.scene.add(this.tasselRight);
 
         // 緞帳の合わせ目(中央)から漏れる光 — 閉じている間だけ見え、破裂や進行で強まる。
         const leakGeo = new THREE.PlaneGeometry(2.6, this.panelH);
@@ -616,64 +601,29 @@ export class SongAfter extends BaseSong {
         return t;
     }
 
-    // 上部バランス(横幕)のテクスチャ(縦ひだ + 下辺スカラップ金フリンジ)
+    // 上部の布(横幕)のテクスチャ。縦ひだの赤い布 + 下辺の連なるスワッグ(波形)に
+    // 金フリンジ、各スワッグの継ぎ目に小さな金のしずく、上端に金の縁取り。
     createValanceTexture() {
+        const W = 1024, H = 320, baseY = 168, swags = 5;
         const c = document.createElement('canvas');
-        c.width = 1024; c.height = 256;
+        c.width = W; c.height = H;
         const ctx = c.getContext('2d');
-        this._paintVelvetShape(ctx, 1024, 256, 120, 6, 26);
-        const t = new THREE.CanvasTexture(c);
-        t.anisotropy = 4;
-        return t;
-    }
-
-    // 金のタッセル(締め紐+房)。透明背景に描き、開いた緞帳の束ね位置に重ねる。
-    createTasselTexture() {
-        const c = document.createElement('canvas');
-        c.width = 128; c.height = 256;
-        const ctx = c.getContext('2d');
-        const cx = 64;
-        // 締め紐(緞帳を抱く輪)
-        ctx.strokeStyle = '#caa23e';
-        ctx.lineWidth = 10;
-        ctx.beginPath();
-        ctx.moveTo(14, 40);
-        ctx.quadraticCurveTo(cx, 78, 114, 40);
-        ctx.stroke();
-        // 紐の縦のたれ
-        ctx.lineWidth = 7;
-        ctx.beginPath();
-        ctx.moveTo(cx, 70);
-        ctx.lineTo(cx, 120);
-        ctx.stroke();
-        // 房の頭(ふくらみ)
-        const head = ctx.createRadialGradient(cx - 6, 120, 4, cx, 132, 26);
-        head.addColorStop(0.0, '#fff3c4');
-        head.addColorStop(0.5, '#e7c163');
-        head.addColorStop(1.0, '#9a6e1f');
-        ctx.fillStyle = head;
-        ctx.beginPath();
-        ctx.ellipse(cx, 134, 24, 30, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // 房の糸(下に垂れる)
-        for (let i = 0; i < 11; i++) {
-            const fx = cx - 22 + i * 4.4;
-            const len = 70 + Math.sin(i * 1.7) * 10;
-            const g = ctx.createLinearGradient(fx, 150, fx, 150 + len);
-            g.addColorStop(0.0, '#e7c163');
-            g.addColorStop(1.0, '#8a5f1a');
-            ctx.strokeStyle = g;
-            ctx.lineWidth = 3.4;
+        this._paintVelvetShape(ctx, W, H, baseY, swags, 22);
+        // 上端の金の縁取り
+        ctx.fillStyle = 'rgba(217,178,76,0.9)';
+        ctx.fillRect(0, 0, W, 10);
+        // 各スワッグの継ぎ目に金のしずく(布が寄せ集められた点)
+        const sw = W / swags;
+        for (let i = 0; i <= swags; i++) {
+            const jx = i * sw;
+            ctx.strokeStyle = '#caa23e';
+            ctx.lineWidth = 5;
             ctx.beginPath();
-            ctx.moveTo(fx, 152);
-            ctx.lineTo(fx + Math.sin(i) * 2, 152 + len);
+            ctx.moveTo(jx, baseY - 4);
+            ctx.lineTo(jx, baseY + 22);
             ctx.stroke();
-        }
-        // 房先のビーズ
-        for (let i = 0; i < 11; i++) {
-            const fx = cx - 22 + i * 4.4;
-            const len = 70 + Math.sin(i * 1.7) * 10;
-            this._goldBead(ctx, fx + Math.sin(i) * 2, 152 + len, 3.2);
+            this._goldBead(ctx, jx, baseY + 28, 10);
+            this._goldBead(ctx, jx, baseY + 44, 6);
         }
         const t = new THREE.CanvasTexture(c);
         t.anisotropy = 4;
@@ -1302,18 +1252,6 @@ export class SongAfter extends BaseSong {
         if (this.curtainLeft) this.curtainLeft.position.x = leftInner - this.panelW / 2;
         if (this.curtainRight) this.curtainRight.position.x = rightInner + this.panelW / 2;
 
-        // 金のタッセル: 緞帳が開いて束ねられているほど現れる。房は開口部ではなく
-        // 「側幕の生地の上(内側端より外側)」に置く(中央に浮かないように)。
-        const tasselShow = Math.max(0, Math.min(1, (1 - cf) * 1.3));
-        if (this.tasselLeft) {
-            this.tasselLeft.position.set(leftInner - 2.0, this.curtainCenterY - 1.5, -4.7);
-            this.tasselLeft.material.opacity = tasselShow;
-        }
-        if (this.tasselRight) {
-            this.tasselRight.position.set(rightInner + 2.0, this.curtainCenterY - 1.5, -4.7);
-            this.tasselRight.material.opacity = tasselShow;
-        }
-
         // 漏れ光: 中央の合わせ目から。曲が進むほど増し、破裂で一瞬強まる。閉じているほど強い。
         this._curtainLeak *= 0.92;
         if (this.leakPlane) {
@@ -1589,7 +1527,7 @@ export class SongAfter extends BaseSong {
             this.floor.geometry.dispose();
             this.floor.material.dispose();
         }
-        for (const m of [this.curtainLeft, this.curtainRight, this.valance, this.tasselLeft, this.tasselRight]) {
+        for (const m of [this.curtainLeft, this.curtainRight, this.valance]) {
             if (!m) continue;
             m.geometry.dispose();
             if (m.material.map) m.material.map.dispose();
