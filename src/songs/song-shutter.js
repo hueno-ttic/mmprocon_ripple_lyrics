@@ -510,6 +510,7 @@ export class SongShutter extends BaseSong {
         overlay.innerHTML = `
             <div style="font-family:monospace; color:#fff; letter-spacing:.25em; font-size:13px; opacity:.8;">SELECT YOUR SUBJECT</div>
             <div style="font-family:'Shippori Mincho',serif; color:#fff; font-size:21px;">どちらを撮影しますか？</div>
+            <div style="font-family:monospace; color:#fff; font-size:12px; letter-spacing:.12em; opacity:.6;">選ぶと撮影(再生)がはじまります</div>
             <div style="display:flex; gap:24px; flex-wrap:wrap; justify-content:center;">
                 ${castBtn('miku', '初音ミク', '#39C5BB')}
                 ${castBtn('rin', '鏡音リン', '#FFEE11')}
@@ -517,12 +518,23 @@ export class SongShutter extends BaseSong {
         this.songWrapper.appendChild(overlay);
         requestAnimationFrame(() => { overlay.style.opacity = '1'; });
 
+        // 選択中は下部の再生ボタンを視覚的にも無効化(押せそうに見せない)。選択確定/破棄時に復帰する。
+        this._playBtnEl = document.getElementById('play-pause-btn');
+        if (this._playBtnEl) {
+            this._playBtnEl.style.opacity = '0.4';
+            this._playBtnEl.style.pointerEvents = 'none';
+        }
+
         overlay.querySelectorAll('.shutter-cast-btn').forEach((btn) => {
             btn.addEventListener('mouseenter', () => { btn.style.transform = 'translateY(-3px)'; });
             btn.addEventListener('mouseleave', () => { btn.style.transform = 'none'; });
             btn.addEventListener('click', () => {
                 const key = btn.getAttribute('data-key');
                 this.isSelectingCast = false;
+                if (this._playBtnEl) {                 // 再生ボタンを復帰
+                    this._playBtnEl.style.opacity = '1';
+                    this._playBtnEl.style.pointerEvents = 'auto';
+                }
                 overlay.style.opacity = '0';
                 setTimeout(() => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }, 400);
                 onChosen(key);
@@ -3327,7 +3339,15 @@ export class SongShutter extends BaseSong {
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
         window.removeEventListener('keydown', this.boundOnKeyDown);
-        
+
+        // 被写体選択中にESCで湖へ戻った場合でも、無効化した再生ボタンを確実に復帰させる
+        this.isSelectingCast = false;
+        if (this._playBtnEl) {
+            this._playBtnEl.style.opacity = '1';
+            this._playBtnEl.style.pointerEvents = 'auto';
+            this._playBtnEl = null;
+        }
+
         // カメラ首振り ＆ 撮影イベントの確実な解除
         this.songWrapper.removeEventListener('mousedown', this.boundOnMouseDown);
         this.songWrapper.removeEventListener('mousemove', this.boundOnMouseMove);
