@@ -76,7 +76,7 @@ export class SongAfter extends BaseSong {
 
         // 残光システム
         this.kindledCount = 0;              // 照らし切った歌詞の累計
-        this.litThreshold = 1400;           // 照らし切り判定に必要な累計照射時間(ms)
+        this.litThreshold = 2200;           // 照らし切り判定に必要な累計照射時間(ms)(しっかり当てないと弾けない)
         this.maxSeatLights = this.isMobile ? 60 : 100;
 
         // バラ
@@ -779,18 +779,17 @@ export class SongAfter extends BaseSong {
         const geo = new THREE.PlaneGeometry(1024 / 110, 128 / 110);
         const mesh = new THREE.Mesh(geo, material);
 
-        // 歌詞はミクの前方(客席側)・目線の届く高さ帯に出し、視線が自然に向くようにする。
-        // (背後や高すぎる位置に出ると首の可動域を超えて顔が向けられないため)
+        // 画面いっぱいに歌詞を散らしつつ、ミク前方(客席側)に出して視線も自然に向くようにする。
         mesh.position.set(
-            (Math.random() - 0.5) * 15,
-            Math.random() * 3.2 + 1.4,   // 1.4〜4.6
+            (Math.random() - 0.5) * 20,  // 左右いっぱい(±10)
+            Math.random() * 4.8 + 1.3,   // 上下も広く(1.3〜6.1)
             Math.random() * 4.6 - 0.6    // -0.6〜4.0(ミク頭部 z≈-2 より手前=客席側)
         );
         mesh.castShadow = !this.isMobile;
 
         mesh.userData = {
             birth: spawnTime,
-            life: 9000,
+            life: 14000,        // 安全上限(通常は発話後フェードで消える)
             hoverProgress: 0,
             litTime: 0,        // 累計照射時間(ms)
             kindled: false,    // 照らし切り済みフラグ
@@ -1082,10 +1081,16 @@ export class SongAfter extends BaseSong {
                 try { pl && pl.requestPlay(); } catch (e) { /* 音源制御不可でもショーは進む */ }
             }
         }
-        // 終演: 紙吹雪にした量に応じてカーテンが上へ開く(少なくても下限ぶんは開く)
+        // 曲の進行度(0→1)と、アウトロ(終盤約22秒)でゆっくり開くための進捗。
+        const songProg = duration > 0 ? Math.max(0, Math.min(1, position / duration)) : 0;
+        const outroMs = 22000;
+        const outroP = duration > 0
+            ? Math.max(0, Math.min(1, (position - (duration - outroMs)) / outroMs))
+            : 0;
+        // アウトロ: 紙吹雪にした量に応じた幅まで、カーテンがゆっくり上がっていく(下限あり)
         const kindleRatio = Math.min(1, this.kindledCount / this.openFullCount);
         const maxOpen = this.curtainMinOpen + (1 - this.curtainMinOpen) * kindleRatio;
-        this.curtainOpen = maxOpen * ease(f);
+        this.curtainOpen = maxOpen * ease(outroP);
 
         // カーテンの目標Y(phaseごと)
         let curtainTargetY;
@@ -1098,17 +1103,18 @@ export class SongAfter extends BaseSong {
         }
         this.curtain.position.y += (curtainTargetY - this.curtain.position.y) * Math.min(1, dt * 2.4);
 
-        // 漏れ光: 破裂でパルス→減衰。カーテンが閉じているほど強く現れる。
+        // 漏れ光: 曲が進むほど合わせ目から漏れる光が増し、破裂でさらに一瞬強まる。
+        // カーテンが閉じているほど(coverFrac)強く現れ、開くにつれ全開の光へ溶ける。
         this._curtainLeak *= 0.92;
         const coverFrac = Math.max(0, Math.min(1,
             (this.curtainOpenY - this.curtain.position.y) / (this.curtainOpenY - this.curtainCoverY)));
         if (this.leakPlane) {
             this.leakPlane.position.y = this.curtain.position.y;
-            this.leakPlane.material.opacity = coverFrac * (0.05 + this._curtainLeak * 0.9);
+            this.leakPlane.material.opacity = coverFrac * (0.04 + 0.34 * songProg + this._curtainLeak * 0.8);
         }
 
-        // 幕間の湖: 終演でカーテンが開くにつれ、その先が夜→晴天へ移ろう。
-        const dayMix = ease(f);
+        // 幕間の湖: アウトロでカーテンが開くにつれ、その先が夜→晴天へ移ろう。
+        const dayMix = ease(outroP);
         if (this.lake) this.lake.update(rel, dayMix);
 
         // 星空: サビは夜空が瞬く。終演=昼へ向かうので消えてゆく。
@@ -1177,8 +1183,9 @@ export class SongAfter extends BaseSong {
             const p = ud.hoverProgress;
 
             // 照射時間の蓄積 → 照らし切り(kindle)判定
-            // 照らし切った瞬間に「光って破裂」: 紙吹雪が舞い降り、同時に客席の灯としても残る
-            if (isIlluminated) {
+            // 蓄積は「スポットライトで照らした時間」だけ。サビで全体が明るくなっても
+            // 自動的に弾けない(自分で照らした歌詞だけが紙吹雪になる)。
+            if (litBySpot && f < 0.3) {
                 ud.litTime += dtMs;
                 if (!ud.kindled && ud.litTime >= this.litThreshold) {
                     ud.kindled = true;
@@ -1227,24 +1234,30 @@ export class SongAfter extends BaseSong {
             const s = (1.0 + p * 0.35) * (1.0 + pulse * 0.25) * (1.0 + ud.kindleFlash * 0.15);
             mesh.scale.set(s, s, 1);
 
-            // 発光: 通常はエメラルド。照らし切ると暖色の灯色へ移ろう
+            // 発光: 暗いステージでも黒くつぶれないよう常にほのかに自己発光。
+            // 照らし切るほど暖色へ寄り、スポット/歌唱で強く光る。
             const litRatio = Math.min(1, ud.litTime / this.litThreshold);
-            const hue = 0.44 + pulse * 0.05 - litRatio * 0.36; // 0.44(緑) → 0.08(暖色)
-            const lum = (0.45 * p + pulse * 0.45 + ud.kindleFlash * 0.5 + (ud.kindled ? 0.18 : 0)) * stageDim;
-            mesh.material.emissive.setHSL(Math.max(0.06, hue), 0.85, Math.min(0.85, lum));
+            const hue = 0.46 + pulse * 0.05 - litRatio * 0.38; // 緑 → 暖色
+            const baseGlow = 0.26;                              // 常時のほのかな白光(発話後も黒くならない)
+            let lum = Math.min(0.92, baseGlow + 0.5 * p + pulse * 0.4 + ud.kindleFlash * 0.5 + (ud.kindled ? 0.15 : 0));
+            lum *= (0.4 + 0.6 * stageDim);                      // 終演のみ少し沈ませる
+            mesh.material.emissive.setHSL(Math.max(0.06, hue), 0.7, lum);
 
-            // Fade in/out
-            if (age < 150) {
-                mesh.material.opacity = age / 150;
-            } else if (age > ud.life - 200) {
-                mesh.material.opacity = Math.max(0, (ud.life - age) / 200);
+            // 出現→発話中は保持→発話後はゆるやかにフェードアウト(黒く残さない)。
+            // スポットライトで照らしている間は消えずに留まり、読んで弾けるまで粘れる。
+            const fadeInMs = 200, singHold = 3000, fadeOutMs = 2200;
+            let targetOpacity;
+            if (age < fadeInMs) {
+                targetOpacity = age / fadeInMs;
+            } else if (litBySpot || age <= singHold) {
+                targetOpacity = 1.0;
             } else {
-                mesh.material.opacity = 1.0;
+                targetOpacity = Math.max(0, 1 - (age - singHold) / fadeOutMs);
             }
+            mesh.material.opacity += (targetOpacity - mesh.material.opacity) * Math.min(1, dt * 6);
 
-            if (age > ud.life || f >= 1) {
-                // 照らし切れなかった歌詞は、灯にも紙吹雪にもならず静かに消える
-                // (照らし切った歌詞は kindle 時に破裂・灯化を済ませている)
+            // フェードし切った歌詞、または終演で除去(照らしている間は残す)
+            if ((mesh.material.opacity <= 0.02 && !litBySpot && age > singHold) || age > ud.life || f >= 1) {
                 this.scene.remove(mesh);
                 mesh.material.map.dispose();
                 mesh.material.dispose();
