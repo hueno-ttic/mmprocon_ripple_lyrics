@@ -270,9 +270,9 @@ export class SongAfter extends BaseSong {
         }));
         this.tasselLeft = mkTassel();
         this.tasselRight = mkTassel();
-        // 開演前は束ねられた内側端へ表示(全開位置)
-        this.tasselLeft.position.set(-this.openInner + 1.4, this.curtainCenterY - 1.5, -4.7);
-        this.tasselRight.position.set(this.openInner - 1.4, this.curtainCenterY - 1.5, -4.7);
+        // 開演前は束ねられた側幕の生地の上(内側端より外側)へ表示(全開位置)
+        this.tasselLeft.position.set(-this.openInner - 2.0, this.curtainCenterY - 1.5, -4.7);
+        this.tasselRight.position.set(this.openInner + 2.0, this.curtainCenterY - 1.5, -4.7);
         this.scene.add(this.tasselLeft);
         this.scene.add(this.tasselRight);
 
@@ -1302,14 +1302,15 @@ export class SongAfter extends BaseSong {
         if (this.curtainLeft) this.curtainLeft.position.x = leftInner - this.panelW / 2;
         if (this.curtainRight) this.curtainRight.position.x = rightInner + this.panelW / 2;
 
-        // 金のタッセル: 緞帳が開いて束ねられているほど、内側端にはっきり現れる
+        // 金のタッセル: 緞帳が開いて束ねられているほど現れる。房は開口部ではなく
+        // 「側幕の生地の上(内側端より外側)」に置く(中央に浮かないように)。
         const tasselShow = Math.max(0, Math.min(1, (1 - cf) * 1.3));
         if (this.tasselLeft) {
-            this.tasselLeft.position.set(leftInner + 1.4, this.curtainCenterY - 1.5, -4.7);
+            this.tasselLeft.position.set(leftInner - 2.0, this.curtainCenterY - 1.5, -4.7);
             this.tasselLeft.material.opacity = tasselShow;
         }
         if (this.tasselRight) {
-            this.tasselRight.position.set(rightInner - 1.4, this.curtainCenterY - 1.5, -4.7);
+            this.tasselRight.position.set(rightInner + 2.0, this.curtainCenterY - 1.5, -4.7);
             this.tasselRight.material.opacity = tasselShow;
         }
 
