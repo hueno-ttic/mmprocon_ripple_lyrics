@@ -62,15 +62,20 @@ export class SongAfter extends BaseSong {
         this._introStartRel = 0;
         this._musicResumed = false;
 
-        this.curtainW = 80;                 // 背景(湖)を覆う前面カーテン
-        this.curtainH = 46;
-        this.curtainCoverY = 13;            // 閉: 視界を覆う定位置
-        this.curtainOpenY = 65;             // 開: フレーム上方へ退避(下端が画面外)
-        this.curtainOpen = 0;               // 終演の開き具合 0(閉)→1(全開)
+        // 左右に開閉する二枚の緞帳 + 上部バランス(横幕) + 金のタッセル(舞台幕の意匠)
+        this.curtainCloseFrac = 0;          // 0=全開(左右に退く) → 1=閉(中央で合わさる)
+        this.panelW = 26;                   // 片側パネルの幅(閉で中央〜画面端を覆う)
+        this.panelH = 46;
+        this.curtainCenterY = 8;            // パネルの上下中心
+        this.openInner = 15;                // 全開時、内側端が中央から退く距離(=開口の半幅)
         this.curtainMinOpen = 0.18;         // 紙吹雪が少なくても最低これだけは開く
         this.openFullCount = this.isMobile ? 8 : 12; // この数を照らし切れば終演で全開
         this._curtainLeak = 0;              // 合わせ目からの漏れ光(破裂でパルス)
-        this.curtainTex = null;
+        this.curtainLeft = null;
+        this.curtainRight = null;
+        this.valance = null;                // 上部の横幕(スカラップ+金フリンジ)
+        this.tasselLeft = null;
+        this.tasselRight = null;
         this.leakPlane = null;
         this.lake = null;                   // 夜→晴天の湖背景(self-contained / 共有依存なし)
 
@@ -227,24 +232,52 @@ export class SongAfter extends BaseSong {
         this.scene.add(this.rimLight);
         this.scene.add(this.rimLight.target);
 
-        // 赤い緞帳 — 背景(湖)を覆う前面カーテン(Z=-5)。開演前は上方へ退避し、
-        // イントロで降りて視界を覆い、終演で再び上へ開いて湖を見せる。
-        const curtainGeo = new THREE.PlaneGeometry(this.curtainW, this.curtainH);
-        this.curtainTex = this.createCurtainTexture();
-        const curtainMat = new THREE.MeshStandardMaterial({
-            map: this.curtainTex,
+        // ─── 舞台の赤い緞帳(左右に開閉) + 上部バランス(横幕) + 金のタッセル ───
+        // 緞帳は自己発光(MeshBasic=照明非依存)で、暗いステージでも鮮やかな赤+金に見せる。
+        // 裾のスカラップ(波形)は alphaTest のカットアウトで抜く(不透明パスで描画=湖を確実に遮蔽)。
+        const panelMat = (mirror) => new THREE.MeshBasicMaterial({
+            map: this.createSidePanelTexture(mirror),
+            alphaTest: 0.5,
             color: 0xffffff,
-            emissive: new THREE.Color(0x3a0509), // 暗がりでも赤がほのかに沈んで見えるように
-            roughness: 0.95,
-            metalness: 0.0,
             side: THREE.DoubleSide
         });
-        this.curtain = new THREE.Mesh(curtainGeo, curtainMat);
-        this.curtain.position.set(0, this.curtainOpenY, -5); // 開演前はフレーム上方に退避
-        this.scene.add(this.curtain);
+        const panelGeo = new THREE.PlaneGeometry(this.panelW, this.panelH);
+        this.curtainLeft = new THREE.Mesh(panelGeo, panelMat(false));
+        this.curtainRight = new THREE.Mesh(panelGeo.clone(), panelMat(true));
+        // 開演前(preroll)は左右に開いた状態で待ち、夜の湖を見せる(=全開位置で初期化)
+        this.curtainLeft.position.set(-this.openInner - this.panelW / 2, this.curtainCenterY, -5);
+        this.curtainRight.position.set(this.openInner + this.panelW / 2, this.curtainCenterY, -5);
+        this.scene.add(this.curtainLeft);
+        this.scene.add(this.curtainRight);
 
-        // 緞帳の合わせ目から漏れる光 — 破裂のたびに一瞬強まり、閉じている間だけ見える。
-        const leakGeo = new THREE.PlaneGeometry(2.6, this.curtainH);
+        // 上部バランス(横幕): 画面上端に固定。下辺はスカラップ(波形)で金フリンジ付き。
+        const valGeo = new THREE.PlaneGeometry(56, 14);
+        const valMat = new THREE.MeshBasicMaterial({
+            map: this.createValanceTexture(),
+            alphaTest: 0.5,
+            color: 0xffffff,
+            side: THREE.DoubleSide
+        });
+        this.valance = new THREE.Mesh(valGeo, valMat);
+        this.valance.position.set(0, 22, -4.9);
+        this.scene.add(this.valance);
+
+        // 金のタッセル(房付きの締め紐): 緞帳が開いて束ねられている時に内側端へ現れる。
+        const tasselTex = this.createTasselTexture();
+        const tasselGeo = new THREE.PlaneGeometry(3.4, 7.5);
+        const mkTassel = () => new THREE.Mesh(tasselGeo.clone(), new THREE.MeshBasicMaterial({
+            map: tasselTex, transparent: true, opacity: 1, depthWrite: false, side: THREE.DoubleSide
+        }));
+        this.tasselLeft = mkTassel();
+        this.tasselRight = mkTassel();
+        // 開演前は束ねられた内側端へ表示(全開位置)
+        this.tasselLeft.position.set(-this.openInner + 1.4, this.curtainCenterY - 1.5, -4.7);
+        this.tasselRight.position.set(this.openInner - 1.4, this.curtainCenterY - 1.5, -4.7);
+        this.scene.add(this.tasselLeft);
+        this.scene.add(this.tasselRight);
+
+        // 緞帳の合わせ目(中央)から漏れる光 — 閉じている間だけ見え、破裂や進行で強まる。
+        const leakGeo = new THREE.PlaneGeometry(2.6, this.panelH);
         const leakMat = new THREE.MeshBasicMaterial({
             map: this.glowTexture,
             color: 0xffe6b0,
@@ -255,7 +288,7 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
         this.leakPlane = new THREE.Mesh(leakGeo, leakMat);
-        this.leakPlane.position.set(0, this.curtainOpenY, -4.8); // カーテン手前で一緒に昇降
+        this.leakPlane.position.set(0, this.curtainCenterY, -4.8); // 中央の合わせ目
         this.scene.add(this.leakPlane);
 
         // 共有バラジオメトリ/マテリアル
@@ -497,37 +530,154 @@ export class SongAfter extends BaseSong {
         };
     }
 
-    // ベロアの赤い緞帳テクスチャ(縦ひだ + 上下の陰影 + 裾の金モール)
-    createCurtainTexture() {
-        const c = document.createElement('canvas');
-        c.width = 512; c.height = 512;
-        const ctx = c.getContext('2d');
-        // 縦ひだ: x方向に明暗を周期変化させてベロアの折り目を表現
-        const folds = 16;
-        for (let x = 0; x < 512; x++) {
-            const shade = Math.sin(x / 512 * folds * Math.PI * 2) * 0.5 + 0.5; // 0..1
-            const r = Math.round(38 + shade * 130);
-            const g = Math.round(2 + shade * 18);
-            const b = Math.round(6 + shade * 24);
+    // ベロアの赤い折り目を塗る共通処理(縦ひだ + 上下の陰影)
+    _drawVelvet(ctx, w, h, folds) {
+        for (let x = 0; x < w; x++) {
+            const shade = Math.sin(x / w * folds * Math.PI * 2) * 0.5 + 0.5; // 0..1
+            const r = Math.round(70 + shade * 150);  // 深紅〜明るい劇場レッド
+            const g = Math.round(8 + shade * 26);
+            const b = Math.round(12 + shade * 30);
             ctx.fillStyle = `rgb(${r},${g},${b})`;
-            ctx.fillRect(x, 0, 1, 512);
+            ctx.fillRect(x, 0, 1, h);
         }
-        // 上下の陰影(天地を落ち着かせる)
-        const vg = ctx.createLinearGradient(0, 0, 0, 512);
-        vg.addColorStop(0.0, 'rgba(0,0,0,0.55)');
-        vg.addColorStop(0.18, 'rgba(0,0,0,0)');
-        vg.addColorStop(0.88, 'rgba(0,0,0,0)');
-        vg.addColorStop(1.0, 'rgba(0,0,0,0.5)');
+        const vg = ctx.createLinearGradient(0, 0, 0, h);
+        vg.addColorStop(0.0, 'rgba(0,0,0,0.5)');
+        vg.addColorStop(0.15, 'rgba(0,0,0,0)');
+        vg.addColorStop(0.85, 'rgba(0,0,0,0)');
+        vg.addColorStop(1.0, 'rgba(0,0,0,0.45)');
         ctx.fillStyle = vg;
-        ctx.fillRect(0, 0, 512, 512);
-        // 裾の金モール
-        const fg = ctx.createLinearGradient(0, 474, 0, 512);
-        fg.addColorStop(0.0, 'rgba(214,176,86,0)');
-        fg.addColorStop(0.6, 'rgba(214,176,86,0.7)');
-        fg.addColorStop(1.0, 'rgba(150,110,40,0.95)');
-        ctx.fillStyle = fg;
-        ctx.fillRect(0, 474, 512, 38);
-        return new THREE.CanvasTexture(c);
+        ctx.fillRect(0, 0, w, h);
+    }
+
+    // 金色のビーズ(房飾りの一粒)
+    _goldBead(ctx, x, y, r) {
+        const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.1, x, y, r);
+        g.addColorStop(0.0, '#fff6cf');
+        g.addColorStop(0.45, '#eece74');
+        g.addColorStop(1.0, '#9a6e1f');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 緞帳の合わせ目側に金の縦モールを描く(mirror=true で左右反転)
+    _drawInnerBraid(ctx, w, h, mirror) {
+        const bx = mirror ? 14 : w - 14; // 内側端
+        const g = ctx.createLinearGradient(bx - 14, 0, bx + 14, 0);
+        g.addColorStop(0.0, 'rgba(154,110,31,0)');
+        g.addColorStop(0.5, 'rgba(233,201,110,0.85)');
+        g.addColorStop(1.0, 'rgba(154,110,31,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(bx - 14, 0, 28, h);
+    }
+
+    // スカラップ(波形)のシルエット内にだけベルベットを描き、円弧に金フリンジを付ける。
+    // clip でシルエットを切るので「内側=不透明(α1)/外側=透明(α0)」が確実に得られる
+    // (alphaTest のカットアウトで湖を遮蔽しつつ波形の裾を表現できる)。
+    _paintVelvetShape(ctx, w, h, baseY, swags, folds, braidMirror) {
+        const sw = w / swags, r = sw / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, w, baseY);                 // 上の矩形(本体)
+        for (let i = 0; i < swags; i++) {         // 下辺の連なる半円(スカラップ)
+            const cx = i * sw + r;
+            ctx.moveTo(cx + r, baseY);
+            ctx.arc(cx, baseY, r, 0, Math.PI, false);
+        }
+        ctx.clip();
+        this._drawVelvet(ctx, w, h, folds);
+        if (braidMirror !== undefined) this._drawInnerBraid(ctx, w, h, braidMirror);
+        ctx.restore();
+        // 円弧に沿った金の縁取り + ビーズ(裾から少し垂れる金フリンジ)
+        for (let i = 0; i < swags; i++) {
+            const cx = i * sw + r;
+            ctx.strokeStyle = '#d9b24c';
+            ctx.lineWidth = Math.max(4, r * 0.12);
+            ctx.beginPath();
+            ctx.arc(cx, baseY, r, 0, Math.PI, false);
+            ctx.stroke();
+            const beads = 9;
+            for (let k = 0; k <= beads; k++) {
+                const a = Math.PI * (k / beads);
+                this._goldBead(ctx, cx + Math.cos(a) * r, baseY + Math.sin(a) * r, Math.max(3, r * 0.08));
+            }
+        }
+    }
+
+    // 片側パネルのテクスチャ(縦ひだ + 裾スカラップ金フリンジ + 内側の金モール)
+    createSidePanelTexture(mirror) {
+        const c = document.createElement('canvas');
+        c.width = 512; c.height = 1024;
+        const ctx = c.getContext('2d');
+        this._paintVelvetShape(ctx, 512, 1024, 1024 - 80, 5, 11, mirror);
+        const t = new THREE.CanvasTexture(c);
+        t.anisotropy = 4;
+        return t;
+    }
+
+    // 上部バランス(横幕)のテクスチャ(縦ひだ + 下辺スカラップ金フリンジ)
+    createValanceTexture() {
+        const c = document.createElement('canvas');
+        c.width = 1024; c.height = 256;
+        const ctx = c.getContext('2d');
+        this._paintVelvetShape(ctx, 1024, 256, 120, 6, 26);
+        const t = new THREE.CanvasTexture(c);
+        t.anisotropy = 4;
+        return t;
+    }
+
+    // 金のタッセル(締め紐+房)。透明背景に描き、開いた緞帳の束ね位置に重ねる。
+    createTasselTexture() {
+        const c = document.createElement('canvas');
+        c.width = 128; c.height = 256;
+        const ctx = c.getContext('2d');
+        const cx = 64;
+        // 締め紐(緞帳を抱く輪)
+        ctx.strokeStyle = '#caa23e';
+        ctx.lineWidth = 10;
+        ctx.beginPath();
+        ctx.moveTo(14, 40);
+        ctx.quadraticCurveTo(cx, 78, 114, 40);
+        ctx.stroke();
+        // 紐の縦のたれ
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        ctx.moveTo(cx, 70);
+        ctx.lineTo(cx, 120);
+        ctx.stroke();
+        // 房の頭(ふくらみ)
+        const head = ctx.createRadialGradient(cx - 6, 120, 4, cx, 132, 26);
+        head.addColorStop(0.0, '#fff3c4');
+        head.addColorStop(0.5, '#e7c163');
+        head.addColorStop(1.0, '#9a6e1f');
+        ctx.fillStyle = head;
+        ctx.beginPath();
+        ctx.ellipse(cx, 134, 24, 30, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // 房の糸(下に垂れる)
+        for (let i = 0; i < 11; i++) {
+            const fx = cx - 22 + i * 4.4;
+            const len = 70 + Math.sin(i * 1.7) * 10;
+            const g = ctx.createLinearGradient(fx, 150, fx, 150 + len);
+            g.addColorStop(0.0, '#e7c163');
+            g.addColorStop(1.0, '#8a5f1a');
+            ctx.strokeStyle = g;
+            ctx.lineWidth = 3.4;
+            ctx.beginPath();
+            ctx.moveTo(fx, 152);
+            ctx.lineTo(fx + Math.sin(i) * 2, 152 + len);
+            ctx.stroke();
+        }
+        // 房先のビーズ
+        for (let i = 0; i < 11; i++) {
+            const fx = cx - 22 + i * 4.4;
+            const len = 70 + Math.sin(i * 1.7) * 10;
+            this._goldBead(ctx, fx + Math.sin(i) * 2, 152 + len, 3.2);
+        }
+        const t = new THREE.CanvasTexture(c);
+        t.anisotropy = 4;
+        return t;
     }
 
     onResize() {
@@ -1107,9 +1257,9 @@ export class SongAfter extends BaseSong {
             this.counterEl.classList.add('visible');
         }
 
-        // 1. 幕(前面カーテン)と幕間の湖
+        // 1. 幕(左右に開閉する緞帳)と幕間の湖
         const ease = (x) => x * x * (3 - 2 * x);
-        // イントロ: 夜の湖を見せたまま、カーテンが上からゆっくり降りて視界を覆う。
+        // イントロ: 夜の湖を見せたまま、緞帳が左右からゆっくり閉じて視界を覆う。
         if (this.actPhase === 'intro') {
             this.introP = Math.max(0, Math.min(1, (rel - this._introStartRel) / this.introDur));
             // 自動再生がすり抜けて曲が進んでしまう環境向けに、降下中は頭(0)で待たせ続ける。
@@ -1131,30 +1281,42 @@ export class SongAfter extends BaseSong {
         const outroP = duration > 0
             ? Math.max(0, Math.min(1, (position - (duration - outroMs)) / outroMs))
             : 0;
-        // アウトロ: 紙吹雪にした量に応じた幅まで、カーテンがゆっくり上がっていく(下限あり)
+        // 緞帳の閉じ具合(0=全開/左右に退く → 1=閉/中央で合わさる)
         const kindleRatio = Math.min(1, this.kindledCount / this.openFullCount);
         const maxOpen = this.curtainMinOpen + (1 - this.curtainMinOpen) * kindleRatio;
-        this.curtainOpen = maxOpen * ease(outroP);
-
-        // カーテンの目標Y(phaseごと)
-        let curtainTargetY;
+        let targetClose;
         if (this.actPhase === 'preroll') {
-            curtainTargetY = this.curtainOpenY;
+            targetClose = 0;                  // 開幕前: 左右に開いて夜の湖を見せる
         } else if (this.actPhase === 'intro') {
-            curtainTargetY = this.curtainOpenY + (this.curtainCoverY - this.curtainOpenY) * ease(this.introP);
+            targetClose = ease(this.introP);  // イントロ: 左右からゆっくり閉じる
         } else {
-            curtainTargetY = this.curtainCoverY + (this.curtainOpenY - this.curtainCoverY) * this.curtainOpen;
+            // アウトロ: 紙吹雪にした量に応じた幅まで、ゆっくり左右へ開いていく(下限あり)
+            targetClose = 1 - maxOpen * ease(outroP);
         }
-        this.curtain.position.y += (curtainTargetY - this.curtain.position.y) * Math.min(1, dt * 2.4);
+        this.curtainCloseFrac += (targetClose - this.curtainCloseFrac) * Math.min(1, dt * 2.4);
+        const cf = this.curtainCloseFrac;
 
-        // 漏れ光: 曲が進むほど合わせ目から漏れる光が増し、破裂でさらに一瞬強まる。
-        // カーテンが閉じているほど(coverFrac)強く現れ、開くにつれ全開の光へ溶ける。
+        // パネル位置: 内側端を中央(0)から openInner まで左右へ退かせる
+        const leftInner = -(1 - cf) * this.openInner;
+        const rightInner = (1 - cf) * this.openInner;
+        if (this.curtainLeft) this.curtainLeft.position.x = leftInner - this.panelW / 2;
+        if (this.curtainRight) this.curtainRight.position.x = rightInner + this.panelW / 2;
+
+        // 金のタッセル: 緞帳が開いて束ねられているほど、内側端にはっきり現れる
+        const tasselShow = Math.max(0, Math.min(1, (1 - cf) * 1.3));
+        if (this.tasselLeft) {
+            this.tasselLeft.position.set(leftInner + 1.4, this.curtainCenterY - 1.5, -4.7);
+            this.tasselLeft.material.opacity = tasselShow;
+        }
+        if (this.tasselRight) {
+            this.tasselRight.position.set(rightInner - 1.4, this.curtainCenterY - 1.5, -4.7);
+            this.tasselRight.material.opacity = tasselShow;
+        }
+
+        // 漏れ光: 中央の合わせ目から。曲が進むほど増し、破裂で一瞬強まる。閉じているほど強い。
         this._curtainLeak *= 0.92;
-        const coverFrac = Math.max(0, Math.min(1,
-            (this.curtainOpenY - this.curtain.position.y) / (this.curtainOpenY - this.curtainCoverY)));
         if (this.leakPlane) {
-            this.leakPlane.position.y = this.curtain.position.y;
-            this.leakPlane.material.opacity = coverFrac * (0.04 + 0.34 * songProg + this._curtainLeak * 0.8);
+            this.leakPlane.material.opacity = cf * (0.04 + 0.34 * songProg + this._curtainLeak * 0.8);
         }
 
         // 幕間の湖: アウトロでカーテンが開くにつれ、その先が夜→晴天へ移ろう。
@@ -1426,10 +1588,11 @@ export class SongAfter extends BaseSong {
             this.floor.geometry.dispose();
             this.floor.material.dispose();
         }
-        if (this.curtain) {
-            this.curtain.geometry.dispose();
-            if (this.curtain.material.map) this.curtain.material.map.dispose();
-            this.curtain.material.dispose();
+        for (const m of [this.curtainLeft, this.curtainRight, this.valance, this.tasselLeft, this.tasselRight]) {
+            if (!m) continue;
+            m.geometry.dispose();
+            if (m.material.map) m.material.map.dispose();
+            m.material.dispose();
         }
         if (this.leakPlane) {
             this.leakPlane.geometry.dispose();
