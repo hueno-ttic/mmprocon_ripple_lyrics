@@ -62,10 +62,11 @@ export class SongAfter extends BaseSong {
         this._introStartRel = 0;
         this._musicResumed = false;
 
-        // 左右に開閉する二枚の緞帳 + 上部バランス(横幕) + 金のタッセル(舞台幕の意匠)
+        // 左右に開閉する二枚の緞帳 + 上部バランス(横幕)
         this.curtainCloseFrac = 0;          // 0=全開(左右に退く) → 1=閉(中央で合わさる)
-        this.panelW = 26;                   // 片側パネルの幅(閉で中央〜画面端を覆う)
-        this.panelH = 46;
+        // パネルは超ワイド(〜21:9)でも閉時に画面端まで覆える幅、縦も画面より高くとる。
+        this.panelW = 34;                   // 片側パネルの幅(閉で中央〜画面端を覆う)
+        this.panelH = 52;
         this.curtainCenterY = 8;            // パネルの上下中心
         this.openInner = 15;                // 全開時、内側端が中央から退く距離(=開口の半幅)
         this.curtainMinOpen = 0.18;         // 紙吹雪が少なくても最低これだけは開く
@@ -250,7 +251,7 @@ export class SongAfter extends BaseSong {
 
         // 上部の布(バランス/横幕): 画面上端に常に掛かる赤い布。下辺はスカラップ(波形)で
         // 金フリンジ付き。開いても閉じても常に上部に見えるよう、前面・大きめに配置する。
-        const valGeo = new THREE.PlaneGeometry(60, 20);
+        const valGeo = new THREE.PlaneGeometry(76, 22);
         const valMat = new THREE.MeshBasicMaterial({
             map: this.createValanceTexture(),
             alphaTest: 0.5,
@@ -258,7 +259,7 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
         this.valance = new THREE.Mesh(valGeo, valMat);
-        this.valance.position.set(0, 13, -4.6); // 上端から垂れ下がり、緞帳より手前
+        this.valance.position.set(0, 11, -4.6); // 上端から垂れ下がり、緞帳より手前(やや低め)
         this.scene.add(this.valance);
 
         // 緞帳の合わせ目(中央)から漏れる光 — 閉じている間だけ見え、破裂や進行で強まる。
