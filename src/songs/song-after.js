@@ -45,6 +45,7 @@ export class SongAfter extends BaseSong {
         this._lyricFocus = new THREE.Vector3(0, 3, 0); // 注視対象(照らされている歌詞)のワールド位置
         this._lyricFocusW = 0;                         // 注視の重み(=照射度)。0で正面へ戻る
         this._headWorld = new THREE.Vector3();         // 頭のワールド位置(毎フレーム再利用)
+        this._softFocus = new THREE.Vector3(0, 3, 0);  // 照らしていなくても「出たばかりの歌詞」の方へ視線を送る対象
 
         // スポットライト: 押している(クリック/タップ)間だけ照らす
         this.isPointerDown = false;
@@ -57,7 +58,7 @@ export class SongAfter extends BaseSong {
         // 終演   : 紙吹雪にした量に応じてカーテンが上へ開き、その先に晴天の湖が広がる
         this.actPhase = 'preroll';          // preroll → intro → show
         this.introP = 0;                    // イントロのカーテン降下進捗 0→1
-        this.introDur = 3.4;                // 降下にかける秒数
+        this.introDur = 6.5;                // 降下にかける秒数(ゆっくり降ろす)
         this._introStartRel = 0;
         this._musicResumed = false;
 
@@ -778,10 +779,12 @@ export class SongAfter extends BaseSong {
         const geo = new THREE.PlaneGeometry(1024 / 110, 128 / 110);
         const mesh = new THREE.Mesh(geo, material);
 
+        // 歌詞はミクの前方(客席側)・目線の届く高さ帯に出し、視線が自然に向くようにする。
+        // (背後や高すぎる位置に出ると首の可動域を超えて顔が向けられないため)
         mesh.position.set(
-            (Math.random() - 0.5) * 16,
-            Math.random() * 4.5 + 1.2,
-            (Math.random() - 0.5) * 6 - 1
+            (Math.random() - 0.5) * 15,
+            Math.random() * 3.2 + 1.4,   // 1.4〜4.6
+            Math.random() * 4.6 - 0.6    // -0.6〜4.0(ミク頭部 z≈-2 より手前=客席側)
         );
         mesh.castShadow = !this.isMobile;
 
@@ -907,7 +910,7 @@ export class SongAfter extends BaseSong {
         // 逆光リムを呼吸に合わせて静かに脈動させ、シルエットの輪郭を息づかせる。
         // サビはオープンポーズで縁が広がるぶん少し強める。
         if (this.rimLight) {
-            this.rimLight.intensity = 62 + breath * 16 + b * 22;
+            this.rimLight.intensity = 50 + breath * 14 + b * 20;
             this.rimLight.target.position.set(vrm.scene.position.x, 1.2, vrm.scene.position.z);
         }
 
@@ -986,8 +989,8 @@ export class SongAfter extends BaseSong {
                 let yaw = Math.atan2(dirX, dirZ);
                 let pitch = -Math.atan2(dirY, horiz);
                 // 人間らしい可動域にクランプし、照射の強さ(重み)で向ける度合いを決める
-                yaw = Math.max(-0.65, Math.min(0.65, yaw));
-                pitch = Math.max(-0.45, Math.min(0.35, pitch));
+                yaw = Math.max(-0.8, Math.min(0.8, yaw));
+                pitch = Math.max(-0.5, Math.min(0.4, pitch));
                 const w = Math.min(1, this._lyricFocusW);
                 targetYaw = yaw * w;
                 targetPitch = pitch * w;
@@ -1046,11 +1049,11 @@ export class SongAfter extends BaseSong {
         const spotGoal = (this.isPointerDown && f < 0.05) ? 1 : 0;
         this.spotOn += (spotGoal - this.spotOn) * Math.min(1, dt * 8);
 
-        // 照明フェード (スポット以外は薄暗く保つ)
-        this.spotLight.intensity = 22 * stageDim;
-        this.mouseLight.intensity = 130 * stageDim * this.spotOn; // 押下中のみ照射
-        this.pointLight.intensity = 8 * stageDim;
-        this.ambientLight.intensity = Math.max(0.04, 0.5 * stageDim);
+        // 照明フェード (スポット以外はさらに薄暗く保ち、全体を沈ませる)
+        this.spotLight.intensity = 14 * stageDim;
+        this.mouseLight.intensity = 124 * stageDim * this.spotOn; // 押下中のみ照射(照らす手応えは残す)
+        this.pointLight.intensity = 4.5 * stageDim;
+        this.ambientLight.intensity = Math.max(0.03, 0.32 * stageDim);
         // 客席の灯: 数に応じて暖かく。終演時はそれだけが世界を照らす
         const seatGlow = Math.min(1, this.seatLights.length / 40);
         this.audienceLight.intensity = seatGlow * (1.8 + f * 7.0);
@@ -1153,6 +1156,7 @@ export class SongAfter extends BaseSong {
 
         // 2. Update Interactive 3D Lyrics
         let focusW = 0; // このフレームで最も強く照らされている歌詞の照射度(ミクの注視対象選び)
+        let softW = 0, newestBirth = -Infinity; // 照らしていないとき、出たばかりの歌詞へ送る視線
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const mesh = this.activeSprites[i];
             const ud = mesh.userData;
@@ -1211,6 +1215,8 @@ export class SongAfter extends BaseSong {
 
             // 現在いちばん強く照らされている歌詞を、ミクが顔を向ける対象にする
             if (p > focusW) { focusW = p; this._lyricFocus.copy(mesh.position); }
+            // 照らしていなくても、出たばかり(最新)の歌詞の方へ自然に視線を送る
+            if (ud.birth > newestBirth) { newestBirth = ud.birth; this._softFocus.copy(mesh.position); softW = mesh.material.opacity || 0; }
 
             // 歌唱パルス
             const isWordActive = word && ud.text && ud.text.includes(word.text)
@@ -1246,8 +1252,16 @@ export class SongAfter extends BaseSong {
                 this.activeSprites.splice(i, 1);
             }
         }
-        // 照らされている歌詞が無ければ重み0 → ミクは正面へ戻る
-        this._lyricFocusW = focusW;
+        // 照らされた歌詞があればそれを強く注視。無ければ最新の歌詞へ控えめに視線を送る。
+        // どちらも無ければ重み0 → ミクは正面へ戻る。
+        if (focusW > 0.12) {
+            this._lyricFocusW = focusW;
+        } else if (softW > 0.2) {
+            this._lyricFocus.copy(this._softFocus);
+            this._lyricFocusW = 0.85 * softW;
+        } else {
+            this._lyricFocusW = 0;
+        }
 
         // 3. 紙吹雪(破裂した歌詞由来): 舞い降りて床に積もり、曲が終わるまで残る
         for (let i = this.petals.length - 1; i >= 0; i--) {
