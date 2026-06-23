@@ -1073,6 +1073,8 @@ export class SongAfter extends BaseSong {
             if (this.introP >= 1 && !this._musicResumed) {
                 this._musicResumed = true;
                 this.actPhase = 'show';
+                // 本編の頭から歌詞を一度だけ出すため、保持中に拾った直近フレーズを忘れる
+                this.lastPhrase = null;
                 // カーテンが降り切ったら自動で曲を開始
                 try { pl && pl.requestPlay(); } catch (e) { /* 音源制御不可でもショーは進む */ }
             }
@@ -1131,7 +1133,8 @@ export class SongAfter extends BaseSong {
             this.lyricRenderer.update(null);
         }
 
-        if (phrase && phrase !== this.lastPhrase && f < 0.2) {
+        // 歌詞は本編(show)中のみ生成。イントロの曲頭保持中に拾って二重出現するのを防ぐ。
+        if (this.actPhase === 'show' && phrase && phrase !== this.lastPhrase && f < 0.2) {
             this.lastPhrase = phrase;
             this.spawnText(phrase, position);
         } else if (!phrase) {
