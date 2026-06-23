@@ -50,11 +50,28 @@ export class SongAfter extends BaseSong {
         this.isPointerDown = false;
         this.spotOn = 0;                    // 0=消灯 → 1=点灯(押下中) を滑らかに補間
 
-        // 赤い緞帳(ミク背後の3D背景幕): 開演で上から降りてきて、そのまま留まる(閉幕しない)
-        this._curtainDropped = false;
-        this.curtainHiddenY = 30;           // 開演前: フレーム上方に退避(見えない)
-        this.curtainRestY = 2;              // 開演後: ミク背後の定位置(降り切った状態)
+        // ─── 緞帳(前面カーテン) & 幕間の湖 ───
+        // preroll: 夜の湖を背景に見せたまま開演を待つ(カーテンは上方へ退避)
+        // intro  : スタート押下後、カーテンが上からゆっくり降りて視界を覆う → 降り切って曲開始
+        // show   : カーテンは閉じたまま。歌詞を紙吹雪にするたび合わせ目から光が漏れる
+        // 終演   : 紙吹雪にした量に応じてカーテンが上へ開き、その先に晴天の湖が広がる
+        this.actPhase = 'preroll';          // preroll → intro → show
+        this.introP = 0;                    // イントロのカーテン降下進捗 0→1
+        this.introDur = 3.4;                // 降下にかける秒数
+        this._introStartRel = 0;
+        this._musicResumed = false;
+
+        this.curtainW = 80;                 // 背景(湖)を覆う前面カーテン
+        this.curtainH = 46;
+        this.curtainCoverY = 13;            // 閉: 視界を覆う定位置
+        this.curtainOpenY = 65;             // 開: フレーム上方へ退避(下端が画面外)
+        this.curtainOpen = 0;               // 終演の開き具合 0(閉)→1(全開)
+        this.curtainMinOpen = 0.18;         // 紙吹雪が少なくても最低これだけは開く
+        this.openFullCount = this.isMobile ? 8 : 12; // この数を照らし切れば終演で全開
+        this._curtainLeak = 0;              // 合わせ目からの漏れ光(破裂でパルス)
         this.curtainTex = null;
+        this.leakPlane = null;
+        this.lake = null;                   // 夜→晴天の湖背景(self-contained / 共有依存なし)
 
         // 残光システム
         this.kindledCount = 0;              // 照らし切った歌詞の累計
@@ -90,7 +107,7 @@ export class SongAfter extends BaseSong {
         this.boundOnPointerMove = this.onPointerMove.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
         this.boundOnPointerUp = this.onPointerUp.bind(this);
-        this.boundDropCurtain = () => this.dropCurtain();
+        this.boundOnPlay = () => this.onPlayEvent();
     }
 
     relNow() {
@@ -102,6 +119,7 @@ export class SongAfter extends BaseSong {
         this.initThree();
         this.initStage();
         this.initStars();
+        this.initLake();
         this.loadMiku();
         this.injectCustomStyles();
         this.createCounterUI();
@@ -113,8 +131,8 @@ export class SongAfter extends BaseSong {
         // 押下の解除はウィンドウ全体で拾う(要素外で離しても確実に消灯)
         window.addEventListener('pointerup', this.boundOnPointerUp);
         window.addEventListener('pointercancel', this.boundOnPointerUp);
-        // 再生開始(スタート押下)でミク背後に緞帳が降りてくる
-        eventBus.on('play', this.boundDropCurtain);
+        // 再生開始(スタート押下)で、まず夜の湖の前にカーテンを降ろし、降り切ってから曲を始める
+        eventBus.on('play', this.boundOnPlay);
 
         this.isActive = true;
         super.init();
@@ -208,8 +226,9 @@ export class SongAfter extends BaseSong {
         this.scene.add(this.rimLight);
         this.scene.add(this.rimLight.target);
 
-        // 赤い緞帳 — ミク背後(Z=-5)の背景幕。開演で上方から降りてくる。
-        const curtainGeo = new THREE.PlaneGeometry(44, 24);
+        // 赤い緞帳 — 背景(湖)を覆う前面カーテン(Z=-5)。開演前は上方へ退避し、
+        // イントロで降りて視界を覆い、終演で再び上へ開いて湖を見せる。
+        const curtainGeo = new THREE.PlaneGeometry(this.curtainW, this.curtainH);
         this.curtainTex = this.createCurtainTexture();
         const curtainMat = new THREE.MeshStandardMaterial({
             map: this.curtainTex,
@@ -220,8 +239,23 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
         this.curtain = new THREE.Mesh(curtainGeo, curtainMat);
-        this.curtain.position.set(0, this.curtainHiddenY, -5); // 開演前はフレーム上方に退避
+        this.curtain.position.set(0, this.curtainOpenY, -5); // 開演前はフレーム上方に退避
         this.scene.add(this.curtain);
+
+        // 緞帳の合わせ目から漏れる光 — 破裂のたびに一瞬強まり、閉じている間だけ見える。
+        const leakGeo = new THREE.PlaneGeometry(2.6, this.curtainH);
+        const leakMat = new THREE.MeshBasicMaterial({
+            map: this.glowTexture,
+            color: 0xffe6b0,
+            transparent: true,
+            opacity: 0,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide
+        });
+        this.leakPlane = new THREE.Mesh(leakGeo, leakMat);
+        this.leakPlane.position.set(0, this.curtainOpenY, -4.8); // カーテン手前で一緒に昇降
+        this.scene.add(this.leakPlane);
 
         // 共有バラジオメトリ/マテリアル
         this.petalGeo = new THREE.PlaneGeometry(0.3, 0.4);
@@ -372,9 +406,94 @@ export class SongAfter extends BaseSong {
         if (this.kindledCount > 0) this.counterEl.classList.add('visible');
     }
 
-    // ─── 赤い緞帳: 開演でミク背後に上から降りてくる(閉幕しない) ───
-    dropCurtain() {
-        this._curtainDropped = true;
+    // ─── 再生開始(スタート押下): まず夜の湖の前でカーテンを降ろし、降り切ってから曲を始める ───
+    onPlayEvent() {
+        if (this.actPhase !== 'preroll') return; // 自前の requestPlay 再発火は無視
+        this.actPhase = 'intro';
+        this._introStartRel = this.relNow();
+        // カーテン降下のあいだ曲を頭で待たせる。
+        // (requestPause/Seek が効かない環境では降下が曲頭に重なるだけで、曲は止まらない)
+        try {
+            playerManager.player.requestPause();
+            playerManager.player.requestMediaSeek(0);
+        } catch (e) { /* noop */ }
+    }
+
+    // ─── 幕間の湖背景(夜→晴天) — kotaeteLakes を参考にした self-contained 実装 ───
+    // カーテン背後(Z=-72〜-96)に夜空と水面を置き、uDay(0=夜,1=晴天)で色を切り替える。
+    // 共有モジュールへは依存せず、afterシーン内で完結させる(fog:false で常にクリア)。
+    initLake() {
+        const skyUni = { uDay: { value: 0 }, uTime: { value: 0 } };
+        const skyMat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
+            uniforms: skyUni,
+            vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+            fragmentShader: `
+              varying vec2 vUv; uniform float uDay, uTime;
+              void main(){
+                float h = vUv.y;
+                vec3 nightTop = vec3(0.012,0.03,0.10);
+                vec3 nightBot = vec3(0.05,0.12,0.27);
+                vec3 dayTop   = vec3(0.50,0.74,0.52);
+                vec3 dayBot   = vec3(0.86,0.97,0.88);
+                vec3 night = mix(nightBot, nightTop, smoothstep(0.0,0.9,h));
+                vec3 day   = mix(dayBot,   dayTop,   smoothstep(-0.1,0.85,h));
+                // 月(夜) / 太陽の光芒(昼) を中央やや上に
+                vec2 c = vec2(0.5, 0.62);
+                float d = distance(vUv, c);
+                float moon = smoothstep(0.055,0.0,d);
+                float halo = pow(smoothstep(0.35,0.0,d), 2.0);
+                night += vec3(0.7,0.78,0.85)*moon + vec3(0.10,0.13,0.18)*halo;
+                float sun = pow(smoothstep(0.5,0.0,d), 3.0);
+                day += vec3(1.0,1.0,0.95)*sun*0.8;
+                vec3 col = mix(night, day, uDay);
+                gl_FragColor = vec4(col, 1.0);
+              }`
+        });
+        const sky = new THREE.Mesh(new THREE.PlaneGeometry(320, 200), skyMat);
+        sky.position.set(0, 24, -72);
+        sky.renderOrder = -10;
+        this.scene.add(sky);
+
+        const watUni = { uDay: { value: 0 }, uTime: { value: 0 }, uCam: { value: new THREE.Vector3() } };
+        const watMat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, fog: false,
+            uniforms: watUni,
+            vertexShader: `varying vec3 vW; void main(){ vec4 wp=modelMatrix*vec4(position,1.0); vW=wp.xyz; gl_Position=projectionMatrix*viewMatrix*wp; }`,
+            fragmentShader: `
+              varying vec3 vW; uniform float uDay, uTime; uniform vec3 uCam;
+              float h21(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5); }
+              void main(){
+                float far = clamp(length(vW.xz-uCam.xz)*0.01,0.0,1.0);
+                vec3 nightW = mix(vec3(0.015,0.05,0.14), vec3(0.05,0.14,0.30), far);
+                vec3 dayW   = mix(vec3(0.10,0.52,0.72), vec3(0.55,0.88,0.86), far);
+                vec3 col = mix(nightW, dayW, uDay);
+                // 月光/陽光の輝線(中央) + 細かなきらめき
+                float lane = smoothstep(18.0,0.0,abs(vW.x));
+                float shim = smoothstep(0.92,1.0, h21(floor(vW.xz*vec2(2.0,1.3)+uTime*0.6)));
+                col += mix(vec3(0.5,0.6,0.7), vec3(0.7,0.95,0.92), uDay) * (lane*0.25 + shim*0.4) * far;
+                gl_FragColor = vec4(col, 1.0);
+              }`
+        });
+        const watGeo = new THREE.PlaneGeometry(320, 160, 1, 1);
+        watGeo.rotateX(-Math.PI / 2);
+        const water = new THREE.Mesh(watGeo, watMat);
+        water.position.set(0, -2.0, -96);
+        water.renderOrder = -9;
+        this.scene.add(water);
+
+        this.lake = {
+            sky, water,
+            update: (now, day) => {
+                skyUni.uDay.value = day; skyUni.uTime.value = now;
+                watUni.uDay.value = day; watUni.uTime.value = now;
+                if (this.camera) watUni.uCam.value.set(this.camera.position.x, this.camera.position.y, 0);
+            },
+            dispose: () => {
+                sky.geometry.dispose(); sky.material.dispose();
+                water.geometry.dispose(); water.material.dispose();
+            }
+        };
     }
 
     // ベロアの赤い緞帳テクスチャ(縦ひだ + 上下の陰影 + 裾の金モール)
@@ -427,6 +546,7 @@ export class SongAfter extends BaseSong {
 
     onPointerMove(event) {
         if (!this.isActive || this.finaleP > 0.05) return;
+        if (this.actPhase !== 'show') return; // イントロ(カーテン降下中)は操作を受けない
         // 押している(クリック/タップ)間だけスポットライトが追尾する
         if (!this.isPointerDown) return;
         this.updateSpotFromClient(event.clientX, event.clientY);
@@ -440,6 +560,7 @@ export class SongAfter extends BaseSong {
     onPointerDown(event) {
         if (!this.isActive || !this.renderer || !this.camera) return;
         if (this.finaleP > 0.05) return; // 終演中は操作を受けない
+        if (this.actPhase !== 'show') return; // イントロ(カーテン降下中)は操作を受けない
 
         // 3Dキャンバス直上の押下だけを受け付ける。songWrapper で pointerdown を
         // フックしているため、上に重なるDOM UI(チュートリアルの「スタート」ボタン等)の
@@ -465,6 +586,8 @@ export class SongAfter extends BaseSong {
     // 歌詞の位置から一度パッと弾け飛び(初速の外向き+上向き)、その後ふわりと降る。
     burstLyricToConfetti(origin) {
         sfx.play('after_ignite');
+        // 歌詞が弾けるたび、閉じた緞帳の合わせ目から光が少しだけ漏れる
+        this._curtainLeak = Math.min(1, this._curtainLeak + 0.55);
         const count = this.isMobile ? 12 : 20;
         for (let i = 0; i < count; i++) {
             const mat = this.petalMaterials[Math.random() > 0.5 ? 0 : 1];
@@ -938,12 +1061,57 @@ export class SongAfter extends BaseSong {
             this.counterEl.classList.add('visible');
         }
 
-        // 1. 緞帳 — 開演で上方からミク背後へすっと降り、そのまま留まる(閉幕しない)
-        const curtainTargetY = this._curtainDropped ? this.curtainRestY : this.curtainHiddenY;
-        this.curtain.position.y += (curtainTargetY - this.curtain.position.y) * Math.min(1, dt * 1.6);
-        // 星空: サビは緞帳の上の夜空が瞬く
+        // 1. 幕(前面カーテン)と幕間の湖
+        const ease = (x) => x * x * (3 - 2 * x);
+        // イントロ: 夜の湖を見せたまま、カーテンが上からゆっくり降りて視界を覆う。
+        if (this.actPhase === 'intro') {
+            this.introP = Math.max(0, Math.min(1, (rel - this._introStartRel) / this.introDur));
+            // 自動再生がすり抜けて曲が進んでしまう環境向けに、降下中は頭(0)で待たせ続ける。
+            const pl = playerManager.player;
+            if (pl && pl.isPlaying) { try { pl.requestPause(); } catch (e) { /* noop */ } }
+            if (pl && pl.timer && pl.timer.position > 120) { try { pl.requestMediaSeek(0); } catch (e) { /* noop */ } }
+            if (this.introP >= 1 && !this._musicResumed) {
+                this._musicResumed = true;
+                this.actPhase = 'show';
+                // カーテンが降り切ったら自動で曲を開始
+                try { pl && pl.requestPlay(); } catch (e) { /* 音源制御不可でもショーは進む */ }
+            }
+        }
+        // 終演: 紙吹雪にした量に応じてカーテンが上へ開く(少なくても下限ぶんは開く)
+        const kindleRatio = Math.min(1, this.kindledCount / this.openFullCount);
+        const maxOpen = this.curtainMinOpen + (1 - this.curtainMinOpen) * kindleRatio;
+        this.curtainOpen = maxOpen * ease(f);
+
+        // カーテンの目標Y(phaseごと)
+        let curtainTargetY;
+        if (this.actPhase === 'preroll') {
+            curtainTargetY = this.curtainOpenY;
+        } else if (this.actPhase === 'intro') {
+            curtainTargetY = this.curtainOpenY + (this.curtainCoverY - this.curtainOpenY) * ease(this.introP);
+        } else {
+            curtainTargetY = this.curtainCoverY + (this.curtainOpenY - this.curtainCoverY) * this.curtainOpen;
+        }
+        this.curtain.position.y += (curtainTargetY - this.curtain.position.y) * Math.min(1, dt * 2.4);
+
+        // 漏れ光: 破裂でパルス→減衰。カーテンが閉じているほど強く現れる。
+        this._curtainLeak *= 0.92;
+        const coverFrac = Math.max(0, Math.min(1,
+            (this.curtainOpenY - this.curtain.position.y) / (this.curtainOpenY - this.curtainCoverY)));
+        if (this.leakPlane) {
+            this.leakPlane.position.y = this.curtain.position.y;
+            this.leakPlane.material.opacity = coverFrac * (0.05 + this._curtainLeak * 0.9);
+        }
+
+        // 幕間の湖: 終演でカーテンが開くにつれ、その先が夜→晴天へ移ろう。
+        const dayMix = ease(f);
+        if (this.lake) this.lake.update(rel, dayMix);
+
+        // 星空: サビは夜空が瞬く。終演=昼へ向かうので消えてゆく。
         const starTarget = (this.isClimax && f < 0.3) ? 0.9 : 0.0;
-        if (this.stars) this.stars.material.opacity += (starTarget - this.stars.material.opacity) * 0.04;
+        if (this.stars) {
+            this.stars.material.opacity += (starTarget - this.stars.material.opacity) * 0.04;
+            this.stars.material.opacity *= (1 - dayMix);
+        }
 
         // 自動スイープスポットライト (相対秒で駆動)
         this.spotLight.position.x = Math.sin(rel * 0.8) * 8;
@@ -1146,7 +1314,7 @@ export class SongAfter extends BaseSong {
         window.removeEventListener('resize', this.boundOnResize);
         window.removeEventListener('pointerup', this.boundOnPointerUp);
         window.removeEventListener('pointercancel', this.boundOnPointerUp);
-        eventBus.off('play', this.boundDropCurtain);
+        eventBus.off('play', this.boundOnPlay);
         if (this.songWrapper) {
             this.songWrapper.removeEventListener('pointermove', this.boundOnPointerMove);
             this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
@@ -1187,6 +1355,16 @@ export class SongAfter extends BaseSong {
             this.curtain.geometry.dispose();
             if (this.curtain.material.map) this.curtain.material.map.dispose();
             this.curtain.material.dispose();
+        }
+        if (this.leakPlane) {
+            this.leakPlane.geometry.dispose();
+            this.leakPlane.material.dispose();
+        }
+        if (this.lake) {
+            this.scene.remove(this.lake.sky);
+            this.scene.remove(this.lake.water);
+            this.lake.dispose();
+            this.lake = null;
         }
 
         // VRM
