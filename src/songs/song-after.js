@@ -62,21 +62,25 @@ export class SongAfter extends BaseSong {
         this._introStartRel = 0;
         this._musicResumed = false;
 
-        this.curtainW = 80;                 // 背景(湖)を覆う前面カーテン
-        this.curtainH = 46;
-        this.curtainCoverY = 13;            // 閉: 視界を覆う定位置
-        this.curtainOpenY = 65;             // 開: フレーム上方へ退避(下端が画面外)
-        this.curtainOpen = 0;               // 終演の開き具合 0(閉)→1(全開)
+        // 左右に開閉する二枚の緞帳 + 上部バランス(横幕)
+        this.curtainCloseFrac = 0;          // 0=全開(左右に退く) → 1=閉(中央で合わさる)
+        // パネルは超ワイド(〜21:9)でも閉時に画面端まで覆える幅、縦も画面より高くとる。
+        this.panelW = 34;                   // 片側パネルの幅(閉で中央〜画面端を覆う)
+        this.panelH = 52;
+        this.curtainCenterY = 8;            // パネルの上下中心
+        this.openInner = 15;                // 全開時、内側端が中央から退く距離(=開口の半幅)
         this.curtainMinOpen = 0.18;         // 紙吹雪が少なくても最低これだけは開く
         this.openFullCount = this.isMobile ? 8 : 12; // この数を照らし切れば終演で全開
         this._curtainLeak = 0;              // 合わせ目からの漏れ光(破裂でパルス)
-        this.curtainTex = null;
+        this.curtainLeft = null;
+        this.curtainRight = null;
+        this.valance = null;                // 上部の布(横幕/スカラップ+金フリンジ)
         this.leakPlane = null;
         this.lake = null;                   // 夜→晴天の湖背景(self-contained / 共有依存なし)
 
         // 残光システム
         this.kindledCount = 0;              // 照らし切った歌詞の累計
-        this.litThreshold = 1400;           // 照らし切り判定に必要な累計照射時間(ms)
+        this.litThreshold = 2200;           // 照らし切り判定に必要な累計照射時間(ms)(しっかり当てないと弾けない)
         this.maxSeatLights = this.isMobile ? 60 : 100;
 
         // バラ
@@ -227,24 +231,39 @@ export class SongAfter extends BaseSong {
         this.scene.add(this.rimLight);
         this.scene.add(this.rimLight.target);
 
-        // 赤い緞帳 — 背景(湖)を覆う前面カーテン(Z=-5)。開演前は上方へ退避し、
-        // イントロで降りて視界を覆い、終演で再び上へ開いて湖を見せる。
-        const curtainGeo = new THREE.PlaneGeometry(this.curtainW, this.curtainH);
-        this.curtainTex = this.createCurtainTexture();
-        const curtainMat = new THREE.MeshStandardMaterial({
-            map: this.curtainTex,
+        // ─── 舞台の赤い緞帳(左右に開閉) + 上部バランス(横幕) + 金のタッセル ───
+        // 緞帳は自己発光(MeshBasic=照明非依存)で、暗いステージでも鮮やかな赤+金に見せる。
+        // 裾のスカラップ(波形)は alphaTest のカットアウトで抜く(不透明パスで描画=湖を確実に遮蔽)。
+        const panelMat = (mirror) => new THREE.MeshBasicMaterial({
+            map: this.createSidePanelTexture(mirror),
+            alphaTest: 0.5,
             color: 0xffffff,
-            emissive: new THREE.Color(0x3a0509), // 暗がりでも赤がほのかに沈んで見えるように
-            roughness: 0.95,
-            metalness: 0.0,
             side: THREE.DoubleSide
         });
-        this.curtain = new THREE.Mesh(curtainGeo, curtainMat);
-        this.curtain.position.set(0, this.curtainOpenY, -5); // 開演前はフレーム上方に退避
-        this.scene.add(this.curtain);
+        const panelGeo = new THREE.PlaneGeometry(this.panelW, this.panelH);
+        this.curtainLeft = new THREE.Mesh(panelGeo, panelMat(false));
+        this.curtainRight = new THREE.Mesh(panelGeo.clone(), panelMat(true));
+        // 開演前(preroll)は左右に開いた状態で待ち、夜の湖を見せる(=全開位置で初期化)
+        this.curtainLeft.position.set(-this.openInner - this.panelW / 2, this.curtainCenterY, -5);
+        this.curtainRight.position.set(this.openInner + this.panelW / 2, this.curtainCenterY, -5);
+        this.scene.add(this.curtainLeft);
+        this.scene.add(this.curtainRight);
 
-        // 緞帳の合わせ目から漏れる光 — 破裂のたびに一瞬強まり、閉じている間だけ見える。
-        const leakGeo = new THREE.PlaneGeometry(2.6, this.curtainH);
+        // 上部の布(バランス/横幕): 画面上端に常に掛かる赤い布。下辺はスカラップ(波形)で
+        // 金フリンジ付き。開いても閉じても常に上部に見えるよう、前面・大きめに配置する。
+        const valGeo = new THREE.PlaneGeometry(76, 22);
+        const valMat = new THREE.MeshBasicMaterial({
+            map: this.createValanceTexture(),
+            alphaTest: 0.5,
+            color: 0xffffff,
+            side: THREE.DoubleSide
+        });
+        this.valance = new THREE.Mesh(valGeo, valMat);
+        this.valance.position.set(0, 11, -4.6); // 上端から垂れ下がり、緞帳より手前(やや低め)
+        this.scene.add(this.valance);
+
+        // 緞帳の合わせ目(中央)から漏れる光 — 閉じている間だけ見え、破裂や進行で強まる。
+        const leakGeo = new THREE.PlaneGeometry(2.6, this.panelH);
         const leakMat = new THREE.MeshBasicMaterial({
             map: this.glowTexture,
             color: 0xffe6b0,
@@ -255,7 +274,7 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
         this.leakPlane = new THREE.Mesh(leakGeo, leakMat);
-        this.leakPlane.position.set(0, this.curtainOpenY, -4.8); // カーテン手前で一緒に昇降
+        this.leakPlane.position.set(0, this.curtainCenterY, -4.8); // 中央の合わせ目
         this.scene.add(this.leakPlane);
 
         // 共有バラジオメトリ/マテリアル
@@ -497,37 +516,186 @@ export class SongAfter extends BaseSong {
         };
     }
 
-    // ベロアの赤い緞帳テクスチャ(縦ひだ + 上下の陰影 + 裾の金モール)
-    createCurtainTexture() {
-        const c = document.createElement('canvas');
-        c.width = 512; c.height = 512;
-        const ctx = c.getContext('2d');
-        // 縦ひだ: x方向に明暗を周期変化させてベロアの折り目を表現
-        const folds = 16;
-        for (let x = 0; x < 512; x++) {
-            const shade = Math.sin(x / 512 * folds * Math.PI * 2) * 0.5 + 0.5; // 0..1
-            const r = Math.round(38 + shade * 130);
-            const g = Math.round(2 + shade * 18);
-            const b = Math.round(6 + shade * 24);
+    // ベロアの赤い折り目を塗る共通処理(縦ひだ + 上下の陰影)
+    _drawVelvet(ctx, w, h, folds) {
+        // 不規則な縦ひだ: 2周波の合成で襞幅にゆらぎを与え、山は明るく光沢、谷は深く沈む。
+        for (let x = 0; x < w; x++) {
+            const u = x / w;
+            const base = Math.sin(u * folds * Math.PI * 2);
+            const f = base * 0.72 + Math.sin(u * folds * Math.PI * 4 + 1.7) * 0.28;
+            const t = f * 0.5 + 0.5;                                  // 0(谷)..1(山)
+            const ridge = Math.pow(t, 1.3);                           // 山のふくらみ
+            const crease = Math.pow(1 - t, 3.0) * 0.7;               // 谷の深い陰り
+            const crest = Math.pow(Math.max(0, base), 12) * 0.35;    // 山頂の細いハイライト
+            let L = 0.28 + ridge * 0.9 - crease + crest;
+            L = Math.max(0.05, Math.min(1.12, L));
+            const r = Math.min(255, Math.round(26 + 165 * L));
+            const g = Math.min(255, Math.round(5 + 24 * L));
+            const b = Math.min(255, Math.round(10 + 28 * L));
             ctx.fillStyle = `rgb(${r},${g},${b})`;
-            ctx.fillRect(x, 0, 1, 512);
+            ctx.fillRect(x, 0, 1, h);
         }
-        // 上下の陰影(天地を落ち着かせる)
-        const vg = ctx.createLinearGradient(0, 0, 0, 512);
+        // 縦方向の陰影: 上端は寄せ集めで暗く、下端も軽く沈める
+        const vg = ctx.createLinearGradient(0, 0, 0, h);
         vg.addColorStop(0.0, 'rgba(0,0,0,0.55)');
-        vg.addColorStop(0.18, 'rgba(0,0,0,0)');
-        vg.addColorStop(0.88, 'rgba(0,0,0,0)');
-        vg.addColorStop(1.0, 'rgba(0,0,0,0.5)');
+        vg.addColorStop(0.12, 'rgba(0,0,0,0.12)');
+        vg.addColorStop(0.5, 'rgba(0,0,0,0)');
+        vg.addColorStop(0.9, 'rgba(0,0,0,0.06)');
+        vg.addColorStop(1.0, 'rgba(0,0,0,0.4)');
         ctx.fillStyle = vg;
-        ctx.fillRect(0, 0, 512, 512);
-        // 裾の金モール
-        const fg = ctx.createLinearGradient(0, 474, 0, 512);
-        fg.addColorStop(0.0, 'rgba(214,176,86,0)');
-        fg.addColorStop(0.6, 'rgba(214,176,86,0.7)');
-        fg.addColorStop(1.0, 'rgba(150,110,40,0.95)');
-        ctx.fillStyle = fg;
-        ctx.fillRect(0, 474, 512, 38);
-        return new THREE.CanvasTexture(c);
+        ctx.fillRect(0, 0, w, h);
+        // ほのかな光沢(上中央から柔らかく)
+        const sg = ctx.createRadialGradient(w * 0.5, h * 0.16, 0, w * 0.5, h * 0.16, w * 0.75);
+        sg.addColorStop(0.0, 'rgba(255,140,140,0.07)');
+        sg.addColorStop(1.0, 'rgba(255,140,140,0)');
+        ctx.fillStyle = sg;
+        ctx.fillRect(0, 0, w, h);
+    }
+
+    // 金色のビーズ(房飾りの一粒)
+    _goldBead(ctx, x, y, r) {
+        const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.35, r * 0.1, x, y, r);
+        g.addColorStop(0.0, '#fff6cf');
+        g.addColorStop(0.45, '#eece74');
+        g.addColorStop(1.0, '#9a6e1f');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // 緞帳の合わせ目側に金の縦モールを描く(mirror=true で左右反転)
+    _drawInnerBraid(ctx, w, h, mirror) {
+        const bx = mirror ? 14 : w - 14; // 内側端
+        const g = ctx.createLinearGradient(bx - 14, 0, bx + 14, 0);
+        g.addColorStop(0.0, 'rgba(154,110,31,0)');
+        g.addColorStop(0.5, 'rgba(233,201,110,0.85)');
+        g.addColorStop(1.0, 'rgba(154,110,31,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(bx - 14, 0, 28, h);
+    }
+
+    // スカラップ(波形)のシルエット内にだけベルベットを描き、円弧に金フリンジを付ける。
+    // clip でシルエットを切るので「内側=不透明(α1)/外側=透明(α0)」が確実に得られる
+    // (alphaTest のカットアウトで湖を遮蔽しつつ波形の裾を表現できる)。
+    _paintVelvetShape(ctx, w, h, baseY, swags, folds, braidMirror) {
+        const sw = w / swags, r = sw / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, w, baseY);                 // 上の矩形(本体)
+        for (let i = 0; i < swags; i++) {         // 下辺の連なる半円(スカラップ)
+            const cx = i * sw + r;
+            ctx.moveTo(cx + r, baseY);
+            ctx.arc(cx, baseY, r, 0, Math.PI, false);
+        }
+        ctx.clip();
+        this._drawVelvet(ctx, w, h, folds);
+        if (braidMirror !== undefined) this._drawInnerBraid(ctx, w, h, braidMirror);
+        ctx.restore();
+        // 円弧に沿った金の縁取り + ビーズ(裾から少し垂れる金フリンジ)
+        for (let i = 0; i < swags; i++) {
+            const cx = i * sw + r;
+            ctx.strokeStyle = '#d9b24c';
+            ctx.lineWidth = Math.max(4, r * 0.12);
+            ctx.beginPath();
+            ctx.arc(cx, baseY, r, 0, Math.PI, false);
+            ctx.stroke();
+            const beads = 9;
+            for (let k = 0; k <= beads; k++) {
+                const a = Math.PI * (k / beads);
+                this._goldBead(ctx, cx + Math.cos(a) * r, baseY + Math.sin(a) * r, Math.max(3, r * 0.08));
+            }
+        }
+    }
+
+    // 片側パネルのテクスチャ(縦ひだ + 裾スカラップ金フリンジ + 内側の金モール)
+    createSidePanelTexture(mirror) {
+        const c = document.createElement('canvas');
+        c.width = 512; c.height = 1024;
+        const ctx = c.getContext('2d');
+        this._paintVelvetShape(ctx, 512, 1024, 1024 - 80, 5, 11, mirror);
+        const t = new THREE.CanvasTexture(c);
+        t.anisotropy = 4;
+        return t;
+    }
+
+    // 上部の布(横幕)のテクスチャ。自然に垂れ下がるフェストゥーン(swag)を連ね、
+    // 入れ子の襞で陰影、寄せ点に縦の陰、垂れ下辺に沿って金フリンジ、継ぎ目に金のしずく。
+    createValanceTexture() {
+        const W = 1024, H = 512, swags = 5;
+        const sw = W / swags, topBody = 96, sag = 250;
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        const ctx = c.getContext('2d');
+        // 二次ベジエの下辺(垂れ)を返すヘルパ
+        const bez = (xL, xR, tt) => {
+            const cx = (xL + xR) / 2;
+            const mx = (1 - tt) * (1 - tt) * xL + 2 * (1 - tt) * tt * cx + tt * tt * xR;
+            const my = (1 - tt) * (1 - tt) * topBody + 2 * (1 - tt) * tt * (topBody + sag) + tt * tt * topBody;
+            return [mx, my];
+        };
+        // シルエット(上の帯 + 各フェストゥーンの垂れ)を clip
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, W, topBody);
+        for (let i = 0; i < swags; i++) {
+            const xL = i * sw, xR = (i + 1) * sw, cx = xL + sw / 2;
+            ctx.moveTo(xL, topBody);
+            ctx.quadraticCurveTo(cx, topBody + sag, xR, topBody);
+        }
+        ctx.clip();
+        this._drawVelvet(ctx, W, H, 16);
+        // 各フェストゥーンの襞(入れ子の垂れ曲線)と寄せ点の陰
+        for (let i = 0; i < swags; i++) {
+            const xL = i * sw, xR = (i + 1) * sw, cx = xL + sw / 2;
+            const nFolds = 7;
+            for (let k = 1; k <= nFolds; k++) {
+                const d = sag * (k / (nFolds + 1));
+                ctx.lineWidth = 2 + (1 - k / nFolds) * 4;
+                ctx.strokeStyle = (k % 2 === 0) ? 'rgba(255,205,205,0.07)' : 'rgba(0,0,0,0.20)';
+                ctx.beginPath();
+                ctx.moveTo(xL, topBody);
+                ctx.quadraticCurveTo(cx, topBody + d * 1.15, xR, topBody);
+                ctx.stroke();
+            }
+            for (const gx of [xL, xR]) {
+                const vg = ctx.createLinearGradient(gx - 14, 0, gx + 14, 0);
+                vg.addColorStop(0.0, 'rgba(0,0,0,0)');
+                vg.addColorStop(0.5, 'rgba(0,0,0,0.30)');
+                vg.addColorStop(1.0, 'rgba(0,0,0,0)');
+                ctx.fillStyle = vg;
+                ctx.fillRect(gx - 14, topBody - 16, 28, sag);
+            }
+        }
+        ctx.restore();
+        // 金フリンジ: 各フェストゥーンの垂れ下辺に沿ってビーズ + 短い房
+        for (let i = 0; i < swags; i++) {
+            const xL = i * sw, xR = (i + 1) * sw;
+            const N = 20;
+            for (let k = 0; k <= N; k++) {
+                const [mx, my] = bez(xL, xR, k / N);
+                this._goldBead(ctx, mx, my, 5.5);
+                if (k % 2 === 0) {
+                    ctx.strokeStyle = '#caa23e'; ctx.lineWidth = 2.5;
+                    ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx, my + 13); ctx.stroke();
+                    this._goldBead(ctx, mx, my + 15, 3);
+                }
+            }
+        }
+        // 上端の金縁
+        ctx.fillStyle = 'rgba(217,178,76,0.9)';
+        ctx.fillRect(0, 0, W, 12);
+        // 継ぎ目(寄せ点)の金のしずく(布が束ねられた点)
+        for (let i = 0; i <= swags; i++) {
+            const jx = i * sw;
+            ctx.strokeStyle = '#caa23e'; ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.moveTo(jx, topBody - 8); ctx.lineTo(jx, topBody + 22); ctx.stroke();
+            this._goldBead(ctx, jx, topBody + 28, 11);
+            this._goldBead(ctx, jx, topBody + 46, 7);
+        }
+        const t = new THREE.CanvasTexture(c);
+        t.anisotropy = 4;
+        return t;
     }
 
     onResize() {
@@ -661,6 +829,7 @@ export class SongAfter extends BaseSong {
             fontSize -= 4;
         } while (fontSize > minFont);
 
+        const textWidth = ctx.measureText(text).width;
         ctx.fillStyle = '#ffffff';
         ctx.shadowColor = '#000000';
         ctx.shadowBlur = 12;
@@ -669,7 +838,35 @@ export class SongAfter extends BaseSong {
         ctx.fillText(text, 512, 64);
         const tex = new THREE.CanvasTexture(canvas);
         tex.anisotropy = 4;
-        return tex;
+        // widthFrac = テキストがキャンバス幅に占める割合(配置のはみ出し防止に使う)
+        return { texture: tex, widthFrac: Math.min(1, textWidth / 1024) };
+    }
+
+    // ─── そのワールド奥行き(z)で画面に収まる可視範囲を、カメラの視錐台から求める ───
+    // 歌詞を画面いっぱいに散らしつつ、フレーム外へはみ出さないための配置境界。
+    visibleBoundsAtZ(zc) {
+        const cam = this.camera;
+        cam.updateMatrixWorld();
+        const e = cam.matrixWorld.elements;
+        const right = new THREE.Vector3(e[0], e[1], e[2]).normalize();
+        const up = new THREE.Vector3(e[4], e[5], e[6]).normalize();
+        const fwd = new THREE.Vector3(-e[8], -e[9], -e[10]).normalize();
+        const cp = cam.position;
+        const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+        const aspect = cam.aspect || (window.innerWidth / window.innerHeight);
+        const tanH = tanV * aspect;
+        const edgeY = (ry) => {
+            const dx = fwd.x + ry * tanV * up.x;
+            const dy = fwd.y + ry * tanV * up.y;
+            const dz = fwd.z + ry * tanV * up.z;
+            const t = (zc - cp.z) / dz;
+            return cp.y + t * dy;
+        };
+        // 水平端(垂直中央のレイ)
+        const dxR = fwd.x + tanH * right.x, dyR = fwd.y + tanH * right.y, dzR = fwd.z + tanH * right.z;
+        const tR = (zc - cp.z) / dzR;
+        const halfW = Math.abs(cp.x + tR * dxR - cp.x); // カメラはx=0中心なので左右対称
+        return { halfW, yTop: edgeY(1), yBottom: edgeY(-1) };
     }
 
     // ─── フレーズを文法的に意味のある単位で「もう少しだけ」短く区切る ───
@@ -762,7 +959,7 @@ export class SongAfter extends BaseSong {
     }
 
     spawnTextChunk(text, spawnTime) {
-        const texture = this.createTextTexture(text);
+        const { texture, widthFrac } = this.createTextTexture(text);
 
         const material = new THREE.MeshStandardMaterial({
             map: texture,
@@ -776,31 +973,45 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
 
-        const geo = new THREE.PlaneGeometry(1024 / 110, 128 / 110);
+        const planeW = 1024 / 110, planeH = 128 / 110;
+        const geo = new THREE.PlaneGeometry(planeW, planeH);
         const mesh = new THREE.Mesh(geo, material);
 
-        // 歌詞はミクの前方(客席側)・目線の届く高さ帯に出し、視線が自然に向くようにする。
-        // (背後や高すぎる位置に出ると首の可動域を超えて顔が向けられないため)
-        mesh.position.set(
-            (Math.random() - 0.5) * 15,
-            Math.random() * 3.2 + 1.4,   // 1.4〜4.6
-            Math.random() * 4.6 - 0.6    // -0.6〜4.0(ミク頭部 z≈-2 より手前=客席側)
-        );
+        // ── 画面いっぱいに散らしつつ、フレーム外へはみ出さないように配置する ──
+        const SCALE_MAX = 1.5;   // 照射/歌唱でこの程度まで拡大しうる
+        const MARGIN = 0.5;      // 端からの余白(ワールド)
+        const z = Math.random() * 4.6 - 0.6;            // -0.6〜4.0(ミク前方=客席側)
+        const bnd = this.visibleBoundsAtZ(z);
+        // テキストが広すぎる(=画面幅を超える)場合は縮小してフレーム内に収める
+        let textW = planeW * widthFrac;
+        const maxTextW = Math.max(0.5, (bnd.halfW * 2 - MARGIN) / SCALE_MAX);
+        const fitScale = textW > maxTextW ? maxTextW / textW : 1;
+        textW *= fitScale;
+        const textHalfW = (textW / 2) * SCALE_MAX;
+        const textHalfH = (planeH * 0.62 / 2) * SCALE_MAX * fitScale;
+        const xLimit = Math.max(0.3, bnd.halfW - textHalfW - MARGIN);
+        const yLo = bnd.yBottom + textHalfH + MARGIN;
+        const yHi = bnd.yTop - textHalfH - MARGIN;
+        const x = (Math.random() * 2 - 1) * xLimit;
+        const y = yLo + Math.random() * Math.max(0.2, yHi - yLo);
+        mesh.position.set(x, y, z);
         mesh.castShadow = !this.isMobile;
 
         mesh.userData = {
             birth: spawnTime,
-            life: 9000,
+            life: 14000,        // 安全上限(通常は発話後フェードで消える)
             hoverProgress: 0,
             litTime: 0,        // 累計照射時間(ms)
             kindled: false,    // 照らし切り済みフラグ
             kindleFlash: 0,
             baseY: mesh.position.y,
             spinFactor: (Math.random() - 0.5) * 0.15,
+            fitScale,          // はみ出し防止の基準スケール(毎フレームの拡縮はこれに乗算)
+            widthFrac,         // テキストがプレーン幅に占める割合(検証/はみ出し判定用)
             text: text
         };
 
-        mesh.scale.set(1, 1, 1);
+        mesh.scale.set(fitScale, fitScale, 1);
         mesh.lookAt(new THREE.Vector3(this.camera.position.x, mesh.position.y, this.camera.position.z));
 
         this.scene.add(mesh);
@@ -1064,9 +1275,9 @@ export class SongAfter extends BaseSong {
             this.counterEl.classList.add('visible');
         }
 
-        // 1. 幕(前面カーテン)と幕間の湖
+        // 1. 幕(左右に開閉する緞帳)と幕間の湖
         const ease = (x) => x * x * (3 - 2 * x);
-        // イントロ: 夜の湖を見せたまま、カーテンが上からゆっくり降りて視界を覆う。
+        // イントロ: 夜の湖を見せたまま、緞帳が左右からゆっくり閉じて視界を覆う。
         if (this.actPhase === 'intro') {
             this.introP = Math.max(0, Math.min(1, (rel - this._introStartRel) / this.introDur));
             // 自動再生がすり抜けて曲が進んでしまう環境向けに、降下中は頭(0)で待たせ続ける。
@@ -1082,33 +1293,41 @@ export class SongAfter extends BaseSong {
                 try { pl && pl.requestPlay(); } catch (e) { /* 音源制御不可でもショーは進む */ }
             }
         }
-        // 終演: 紙吹雪にした量に応じてカーテンが上へ開く(少なくても下限ぶんは開く)
+        // 曲の進行度(0→1)と、アウトロ(終盤約22秒)でゆっくり開くための進捗。
+        const songProg = duration > 0 ? Math.max(0, Math.min(1, position / duration)) : 0;
+        const outroMs = 22000;
+        const outroP = duration > 0
+            ? Math.max(0, Math.min(1, (position - (duration - outroMs)) / outroMs))
+            : 0;
+        // 緞帳の閉じ具合(0=全開/左右に退く → 1=閉/中央で合わさる)
         const kindleRatio = Math.min(1, this.kindledCount / this.openFullCount);
         const maxOpen = this.curtainMinOpen + (1 - this.curtainMinOpen) * kindleRatio;
-        this.curtainOpen = maxOpen * ease(f);
-
-        // カーテンの目標Y(phaseごと)
-        let curtainTargetY;
+        let targetClose;
         if (this.actPhase === 'preroll') {
-            curtainTargetY = this.curtainOpenY;
+            targetClose = 0;                  // 開幕前: 左右に開いて夜の湖を見せる
         } else if (this.actPhase === 'intro') {
-            curtainTargetY = this.curtainOpenY + (this.curtainCoverY - this.curtainOpenY) * ease(this.introP);
+            targetClose = ease(this.introP);  // イントロ: 左右からゆっくり閉じる
         } else {
-            curtainTargetY = this.curtainCoverY + (this.curtainOpenY - this.curtainCoverY) * this.curtainOpen;
+            // アウトロ: 紙吹雪にした量に応じた幅まで、ゆっくり左右へ開いていく(下限あり)
+            targetClose = 1 - maxOpen * ease(outroP);
         }
-        this.curtain.position.y += (curtainTargetY - this.curtain.position.y) * Math.min(1, dt * 2.4);
+        this.curtainCloseFrac += (targetClose - this.curtainCloseFrac) * Math.min(1, dt * 2.4);
+        const cf = this.curtainCloseFrac;
 
-        // 漏れ光: 破裂でパルス→減衰。カーテンが閉じているほど強く現れる。
+        // パネル位置: 内側端を中央(0)から openInner まで左右へ退かせる
+        const leftInner = -(1 - cf) * this.openInner;
+        const rightInner = (1 - cf) * this.openInner;
+        if (this.curtainLeft) this.curtainLeft.position.x = leftInner - this.panelW / 2;
+        if (this.curtainRight) this.curtainRight.position.x = rightInner + this.panelW / 2;
+
+        // 漏れ光: 中央の合わせ目から。曲が進むほど増し、破裂で一瞬強まる。閉じているほど強い。
         this._curtainLeak *= 0.92;
-        const coverFrac = Math.max(0, Math.min(1,
-            (this.curtainOpenY - this.curtain.position.y) / (this.curtainOpenY - this.curtainCoverY)));
         if (this.leakPlane) {
-            this.leakPlane.position.y = this.curtain.position.y;
-            this.leakPlane.material.opacity = coverFrac * (0.05 + this._curtainLeak * 0.9);
+            this.leakPlane.material.opacity = cf * (0.04 + 0.34 * songProg + this._curtainLeak * 0.8);
         }
 
-        // 幕間の湖: 終演でカーテンが開くにつれ、その先が夜→晴天へ移ろう。
-        const dayMix = ease(f);
+        // 幕間の湖: アウトロでカーテンが開くにつれ、その先が夜→晴天へ移ろう。
+        const dayMix = ease(outroP);
         if (this.lake) this.lake.update(rel, dayMix);
 
         // 星空: サビは夜空が瞬く。終演=昼へ向かうので消えてゆく。
@@ -1177,8 +1396,9 @@ export class SongAfter extends BaseSong {
             const p = ud.hoverProgress;
 
             // 照射時間の蓄積 → 照らし切り(kindle)判定
-            // 照らし切った瞬間に「光って破裂」: 紙吹雪が舞い降り、同時に客席の灯としても残る
-            if (isIlluminated) {
+            // 蓄積は「スポットライトで照らした時間」だけ。サビで全体が明るくなっても
+            // 自動的に弾けない(自分で照らした歌詞だけが紙吹雪になる)。
+            if (litBySpot && f < 0.3) {
                 ud.litTime += dtMs;
                 if (!ud.kindled && ud.litTime >= this.litThreshold) {
                     ud.kindled = true;
@@ -1224,27 +1444,34 @@ export class SongAfter extends BaseSong {
             if (!ud.pulseProgress) ud.pulseProgress = 0;
             ud.pulseProgress += ((isWordActive ? 1 : 0) - ud.pulseProgress) * 0.2;
             const pulse = ud.pulseProgress;
-            const s = (1.0 + p * 0.35) * (1.0 + pulse * 0.25) * (1.0 + ud.kindleFlash * 0.15);
+            const fit = ud.fitScale || 1;
+            const s = fit * (1.0 + p * 0.35) * (1.0 + pulse * 0.25) * (1.0 + ud.kindleFlash * 0.15);
             mesh.scale.set(s, s, 1);
 
-            // 発光: 通常はエメラルド。照らし切ると暖色の灯色へ移ろう
+            // 発光: 暗いステージでも黒くつぶれないよう常にほのかに自己発光。
+            // 照らし切るほど暖色へ寄り、スポット/歌唱で強く光る。
             const litRatio = Math.min(1, ud.litTime / this.litThreshold);
-            const hue = 0.44 + pulse * 0.05 - litRatio * 0.36; // 0.44(緑) → 0.08(暖色)
-            const lum = (0.45 * p + pulse * 0.45 + ud.kindleFlash * 0.5 + (ud.kindled ? 0.18 : 0)) * stageDim;
-            mesh.material.emissive.setHSL(Math.max(0.06, hue), 0.85, Math.min(0.85, lum));
+            const hue = 0.46 + pulse * 0.05 - litRatio * 0.38; // 緑 → 暖色
+            const baseGlow = 0.26;                              // 常時のほのかな白光(発話後も黒くならない)
+            let lum = Math.min(0.92, baseGlow + 0.5 * p + pulse * 0.4 + ud.kindleFlash * 0.5 + (ud.kindled ? 0.15 : 0));
+            lum *= (0.4 + 0.6 * stageDim);                      // 終演のみ少し沈ませる
+            mesh.material.emissive.setHSL(Math.max(0.06, hue), 0.7, lum);
 
-            // Fade in/out
-            if (age < 150) {
-                mesh.material.opacity = age / 150;
-            } else if (age > ud.life - 200) {
-                mesh.material.opacity = Math.max(0, (ud.life - age) / 200);
+            // 出現→発話中は保持→発話後はゆるやかにフェードアウト(黒く残さない)。
+            // スポットライトで照らしている間は消えずに留まり、読んで弾けるまで粘れる。
+            const fadeInMs = 200, singHold = 3000, fadeOutMs = 2200;
+            let targetOpacity;
+            if (age < fadeInMs) {
+                targetOpacity = age / fadeInMs;
+            } else if (litBySpot || age <= singHold) {
+                targetOpacity = 1.0;
             } else {
-                mesh.material.opacity = 1.0;
+                targetOpacity = Math.max(0, 1 - (age - singHold) / fadeOutMs);
             }
+            mesh.material.opacity += (targetOpacity - mesh.material.opacity) * Math.min(1, dt * 6);
 
-            if (age > ud.life || f >= 1) {
-                // 照らし切れなかった歌詞は、灯にも紙吹雪にもならず静かに消える
-                // (照らし切った歌詞は kindle 時に破裂・灯化を済ませている)
+            // フェードし切った歌詞、または終演で除去(照らしている間は残す)
+            if ((mesh.material.opacity <= 0.02 && !litBySpot && age > singHold) || age > ud.life || f >= 1) {
                 this.scene.remove(mesh);
                 mesh.material.map.dispose();
                 mesh.material.dispose();
@@ -1368,10 +1595,11 @@ export class SongAfter extends BaseSong {
             this.floor.geometry.dispose();
             this.floor.material.dispose();
         }
-        if (this.curtain) {
-            this.curtain.geometry.dispose();
-            if (this.curtain.material.map) this.curtain.material.map.dispose();
-            this.curtain.material.dispose();
+        for (const m of [this.curtainLeft, this.curtainRight, this.valance]) {
+            if (!m) continue;
+            m.geometry.dispose();
+            if (m.material.map) m.material.map.dispose();
+            m.material.dispose();
         }
         if (this.leakPlane) {
             this.leakPlane.geometry.dispose();
