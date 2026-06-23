@@ -65,6 +65,7 @@ export class PlayerControls {
         };
 
         this.playPauseBtn.addEventListener('click', () => {
+            if (window.app?.currentSongScene?.isSelectingCast) return; // 被写体選択中は再生させない(shutter)
             if (!playerManager.isTimerReady) return; // Guard clicks during loading
             unlockAudioContext();
             if (appState.isPlaying) {
@@ -130,6 +131,7 @@ export class PlayerControls {
             }
             if (e.code === 'Space') {
                 e.preventDefault();
+                if (window.app?.currentSongScene?.isSelectingCast) return; // 被写体選択中はSpaceで再生させない(shutter)
                 unlockAudioContext();
                 if (appState.isPlaying) {
                     playerManager.pause();
