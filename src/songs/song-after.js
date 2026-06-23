@@ -661,6 +661,7 @@ export class SongAfter extends BaseSong {
             fontSize -= 4;
         } while (fontSize > minFont);
 
+        const textWidth = ctx.measureText(text).width;
         ctx.fillStyle = '#ffffff';
         ctx.shadowColor = '#000000';
         ctx.shadowBlur = 12;
@@ -669,7 +670,35 @@ export class SongAfter extends BaseSong {
         ctx.fillText(text, 512, 64);
         const tex = new THREE.CanvasTexture(canvas);
         tex.anisotropy = 4;
-        return tex;
+        // widthFrac = テキストがキャンバス幅に占める割合(配置のはみ出し防止に使う)
+        return { texture: tex, widthFrac: Math.min(1, textWidth / 1024) };
+    }
+
+    // ─── そのワールド奥行き(z)で画面に収まる可視範囲を、カメラの視錐台から求める ───
+    // 歌詞を画面いっぱいに散らしつつ、フレーム外へはみ出さないための配置境界。
+    visibleBoundsAtZ(zc) {
+        const cam = this.camera;
+        cam.updateMatrixWorld();
+        const e = cam.matrixWorld.elements;
+        const right = new THREE.Vector3(e[0], e[1], e[2]).normalize();
+        const up = new THREE.Vector3(e[4], e[5], e[6]).normalize();
+        const fwd = new THREE.Vector3(-e[8], -e[9], -e[10]).normalize();
+        const cp = cam.position;
+        const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+        const aspect = cam.aspect || (window.innerWidth / window.innerHeight);
+        const tanH = tanV * aspect;
+        const edgeY = (ry) => {
+            const dx = fwd.x + ry * tanV * up.x;
+            const dy = fwd.y + ry * tanV * up.y;
+            const dz = fwd.z + ry * tanV * up.z;
+            const t = (zc - cp.z) / dz;
+            return cp.y + t * dy;
+        };
+        // 水平端(垂直中央のレイ)
+        const dxR = fwd.x + tanH * right.x, dyR = fwd.y + tanH * right.y, dzR = fwd.z + tanH * right.z;
+        const tR = (zc - cp.z) / dzR;
+        const halfW = Math.abs(cp.x + tR * dxR - cp.x); // カメラはx=0中心なので左右対称
+        return { halfW, yTop: edgeY(1), yBottom: edgeY(-1) };
     }
 
     // ─── フレーズを文法的に意味のある単位で「もう少しだけ」短く区切る ───
@@ -762,7 +791,7 @@ export class SongAfter extends BaseSong {
     }
 
     spawnTextChunk(text, spawnTime) {
-        const texture = this.createTextTexture(text);
+        const { texture, widthFrac } = this.createTextTexture(text);
 
         const material = new THREE.MeshStandardMaterial({
             map: texture,
@@ -776,15 +805,28 @@ export class SongAfter extends BaseSong {
             side: THREE.DoubleSide
         });
 
-        const geo = new THREE.PlaneGeometry(1024 / 110, 128 / 110);
+        const planeW = 1024 / 110, planeH = 128 / 110;
+        const geo = new THREE.PlaneGeometry(planeW, planeH);
         const mesh = new THREE.Mesh(geo, material);
 
-        // 画面いっぱいに歌詞を散らしつつ、ミク前方(客席側)に出して視線も自然に向くようにする。
-        mesh.position.set(
-            (Math.random() - 0.5) * 20,  // 左右いっぱい(±10)
-            Math.random() * 4.8 + 1.3,   // 上下も広く(1.3〜6.1)
-            Math.random() * 4.6 - 0.6    // -0.6〜4.0(ミク頭部 z≈-2 より手前=客席側)
-        );
+        // ── 画面いっぱいに散らしつつ、フレーム外へはみ出さないように配置する ──
+        const SCALE_MAX = 1.5;   // 照射/歌唱でこの程度まで拡大しうる
+        const MARGIN = 0.5;      // 端からの余白(ワールド)
+        const z = Math.random() * 4.6 - 0.6;            // -0.6〜4.0(ミク前方=客席側)
+        const bnd = this.visibleBoundsAtZ(z);
+        // テキストが広すぎる(=画面幅を超える)場合は縮小してフレーム内に収める
+        let textW = planeW * widthFrac;
+        const maxTextW = Math.max(0.5, (bnd.halfW * 2 - MARGIN) / SCALE_MAX);
+        const fitScale = textW > maxTextW ? maxTextW / textW : 1;
+        textW *= fitScale;
+        const textHalfW = (textW / 2) * SCALE_MAX;
+        const textHalfH = (planeH * 0.62 / 2) * SCALE_MAX * fitScale;
+        const xLimit = Math.max(0.3, bnd.halfW - textHalfW - MARGIN);
+        const yLo = bnd.yBottom + textHalfH + MARGIN;
+        const yHi = bnd.yTop - textHalfH - MARGIN;
+        const x = (Math.random() * 2 - 1) * xLimit;
+        const y = yLo + Math.random() * Math.max(0.2, yHi - yLo);
+        mesh.position.set(x, y, z);
         mesh.castShadow = !this.isMobile;
 
         mesh.userData = {
@@ -796,10 +838,12 @@ export class SongAfter extends BaseSong {
             kindleFlash: 0,
             baseY: mesh.position.y,
             spinFactor: (Math.random() - 0.5) * 0.15,
+            fitScale,          // はみ出し防止の基準スケール(毎フレームの拡縮はこれに乗算)
+            widthFrac,         // テキストがプレーン幅に占める割合(検証/はみ出し判定用)
             text: text
         };
 
-        mesh.scale.set(1, 1, 1);
+        mesh.scale.set(fitScale, fitScale, 1);
         mesh.lookAt(new THREE.Vector3(this.camera.position.x, mesh.position.y, this.camera.position.z));
 
         this.scene.add(mesh);
@@ -1231,7 +1275,8 @@ export class SongAfter extends BaseSong {
             if (!ud.pulseProgress) ud.pulseProgress = 0;
             ud.pulseProgress += ((isWordActive ? 1 : 0) - ud.pulseProgress) * 0.2;
             const pulse = ud.pulseProgress;
-            const s = (1.0 + p * 0.35) * (1.0 + pulse * 0.25) * (1.0 + ud.kindleFlash * 0.15);
+            const fit = ud.fitScale || 1;
+            const s = fit * (1.0 + p * 0.35) * (1.0 + pulse * 0.25) * (1.0 + ud.kindleFlash * 0.15);
             mesh.scale.set(s, s, 1);
 
             // 発光: 暗いステージでも黒くつぶれないよう常にほのかに自己発光。

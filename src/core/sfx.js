@@ -51,6 +51,8 @@ class Sfx {
         this.buffers = {};
         this._loadStarted = false;
         this._lastBtnClick = 0;
+        this._active = 0;          // 現在鳴っているソース数
+        this._suspendTimer = null; // アイドル時の自動suspend用
     }
 
     _ensureCtx() {
@@ -63,7 +65,22 @@ class Sfx {
             this.master.connect(this.ctx.destination);
         } catch (e) { return null; }
         this._load();
+        // 生成直後に何も鳴っていなければ即 suspend する。AudioContext を running の
+        // まま放置するとOSのオーディオ出力が開きっぱなしになり、無音でも環境によって
+        // 常時「サー」というノイズフロア(ヒス/ハム)が出る。鳴らす瞬間だけ resume する。
+        this._scheduleIdleSuspend(0);
         return this.ctx;
+    }
+
+    // 一定時間 SFX が鳴っていなければ AudioContext を suspend してデバイスを閉じる
+    _scheduleIdleSuspend(delay = 600) {
+        if (this._suspendTimer) { clearTimeout(this._suspendTimer); this._suspendTimer = null; }
+        this._suspendTimer = setTimeout(() => {
+            this._suspendTimer = null;
+            if (this._active <= 0 && this.ctx && this.ctx.state === 'running') {
+                this.ctx.suspend().catch(() => {});
+            }
+        }, delay);
     }
 
     // 事前デコード。AudioContext は suspended のままでも decodeAudioData は可能。
@@ -87,26 +104,42 @@ class Sfx {
         return (Number.isFinite(v) ? v : 80) / 100;
     }
 
-    // 初回ユーザージェスチャで AudioContext を起こす(自動再生ポリシー対応)
+    // 初回ユーザージェスチャで AudioContext を解錠(自動再生ポリシー対応)。
+    // ここでは running のまま放置せず、すぐ resume できる状態を作るだけにとどめ、
+    // アイドルになれば再び suspend してノイズフロアを残さない。
     unlock() {
         const c = this._ensureCtx();
-        if (c && c.state === 'suspended') c.resume().catch(() => {});
+        if (!c) return;
+        if (c.state === 'suspended') {
+            c.resume().then(() => this._scheduleIdleSuspend()).catch(() => {});
+        } else {
+            this._scheduleIdleSuspend();
+        }
     }
 
     play(key, gain = 1) {
         const c = this._ensureCtx();
         if (!c) return;
-        if (c.state === 'suspended') c.resume().catch(() => {});
         const buf = this.buffers[key];
         if (!buf) return;
         const vol = this._userVol();
         if (vol <= 0) return;
+        // 鳴らす瞬間だけ resume。アイドル自動suspendの予約は取り消す。
+        if (this._suspendTimer) { clearTimeout(this._suspendTimer); this._suspendTimer = null; }
+        if (c.state === 'suspended') c.resume().catch(() => {});
         const src = c.createBufferSource();
         src.buffer = buf;
         const g = c.createGain();
         g.gain.value = vol * SFX_MASTER * gain;
         src.connect(g);
         g.connect(this.master || c.destination);
+        this._active++;
+        src.onended = () => {
+            this._active = Math.max(0, this._active - 1);
+            try { src.disconnect(); g.disconnect(); } catch (e) { /* noop */ }
+            // 最後の音が鳴り終わったらデバイスを閉じてノイズフロアを残さない
+            if (this._active <= 0) this._scheduleIdleSuspend();
+        };
         try { src.start(0); } catch (e) { /* noop */ }
     }
 }
