@@ -582,6 +582,12 @@ export class SongShutter extends BaseSong {
                                 });
                                 if (m.map) {
                                     newMat.map = m.map;
+                                    // PMXの目パーツ(黒目/白目/ハイライト)などはRGBAテクスチャの透明境界で
+                                    // 「白目が黒目の外側から覗く」構造。MMDToonMaterial→Phong変換で
+                                    // 透明情報が落ちると黒目(虹彩)が目全体を不透明に覆い、白目が完全に隠れて
+                                    // 「白目がない」状態になる。alphaTestで透明画素を切り抜き、奥の白目を見せる。
+                                    // 不透明テクスチャ(肌・服など alpha=1)は一切影響を受けない。
+                                    newMat.alphaTest = 0.5;
                                 }
                                 return newMat;
                             };
