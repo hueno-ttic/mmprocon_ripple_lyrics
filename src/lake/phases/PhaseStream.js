@@ -9,10 +9,18 @@ export class PhaseStream extends PhaseBase {
         super(scene, camera, renderer);
         this.exposure = 1.15;
         this.bloomParams = { strength: 0.34, radius: 0.55, threshold: 0.85 };
-        this.cameraRig = {
-            pos: [2, 5.6, 46], lookAt: [-1, 0.6, -42],
-            drift: { ax: 1.1, fx: 0.09, ay: 0.18, fy: 0.15 },
-        };
+        // The brook used to run straight down the view axis — a thin vertical
+        // ribbon dead-center, fully hidden behind the jacket card so the scene
+        // read as a plain meadow. Re-framed per device so the water always shows:
+        //  - Desktop: a side-oblique vantage sweeps the brook across the wide
+        //    lower-left foreground, clear of the centered card.
+        //  - Mobile: the tall, narrow frame's big centered card fills the whole
+        //    valley, so we lift to an elevated vantage and look down at the
+        //    meander — the brook winds through the open frame above the card.
+        const mobile = window.innerWidth < 768;
+        this.cameraRig = mobile
+            ? { pos: [6, 27, 20], lookAt: [1, 0, -18], drift: { ax: 0.8, fx: 0.09, ay: 0.18, fy: 0.15 } }
+            : { pos: [25, 10.5, 31], lookAt: [-9, 0.1, -30], drift: { ax: 1.0, fx: 0.09, ay: 0.16, fy: 0.15 } };
         this._build();
     }
 
@@ -23,10 +31,13 @@ export class PhaseStream extends PhaseBase {
         this.sunDisc = K.addSunDisc(g, sun.position, { dist: 175, glow: 86, r: 6.5, inner: 'rgba(255,244,214,0.95)', outer: 'rgba(255,226,170,0.34)' });
         const sunDir = sun.position.clone().normalize();
 
-        // meandering stream centerlines (near camera -> far). t=0 near, t=1 far
-        const mainPts = [[4, 34], [-3, 16], [5, -4], [-4, -26], [3, -50], [-2, -76], [1, -100]];
+        // meandering stream centerlines (near camera -> far). t=0 near, t=1 far.
+        // Bolder left-right swings + a wider near mouth so the brook unmistakably
+        // snakes through the frame (the gentle old wiggle read as a flat ribbon
+        // once seen from the side).
+        const mainPts = [[12, 36], [-8, 18], [11, -2], [-10, -26], [6, -50], [-4, -76], [1, -100]];
         this.mainCurve = new THREE.CatmullRomCurve3(mainPts.map(p => new THREE.Vector3(p[0], 0, p[1])), false, 'catmullrom', 0.5);
-        const mainWidth = t => 6.4 - t * 3.6;
+        const mainWidth = t => 7.6 - t * 4.4;
         const sidePts = [[28, 2], [19, -1], [11, -3], [5.5, -4.5]];
         this.sideCurve = new THREE.CatmullRomCurve3(sidePts.map(p => new THREE.Vector3(p[0], 0, p[1])), false, 'catmullrom', 0.5);
         const sideWidth = t => 2.8 - t * 1.3;
