@@ -6,6 +6,12 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
 import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
+import { addRipple } from '../lake/lakeMemory.js';
+
+// 「湖／水の循環」要素のオン/オフを束ねる単一フラグ。
+// false にすると本ファイルの湖関連（夕暮れ水面・撮影波紋・ベスト1枚を湖へ流す）は
+// すべて初期化・更新・破棄ごと無効化され、従来の挙動に完全に戻る（即リバート用）。
+const SHUTTER_LAKE_ENABLED = true;
 
 const VRM_TO_MMD_BONES = {
     hips: '下半身',
@@ -94,6 +100,54 @@ const ARM_GESTURES = {
         head: { x: -0.05, y: 0, z: 0 }, spine: { x: -0.03, y: 0, z: 0 }
     },
 };
+
+// 「かわいいポーズ」ボタン用プリセット（ミク/リン共通。ボタンを押すと数秒ホールド）。
+// 既存の ARM_GESTURES を土台に、頭の傾きや胴のひねりを足してキメ顔ポーズへ仕上げた6種。
+// 各 pose の値は ARM_GESTURES と同じ規約（leftUpperArm/rightUpperArm は適用時に±0.5補正される）。
+// 注: 上腕 z は「左=正で下ろし／右=負で下ろし」。左は z を下げ、右は z を上げると腕が高く挙がる。
+// 肘(LowerArm)の z は左=負・右=正で内側に折れる。ちび体型でも読めるよう大きめ＆左右非対称に。
+const SHUTTER_CUTE_POSES = [
+    // 右手を顔の横へ上げてピース（Vサイン）、左手は下ろす。頭をピース側へ傾ける
+    // ※ 専用エージェントがねんどろポージング参考に実機反復調整（手が顔の横に来る定番ピース）
+    { id: 'peace', label: 'ピース', emoji: '✌️', pose: {
+        leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0, z: 0 },
+        rightUpperArm: { x: 0.3, y: 0, z: -2.95 }, rightLowerArm: { x: -0.15, y: 0, z: 0.5 },
+        head: { x: 0.05, y: 0.04, z: 0.27 }, neck: { x: 0, y: 0, z: 0.13 }
+    } },
+    // 胸の前で両手を合わせて小さくハート、頭を下げて手元を見る
+    // ※ モデル制約: 腕は頭上まで上がらず、ツインテールで手元が隠れやすい。胸前ハートが最良形。
+    { id: 'heart', label: 'ハート', emoji: '💗', pose: {
+        leftUpperArm: { x: 1.05, y: 0, z: 0.35 }, rightUpperArm: { x: 1.05, y: 0, z: -0.35 },
+        leftLowerArm: { x: 0, y: 0, z: -1.55 }, rightLowerArm: { x: 0, y: 0, z: 1.55 },
+        head: { x: 0.26, y: 0, z: 0 }, spine: { x: 0.06, y: 0, z: 0 }
+    } },
+    // 両手を顎〜頬の高さに添えてきゅるん（顔を包む）
+    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: {
+        leftUpperArm: { x: 0.3, y: 0, z: 0.42 }, rightUpperArm: { x: 0.3, y: 0, z: -0.42 },
+        leftLowerArm: { x: 0, y: 0.14, z: -2.1 }, rightLowerArm: { x: 0, y: -0.14, z: 2.1 },
+        head: { x: 0.08, y: 0.02, z: 0.22 }, neck: { x: 0.04, y: 0, z: 0.07 }, spine: { x: 0.01, y: 0, z: 0.04 }
+    } },
+    // 両肘を鋭く横へ張って手を腰に当てる凛とした決めポーズ（アキンボ・胸張り）
+    { id: 'sumashi', label: 'おすまし', emoji: '😌', pose: {
+        leftUpperArm: { x: 0.05, y: 0, z: 1.2 }, rightUpperArm: { x: 0.05, y: 0, z: -1.2 },
+        leftLowerArm: { x: 0.4, y: 1.58, z: -0.72 }, rightLowerArm: { x: 0.4, y: -1.58, z: 0.72 },
+        head: { x: 0.05, y: -0.04, z: 0.1 }, neck: { x: 0.04, y: 0, z: 0 }, chest: { x: -0.05, y: 0, z: 0 }, spine: { x: -0.09, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 }
+    } },
+    // 右腕を肘を伸ばしたまま斜め上・外へ一直線に差し出す指さし、左手は腰。顔と視線を指先へ
+    { id: 'point', label: 'ゆびさし', emoji: '☝️', pose: {
+        leftUpperArm: { x: 0, y: 0, z: 1.0 }, leftLowerArm: { x: 0, y: 0.55, z: -0.7 },
+        rightUpperArm: { x: -0.4, y: -0.05, z: 1.72 }, rightLowerArm: { x: 0, y: 0, z: 0.0 },
+        head: { x: -0.13, y: 0.3, z: 0.17 }, neck: { x: -0.06, y: 0.15, z: 0.09 }, spine: { x: -0.02, y: 0.06, z: 0 }
+    } },
+    // 右手を斜め上へ挙げ、肘を軽く曲げ前腕を外へ開き手のひらを正面に見せる「手を振る挨拶」。
+    // 左手は下ろし頭を逆へ傾けて親しげに。point(肘伸ばし＋顔を指先へ)と区別。
+    // ※ 重要: 各ボーンは x/y/z を必ず全部指定（欠けると補間で NaN になりボーンが壊れる）
+    { id: 'wave', label: 'てふり', emoji: '👋', pose: {
+        leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0.26, z: 0 },
+        rightUpperArm: { x: -0.5, y: -0.12, z: 1.55 }, rightLowerArm: { x: 0, y: -0.28, z: 0.72 }, rightHand: { x: 0, y: 0, z: -0.1 },
+        head: { x: 0.02, y: 0.07, z: -0.27 }, neck: { x: 0.04, y: 0.04, z: -0.16 }, chest: { x: 0, y: 0, z: 0.05 }, spine: { x: 0, y: 0.02, z: 0.04 }
+    } },
+];
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
 const SHUTTER_VOCAL_MAP = {
@@ -199,6 +253,23 @@ export class SongShutter extends BaseSong {
         this.chosenBestIndex = null; // プレイヤーが選んだベストショットのphotoLog内index
         this.bestChosenTimeStr = null; // 選定したベストの撮影タイム（結果表示用）
         this._bestChosen = false;    // 選定済みフラグ（多重選択ガード）
+
+        // --- 湖／水の循環（SHUTTER_LAKE_ENABLED で一括ガード。off時は一切生成しない） ---
+        this.lakeWater = null;       // 夜の手続き水面メッシュ
+        this.lakeWaterUni = null;    // 水面シェーダのuniforms
+        this.lakeMoon = null;        // 夜空の月スプライト
+        this.lakeStars = null;       // 夜空の星々(Points)
+        this.lakeMoonX = -22;        // 月のx位置（水面の月光レーンと一致させる）
+        this.lakeRipples = [];       // 撮影時に広がる波紋リング { mesh, t, life }
+        this._lakeRingGeo = null;    // 波紋リングの共有ジオメトリ
+        this._lakeFade = 0;          // 水面のフェードイン度(0..0.92)
+        this._lakeLastT = 0;         // 水面アニメ用の前フレーム時刻(ms)
+        this._bestRippleSaved = false; // ベスト1枚を湖へ流した多重ガード
+
+        // 「かわいいポーズ」ボタンで一時的に指定ポーズをホールドする状態
+        this.poseOverride = null;    // { pose, until(performance.now基準のms), id } or null
+        this._poseHoldAmt = 0;       // ホールド度の平滑値(0..1。移動抑制に使用)
+        this._poseBtnTimer = null;   // ボタンのハイライト解除タイマー
 
         // --- 被写体VRM（「シャッターチャンス」はミク&リンのデュエット曲。2体を並べる） ---
         this.mikuVRM = null;         // 主役(ミク)。ライティング/破棄の後方互換参照
@@ -333,7 +404,7 @@ export class SongShutter extends BaseSong {
         this.draggedDistance = 0; // クリックとドラッグの判定用
 
         this.boundOnMouseDown = (e) => {
-            if (e.target.id === 'shutter-zoom-slider' || e.target.closest('#shutter-zoom-slider-container')) return;
+            if (e.target.id === 'shutter-zoom-slider' || e.target.closest('#shutter-zoom-slider-container') || e.target.closest('#shutter-pose-bar')) return;
             this.isDragging = true;
             this.dragStartPos.set(e.clientX, e.clientY);
             this.previousMousePosition.set(e.clientX, e.clientY);
@@ -371,7 +442,7 @@ export class SongShutter extends BaseSong {
         this.boundOnTouchStartCam = (e) => {
             if (e.touches.length === 1) {
                 const touch = e.touches[0];
-                if (touch.target.id === 'shutter-zoom-slider' || touch.target.closest('#shutter-zoom-slider-container')) return;
+                if (touch.target.id === 'shutter-zoom-slider' || touch.target.closest('#shutter-zoom-slider-container') || touch.target.closest('#shutter-pose-bar')) return;
                 this.isDragging = true;
                 this.dragStartPos.set(touch.clientX, touch.clientY);
                 this.previousMousePosition.set(touch.clientX, touch.clientY);
@@ -424,6 +495,17 @@ export class SongShutter extends BaseSong {
             slider.addEventListener('input', this.boundOnSliderInput);
         }
 
+        // 「かわいいポーズ」ボタンの登録。押すと被写体が数秒そのポーズをキメる。
+        // pointerdown/touchstart で伝播を止め、撮影（クリック）やカメラ首振りに巻き込まれないようにする。
+        if (this.viewfinder) {
+            this.viewfinder.querySelectorAll('.shutter-pose-btn').forEach((btn) => {
+                const id = btn.getAttribute('data-pose');
+                btn.addEventListener('pointerdown', (e) => e.stopPropagation());
+                btn.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+                btn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); this.triggerCutePose(id); });
+            });
+        }
+
         window.addEventListener('resize', this.boundOnResize);
         window.addEventListener('keydown', this.boundOnKeyDown);
         
@@ -463,6 +545,9 @@ export class SongShutter extends BaseSong {
             // プレイヤーが「決定的な1枚」を選んだ後
             lines.push(`★ ベストショット選定 ✓ (${this.bestChosenTimeStr})`);
             lines.push(`撮影 ${this.totalShots}枚 ・ 候補 ${this.starShots}枚`);
+            if (SHUTTER_LAKE_ENABLED && this._bestRippleSaved) {
+                lines.push('この1枚を湖に流した — いつかまた、別の曲で');
+            }
         } else {
             lines.push(`撮影 ${this.totalShots}枚 ・ 候補 ${this.starShots}枚`);
         }
@@ -795,6 +880,35 @@ export class SongShutter extends BaseSong {
         this._danceToastTimer = setTimeout(() => { if (el) el.style.opacity = '0'; }, 1400);
     }
 
+    // 「かわいいポーズ」ボタン: 指定ポーズを一定時間ホールドする（ホールド中はグルーヴ抑制＆移動も抑制）。
+    triggerCutePose(poseId) {
+        const cp = SHUTTER_CUTE_POSES.find((p) => p.id === poseId);
+        if (!cp) return;
+        const holdMs = 3200;
+        this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId };
+        // 表情も笑顔に寄せて可愛さを強調
+        const shown = this.subjects.find((s) => s.key === this.shownKey);
+        if (shown) shown.smileTimer = holdMs;
+        // ポーズ切替で髪の物理が暴れないようリセット
+        if (shown && shown.mesh && shown.mesh.springBoneManager) shown.mesh.springBoneManager.reset();
+        this.highlightPoseButton(poseId, holdMs);
+        try { sfx.play('shutter_click'); } catch (e) { /* SE未定義でも無害 */ }
+    }
+
+    // 選択中ポーズのボタンをハイライト。ホールド終了で解除。
+    highlightPoseButton(poseId, holdMs) {
+        if (!this.viewfinder) return;
+        this.viewfinder.querySelectorAll('.shutter-pose-btn').forEach((b) => {
+            b.classList.toggle('active', b.getAttribute('data-pose') === poseId);
+        });
+        clearTimeout(this._poseBtnTimer);
+        this._poseBtnTimer = setTimeout(() => {
+            if (this.viewfinder) {
+                this.viewfinder.querySelectorAll('.shutter-pose-btn.active').forEach((b) => b.classList.remove('active'));
+            }
+        }, holdMs);
+    }
+
     // ビート同期グルーヴ: 腰の体重移動・拍の沈み込み・膝バウンス・頭ノリ・腕振りを
     // 腕の型(armStyle)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
     // （song-kotaete.js の applyGroove を被写体1体構成向けに移植・調整）
@@ -1044,6 +1158,219 @@ export class SongShutter extends BaseSong {
         // 持たない飾りだったため撤去する。これに依存していたロック判定/「NOW!」合図は
         // すべて `if (this.targetScope)` ガードで自動的に無効化される。
         this.targetScope = null;
+
+        // 夜空の湖: 被写体の足元に手続き水面を敷き、月と星空をその上に映す（反射RT不使用）
+        this.initLakeNightSky();
+        this.initLakeSurface();
+    }
+
+    // --- 夜空: 月＋星々を被写体の奥・上空に配置（水面の映り込みの“光源”になる） -----
+    // 反射はRTを使わず水面シェーダ側で手続き的に近似するが、実体としても月・星を置くことで
+    // 「夜空の湖」として画面に夜空そのものが見える。フラグoff時は生成しない。
+    initLakeNightSky() {
+        if (!SHUTTER_LAKE_ENABLED) return;
+        const pivotZ = this.mikuBaseZ;
+        // 月: 柔らかい円盤スプライト（常にカメラを向く）。x位置は水面の月光レーンと一致させる。
+        const moonTex = this.makeMoonTexture();
+        const moonMat = new THREE.SpriteMaterial({
+            map: moonTex, transparent: true, depthWrite: false, fog: false,
+            blending: THREE.AdditiveBlending, opacity: 0.95,
+        });
+        const moon = new THREE.Sprite(moonMat);
+        moon.scale.set(26, 26, 1);
+        moon.position.set(this.lakeMoonX, 30, pivotZ - 86);
+        this.scene.add(moon);
+        this.lakeMoon = moon;
+
+        // 星々: 被写体の奥〜上空に散らした点群（フォグ無効でくっきり）。
+        const N = this.isMobile ? 110 : 180;
+        const pos = new Float32Array(N * 3);
+        for (let i = 0; i < N; i++) {
+            const az = (Math.random() * 2 - 1) * 1.35;       // 前方(-z)を中心に左右へ
+            const el = 0.07 + Math.random() * 0.92;          // 地平〜頭上
+            const R = 110 + Math.random() * 45;
+            const ce = Math.cos(el);
+            pos[i * 3] = Math.sin(az) * R * ce;
+            pos[i * 3 + 1] = 6 + Math.sin(el) * R * 0.8;
+            pos[i * 3 + 2] = pivotZ - Math.cos(az) * R * ce;
+        }
+        const starGeo = new THREE.BufferGeometry();
+        starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const starMat = new THREE.PointsMaterial({
+            color: 0xcdd8ff, size: 0.9, sizeAttenuation: true,
+            transparent: true, opacity: 0.9, depthWrite: false, fog: false,
+            blending: THREE.AdditiveBlending,
+        });
+        const stars = new THREE.Points(starGeo, starMat);
+        stars.frustumCulled = false;
+        this.scene.add(stars);
+        this.lakeStars = stars;
+    }
+
+    // 月の柔らかい円盤テクスチャ（中心ほど明るい放射グラデ）を生成
+    makeMoonTexture() {
+        const c = document.createElement('canvas');
+        c.width = c.height = 128;
+        const g = c.getContext('2d');
+        const grd = g.createRadialGradient(64, 64, 6, 64, 64, 64);
+        grd.addColorStop(0, 'rgba(248,250,255,1)');
+        grd.addColorStop(0.42, 'rgba(214,226,255,0.9)');
+        grd.addColorStop(0.72, 'rgba(150,175,235,0.35)');
+        grd.addColorStop(1, 'rgba(120,150,220,0)');
+        g.fillStyle = grd;
+        g.fillRect(0, 0, 128, 128);
+        const tex = new THREE.CanvasTexture(c);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        return tex;
+    }
+
+    // --- A-1: 夜の湖面 -------------------------------------------------------
+    // 被写体の足元(y=mikuBaseY)に水平な水面プレーンを1枚敷く。空のRTを使わず、
+    // フラグメントシェーダ内で「手前=深い藍／奥(水際)=群青」「月光が立つ銀色のレーン」
+    // 「反射してまたたく星々」「さざ波のきらめき」を手続き的に近似して夜空の湖を作る。
+    initLakeSurface() {
+        if (!SHUTTER_LAKE_ENABLED) return;
+        const uni = {
+            uTime: { value: 0 }, uOpacity: { value: 0 }, uCam: { value: new THREE.Vector3() },
+            uMoonReflX: { value: this.lakeMoonX },
+        };
+        const geo = new THREE.PlaneGeometry(180, 260, 1, 1);
+        geo.rotateX(-Math.PI / 2);
+        const mat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, uniforms: uni,
+            vertexShader: `
+              varying vec3 vW; varying vec2 vLoc;
+              void main(){ vLoc = position.xz; vec4 wp = modelMatrix * vec4(position,1.0); vW = wp.xyz;
+                gl_Position = projectionMatrix * viewMatrix * wp; }`,
+            fragmentShader: `
+              varying vec3 vW; varying vec2 vLoc;
+              uniform float uTime, uOpacity, uMoonReflX; uniform vec3 uCam;
+              float hash(vec2 p){ return fract(sin(dot(p, vec2(41.3,289.1))) * 43758.5453); }
+              float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+                float a=hash(i), b=hash(i+vec2(1,0)), c=hash(i+vec2(0,1)), d=hash(i+vec2(1,1));
+                return mix(mix(a,b,f.x), mix(c,d,f.x), f.y); }
+              // 反射した星空: 格子状に疎な星を置き、時間でまたたかせる
+              float starField(vec2 uv, float t){
+                vec2 g = floor(uv); vec2 f = fract(uv);
+                float present = step(0.90, hash(g + vec2(7.1, 3.3)));
+                vec2 sp = vec2(hash(g + vec2(1.0, 0.0)), hash(g));
+                float d = length(f - sp);
+                float tw = 0.45 + 0.55 * sin(t * 2.2 + hash(g) * 40.0);
+                return present * smoothstep(0.16, 0.0, d) * max(tw, 0.0);
+              }
+              void main(){
+                float t = uTime;
+                vec2 p = vLoc;
+                float dist = length(vW.xz - uCam.xz);
+                float far = clamp(dist*0.012, 0.0, 1.0);          // 0=手前 1=遠く(水際)
+                float n1 = vnoise(p*0.10 + vec2(t*0.04, t*0.025));
+                float n2 = vnoise(p*0.40 - vec2(t*0.05, t*0.04));
+                vec2 ripple = vec2(n1-0.5, n2-0.5);
+                // 夜の水: 手前は深い藍、奥(水際)はやや明るい群青
+                vec3 deep    = vec3(0.010, 0.018, 0.045);
+                vec3 horizon = vec3(0.035, 0.060, 0.130);
+                vec3 col = mix(deep, horizon, far);
+                // 反射した星々(水際ほど密。さざ波で揺らぐ)
+                vec2 sUv = (vW.xz + ripple * 6.0) * 0.32;
+                float stars = starField(sUv, t) + starField(sUv * 1.9 + 13.0, t * 1.3) * 0.6;
+                col += vec3(0.78, 0.84, 1.0) * stars * far * 0.95;
+                // 月光のレーン(uMoonReflX 付近に立つ銀色の輝き)
+                float lane = smoothstep(22.0, 0.0, abs(vW.x - uMoonReflX));
+                float shimmer = 0.55 + 0.45*sin(t*0.8 + vW.z*0.3 + n1*6.0);
+                col += vec3(0.55, 0.65, 0.88) * lane * far * shimmer * 0.7;
+                // 月のきらめき(さざ波のスペキュラ)
+                vec3 nrm = normalize(vec3(ripple.x*1.7, 1.0, ripple.y*1.7));
+                vec3 vd = normalize(uCam - vW);
+                float spec = pow(max(nrm.y * max(dot(nrm, vd), 0.0), 0.0), 10.0);
+                col += vec3(0.90, 0.95, 1.0) * spec * lane * 0.5;
+                // 遠いほど暗背景へ溶けるアルファ(フォグ代わり)
+                float a = uOpacity * mix(0.92, 0.0, smoothstep(0.55, 1.0, far));
+                gl_FragColor = vec4(col, a);
+              }`,
+        });
+        const water = new THREE.Mesh(geo, mat);
+        water.position.set(0, this.mikuBaseY - 0.02, this.mikuBaseZ - 40);
+        water.frustumCulled = false;
+        this.scene.add(water);
+        this.lakeWater = water;
+        this.lakeWaterUni = uni;
+    }
+
+    // 水面のアニメ更新＋撮影波紋(A-2)のライフサイクル。毎フレーム update() から呼ぶ。
+    updateLakeSurface() {
+        if (!SHUTTER_LAKE_ENABLED || !this.lakeWater) return;
+        const now = performance.now();
+        const dt = this._lakeLastT ? Math.min(0.05, (now - this._lakeLastT) / 1000) : 0.016;
+        this._lakeLastT = now;
+        this.lakeWaterUni.uTime.value = now * 0.001;
+        if (this.camera) this.lakeWaterUni.uCam.value.copy(this.camera.position);
+        this._lakeFade = Math.min(0.92, this._lakeFade + dt * 0.8);
+        this.lakeWaterUni.uOpacity.value = this._lakeFade;
+
+        // 星々をゆっくりまたたかせる（全体のopacityを微振動）
+        if (this.lakeStars) {
+            this.lakeStars.material.opacity = (0.72 + 0.22 * Math.sin(now * 0.0017)) * this._lakeFade / 0.92;
+        }
+        if (this.lakeMoon) this.lakeMoon.material.opacity = 0.95 * this._lakeFade / 0.92;
+
+        for (let i = this.lakeRipples.length - 1; i >= 0; i--) {
+            const r = this.lakeRipples[i];
+            r.t += dt;
+            const k = r.t / r.life;
+            if (k >= 1) {
+                this.scene.remove(r.mesh);
+                r.mesh.material.dispose();
+                this.lakeRipples.splice(i, 1);
+                continue;
+            }
+            const s = 0.5 + k * 16;
+            r.mesh.scale.set(s, s, s);
+            r.mesh.material.opacity = (1 - k) * 0.55;
+        }
+    }
+
+    // --- A-2: 撮影のたびに足元の水面へ波紋を一つ広げる ------------------------
+    spawnLakeRipple() {
+        if (!SHUTTER_LAKE_ENABLED || !this.lakeWater) return;
+        if (!this._lakeRingGeo) {
+            this._lakeRingGeo = new THREE.RingGeometry(0.45, 0.6, 40);
+            this._lakeRingGeo.rotateX(-Math.PI / 2);
+        }
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0xbcd2ff, transparent: true, opacity: 0.55,
+            depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+        });
+        const ring = new THREE.Mesh(this._lakeRingGeo, mat);
+        ring.position.set((Math.random() - 0.5) * 2, this.mikuBaseY + 0.06, this.mikuBaseZ + (Math.random() - 0.5) * 2);
+        this.scene.add(ring);
+        this.lakeRipples.push({ mesh: ring, t: 0, life: 1.9 });
+        // リング数が増えすぎないよう古いものから間引く
+        if (this.lakeRipples.length > 6) {
+            const old = this.lakeRipples.shift();
+            this.scene.remove(old.mesh);
+            old.mesh.material.dispose();
+        }
+    }
+
+    // --- B-4: 選ばれたベスト1枚を「波紋」として湖(lakeMemory)に流す ----------
+    // 写真ゲームの仕様は変えず、決定的1枚の選定後に1回だけ堆積させる。
+    // 流れた波紋は別の曲・別プレイで「かつて切り取った光」として再来し得る（水の循環）。
+    depositBestShotToLake() {
+        if (!SHUTTER_LAKE_ENABLED || this._bestRippleSaved) return;
+        this._bestRippleSaved = true;
+        const colorByKey = { miku: '#39C5BB', rin: '#FFEE11' };
+        const color = colorByKey[this.selectedKey] || '#FF7A4D';
+        try {
+            addRipple({
+                songId: 'shutter', type: 'bestshot', text: '', color,
+                meta: {
+                    timeStr: this.bestChosenTimeStr, subject: this.selectedKey,
+                    totalShots: this.totalShots, starShots: this.starShots,
+                },
+            });
+        } catch (e) {
+            console.warn('[SHUTTER] lake deposit failed:', e);
+        }
     }
 
     injectCustomStyles() {
@@ -1295,10 +1622,46 @@ export class SongShutter extends BaseSong {
                 letter-spacing: 2px;
                 padding: 40px 10px;
             }
+            /* かわいいポーズ・ボタンのバー（画面下中央） */
+            #shutter-pose-bar {
+                position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%);
+                display: flex; align-items: center; gap: 7px; z-index: 40;
+                pointer-events: auto; padding: 6px 10px;
+                background: rgba(8, 4, 3, 0.55); border: 1px solid rgba(185, 84, 60, 0.45);
+                border-radius: 12px; backdrop-filter: blur(2px);
+            }
+            #shutter-pose-bar .pose-bar-label {
+                font-family: monospace; font-size: 10px; letter-spacing: 2px; font-weight: bold;
+                color: rgba(255, 210, 180, 0.8); margin-right: 2px; user-select: none;
+            }
+            .shutter-pose-btn {
+                display: flex; flex-direction: column; align-items: center; gap: 1px;
+                min-width: 50px; padding: 5px 7px; cursor: pointer;
+                background: rgba(0, 0, 0, 0.4); color: #fff;
+                border: 1px solid rgba(216, 90, 48, 0.55); border-radius: 8px;
+                transition: transform 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+            }
+            .shutter-pose-btn .pose-emoji { font-size: 18px; line-height: 1; }
+            .shutter-pose-btn .pose-label {
+                font-family: 'Shippori Mincho', serif; font-size: 10px; letter-spacing: 1px;
+                color: rgba(255, 230, 220, 0.92); white-space: nowrap;
+            }
+            .shutter-pose-btn:hover {
+                transform: translateY(-2px); background: rgba(216, 90, 48, 0.35);
+                box-shadow: 0 0 10px rgba(216, 90, 48, 0.4);
+            }
+            .shutter-pose-btn.active {
+                background: rgba(216, 90, 48, 0.8); border-color: #FFEE11;
+                box-shadow: 0 0 14px rgba(255, 238, 17, 0.6);
+            }
             @media (max-width: 767px) {
                 #shutter-contactsheet .cs-sheet { width: 92vw; padding: 16px 12px 12px; }
                 .cs-grid { grid-template-columns: repeat(3, 1fr); gap: 7px; max-height: 52vh; }
                 .cs-title { letter-spacing: 4px; }
+                #shutter-pose-bar { bottom: 58px; gap: 4px; padding: 5px 7px; }
+                .shutter-pose-btn { min-width: 42px; padding: 4px 5px; }
+                .shutter-pose-btn .pose-emoji { font-size: 16px; }
+                .shutter-pose-btn .pose-label { font-size: 9px; }
             }
         `;
         document.head.appendChild(this.customStyleElement);
@@ -1411,8 +1774,19 @@ export class SongShutter extends BaseSong {
                 ">
                 <span style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; user-select: none;">[-]</span>
             </div>
+
+            <!-- かわいいポーズ・ボタン（押すと被写体が数秒そのポーズをキメる） -->
+            <div id="shutter-pose-bar">
+                <span class="pose-bar-label">POSE</span>
+                ${SHUTTER_CUTE_POSES.map(p => `
+                    <button class="shutter-pose-btn" data-pose="${p.id}" title="${p.label}">
+                        <span class="pose-emoji">${p.emoji}</span>
+                        <span class="pose-label">${p.label}</span>
+                    </button>
+                `).join('')}
+            </div>
         `;
-        
+
         this.songWrapper.appendChild(this.viewfinder);
     }
  
@@ -1613,6 +1987,9 @@ export class SongShutter extends BaseSong {
 
         // --- オープニングの掴み（曲頭の「構図が決まる」導入。zoom/scope/RECを駆動） ---
         this.updateOpening(position);
+
+        // --- 夕暮れの湖面アニメ＋撮影波紋のライフサイクル（フラグoff時は即return） ---
+        this.updateLakeSurface();
 
         // --- ズーム制御とイージング補間 ---
         this.zoomLevel += (this.targetZoom - this.zoomLevel) * 0.15;
@@ -2052,16 +2429,27 @@ export class SongShutter extends BaseSong {
 
             // 表示中の被写体（トランジション中は両方）をアニメーション
             const animateList = this.subjects.filter(s => s.mesh.visible);
+            // 「かわいいポーズ」ホールド中か判定（ホールド中はグルーヴ抑制＆移動も抑える）
+            const posing = !!(this.poseOverride && performance.now() < this.poseOverride.until);
+            if (this.poseOverride && !posing) this.poseOverride = null;
+            this._poseHoldAmt += ((posing ? 1 : 0) - this._poseHoldAmt) * Math.min(1, deltaTime * 5);
             animateList.forEach((subject) => {
                 const isShown = subject.key === this.shownKey;
 
-                // 腕の型: プリセットの armStyle を基調に。穏やか系はサビで cheer へ切替えて盛り上げる
-                const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
-                const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
-                const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
-                // 腕の型へ補間 → その上にビートグルーヴ（腰・脚・頭・腕振り）を重ねて踊らせる
-                this.lerpSubjectPose(subject, gesture, 0.08);
-                if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
+                // 腕の型: ポーズ・ホールド中は指定ポーズ最優先。通常はプリセットの armStyle を基調に
+                // （穏やか系はサビで cheer へ切替えて盛り上げる）
+                let gesture, poseLerp = 0.08;
+                if (posing) {
+                    gesture = this.poseOverride.pose;
+                    poseLerp = 0.16; // キメ顔ポーズへ素早く寄せる
+                } else {
+                    const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
+                    const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
+                    gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                }
+                // 腕の型へ補間 → 通常時はその上にビートグルーヴを重ねて踊らせる（ホールド中は抑える）
+                this.lerpSubjectPose(subject, gesture, poseLerp);
+                if (isShown && !posing) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
 
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
@@ -2088,8 +2476,9 @@ export class SongShutter extends BaseSong {
                 }
 
                 // ステージ内を動き回る（撮影者が追って構図を作れるよう画面内を移動）
-                const sx = Math.sin(floatT * 0.55) * 3.8 + Math.sin(floatT * 0.27 + 1.3) * 1.8; // 横移動 ~±5.6
-                const sz = Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1;        // 前後移動 ~±3.5
+                const wander = 1 - 0.82 * this._poseHoldAmt; // ポーズ・ホールド中は移動を抑えて被写体を構えさせる
+                const sx = (Math.sin(floatT * 0.55) * 3.8 + Math.sin(floatT * 0.27 + 1.3) * 1.8) * wander; // 横移動 ~±5.6
+                const sz = (Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1) * wander;        // 前後移動 ~±3.5
                 const px = subject.baseX + sx;
                 const pz = this.mikuBaseZ + sz;
                 subject.mesh.position.x = px;
@@ -2484,6 +2873,9 @@ export class SongShutter extends BaseSong {
         if (prompt) prompt.textContent = '';
         if (stats) stats.innerHTML = `★ <b>BEST SHOT 決定！</b> ・ 撮影 <b>${this.totalShots}</b>枚`;
 
+        // 決定的1枚を「波紋」として湖に流す（B-4。水の循環ループへ接続）
+        this.depositBestShotToLake();
+
         // 最終リザルトにも反映
         this.updateResultSummary();
 
@@ -2515,6 +2907,56 @@ export class SongShutter extends BaseSong {
         }, 50);
     }
     
+    // 実際の3D背景（夜空の月・星・湖面＋シーン背景）を写真の画像エリアへ焼き付ける。
+    // 浮遊フレーム/歌詞/AFスコープ/被写体は別レイヤー(2D投影・被写体焼き込み)で重ねるため、
+    // ここでは隠して「背景だけ」をレンダリングする。被写体焼き込み(burnMikuIntoPhoto)と
+    // 同じ中央クロップで描くのでフレーミングが揃う。成功で true、フラグoff/未準備で false。
+    renderSceneBackdropIntoPhoto(ctx, photoX, photoY, photoW, photoH) {
+        if (!SHUTTER_LAKE_ENABLED || !this.renderer) return false;
+
+        const toHide = [];
+        this.frames.forEach(f => {
+            toHide.push(f);
+            if (f.userData.photoMesh) toHide.push(f.userData.photoMesh);
+        });
+        this.activeSprites.forEach(s => toHide.push(s));
+        this.transitioningPhotos.forEach(p => toHide.push(p));
+        if (this.targetScope) toHide.push(this.targetScope);
+        this.subjects.forEach(s => { if (s.mesh) toHide.push(s.mesh); });
+
+        const prevVisibility = toHide.map(o => o.visible);
+        toHide.forEach(o => { o.visible = false; });
+
+        let ok = false;
+        try {
+            // シーン背景・フォグはそのまま（実際の夜の背景を写し込む）
+            this.renderer.render(this.scene, this.camera);
+
+            const srcCanvas = this.renderer.domElement;
+            const srcW = srcCanvas.width;
+            const srcH = srcCanvas.height;
+
+            // 写真エリアのアスペクト比に合わせて中央クロップ（焼き込み被写体と同じ規約）
+            const photoAspect = photoW / photoH;
+            let sw = srcW;
+            let sh = srcW / photoAspect;
+            if (sh > srcH) {
+                sh = srcH;
+                sw = srcH * photoAspect;
+            }
+            const sx = (srcW - sw) / 2;
+            const sy = (srcH - sh) / 2;
+
+            ctx.drawImage(srcCanvas, sx, sy, sw, sh, photoX, photoY, photoW, photoH);
+            ok = true;
+        } catch (err) {
+            console.warn('[SHUTTER] backdrop render skipped:', err);
+        }
+
+        toHide.forEach((o, i) => { o.visible = prevVisibility[i]; });
+        return ok;
+    }
+
     // 被写体ミクVRMだけを透過レンダリングし、ポラロイド写真の中央に焼き付ける
     burnMikuIntoPhoto(ctx, photoX, photoY, photoW, photoH) {
         if (!this.mikuVRM || !this.renderer) return;
@@ -2528,6 +2970,11 @@ export class SongShutter extends BaseSong {
         this.activeSprites.forEach(s => toHide.push(s));
         this.transitioningPhotos.forEach(p => toHide.push(p));
         if (this.targetScope) toHide.push(this.targetScope);
+        // 湖面・月・星・波紋は焼き込み写真には写し込まない（従来のポラロイドの見た目を保つ）
+        if (this.lakeWater) toHide.push(this.lakeWater);
+        if (this.lakeMoon) toHide.push(this.lakeMoon);
+        if (this.lakeStars) toHide.push(this.lakeStars);
+        this.lakeRipples.forEach(r => toHide.push(r.mesh));
 
         const prevVisibility = toHide.map(o => o.visible);
         toHide.forEach(o => { o.visible = false; });
@@ -2672,6 +3119,9 @@ export class SongShutter extends BaseSong {
         this.scene.updateMatrixWorld(true);
 
         this.triggerShutterFlash();
+
+        // 一瞬を切り取る = 水面に一滴。足元の湖面へ波紋を広げる（A-2）。
+        this.spawnLakeRipple();
 
         // 撮影瞬間のボーカル（ミク / リン / サビならduet）をキャッシュデータおよびアクティブスプライトから判定
         let activeVocal = 'none';
@@ -2893,6 +3343,16 @@ export class SongShutter extends BaseSong {
         }
         ctx.fillStyle = gradient;
         ctx.fillRect(photoX, photoY, photoW, photoH);
+
+        // 実際の3D背景（夜空の月・星・湖面）を写真に反映する。
+        // 成功時はボイスカラー台紙を薄いウォッシュとして上掛けし、曲パートの色味だけ残す。
+        if (this.renderSceneBackdropIntoPhoto(ctx, photoX, photoY, photoW, photoH)) {
+            ctx.save();
+            ctx.globalAlpha = 0.20;
+            ctx.fillStyle = gradient;
+            ctx.fillRect(photoX, photoY, photoW, photoH);
+            ctx.restore();
+        }
 
         // カメラのファインダー（ビューファインダー）と、湖面の波紋を模したサークルエンブレムを薄く焼き付ける
         ctx.strokeStyle = activeVocal === 'miku' ? 'rgba(57, 197, 187, 0.12)' : (activeVocal === 'rin' ? 'rgba(255, 238, 17, 0.12)' : 'rgba(185, 84, 60, 0.15)');
@@ -3559,11 +4019,40 @@ export class SongShutter extends BaseSong {
 
         // コンタクトシートDOM・整列タイマー・写真ログの解放
         if (this._csMarkTimers) { this._csMarkTimers.forEach(clearTimeout); this._csMarkTimers = []; }
+        clearTimeout(this._poseBtnTimer);
+        this.poseOverride = null;
         if (this.filmStripEl && this.filmStripEl.parentNode) {
             this.filmStripEl.parentNode.removeChild(this.filmStripEl);
         }
         this.filmStripEl = null;
         this.photoLog = [];
+
+        // 湖面・波紋リングの解放（フラグoff時は生成されていないので何もしない）
+        this.lakeRipples.forEach((r) => {
+            this.scene.remove(r.mesh);
+            if (r.mesh.material) r.mesh.material.dispose();
+        });
+        this.lakeRipples = [];
+        if (this._lakeRingGeo) { this._lakeRingGeo.dispose(); this._lakeRingGeo = null; }
+        if (this.lakeWater) {
+            this.scene.remove(this.lakeWater);
+            if (this.lakeWater.geometry) this.lakeWater.geometry.dispose();
+            if (this.lakeWater.material) this.lakeWater.material.dispose();
+            this.lakeWater = null;
+            this.lakeWaterUni = null;
+        }
+        if (this.lakeMoon) {
+            this.scene.remove(this.lakeMoon);
+            if (this.lakeMoon.material.map) this.lakeMoon.material.map.dispose();
+            this.lakeMoon.material.dispose();
+            this.lakeMoon = null;
+        }
+        if (this.lakeStars) {
+            this.scene.remove(this.lakeStars);
+            if (this.lakeStars.geometry) this.lakeStars.geometry.dispose();
+            if (this.lakeStars.material) this.lakeStars.material.dispose();
+            this.lakeStars = null;
+        }
 
         // 被写体MMD（ミク&リン）の完全解放
         this.subjects.forEach((subject) => {
