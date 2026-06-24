@@ -32,7 +32,7 @@ const FILES = {
 };
 
 const BGM_MASTER = 0.5; // 環境音として控えめに(曲本編より主張しすぎない)
-const FADE_IN = 1.6;    // 入場時のフェードイン秒
+const FADE_IN = 0.9;    // 入場時のフェードイン秒(先読み済みなので短めで即・立ち上げる)
 const FADE_OUT = 0.9;   // 退場時のフェードアウト秒
 const CROSSFADE = 1.6;  // フェーズ切替のクロスフェード秒
 
@@ -85,6 +85,13 @@ class Bgm {
             })();
         }
         return this._loading[phase];
+    }
+
+    // 指定フェーズの音源を前もって fetch+decode しておく(入場前に遅延を済ませる)。
+    // AudioContext は suspended のままでも decodeAudioData は可能。
+    preload(phase = appState.getPhase()) {
+        if (!this._ensureCtx()) return Promise.resolve(null);
+        return this._buffer(phase);
     }
 
     // 音量/ミュート変更を即反映(マスターゲインを滑らかに追従)。
@@ -167,10 +174,16 @@ eventBus.on('lakeEnter', () => bgm.enter());
 eventBus.on('songConfirm', () => bgm.leave());
 eventBus.on('appVolumeChange', () => bgm.setVolume());
 // フェーズ進行: 在場中なら新トラックへクロスフェード、離脱中でも次回 enter 用に保持。
+// 次フェーズの音源も先読みしておき、選曲画面へ戻った瞬間に待ち時間なく鳴らせるように。
 eventBus.on('phaseChange', ({ to } = {}) => {
     bgm.phase = (typeof to === 'number') ? to : appState.getPhase();
+    bgm.preload(bgm.phase);
     if (bgm.active) bgm.enter(bgm.phase);
 });
+
+// 起動時に現在フェーズのBGMを先読み・デコードしておく。タイトル/プロローグの間に
+// fetch+decode を済ませ、選曲画面に入った瞬間(lakeEnter)に即・鳴り始められるようにする。
+bgm.preload();
 
 // 自動再生ポリシー対策: ユーザー操作後も suspended のままなら次のタップで resume。
 window.addEventListener('pointerdown', () => {
