@@ -188,13 +188,17 @@ export class SongShutter extends BaseSong {
         this.isMobile = window.innerWidth < 768;
 
         // --- フィルムストリップ（撮影成果の内部記録・最大12枚） ---
-        this.photoLog = [];          // { url, starred, timeStr }
+        this.photoLog = [];          // { url, candidate, score, timeStr }
         this.MAX_FILM_PHOTOS = 12;
         this.totalShots = 0;         // 累計撮影枚数
-        this.starShots = 0;          // ★ベストショット枚数
+        this.starShots = 0;          // ★ベストショット候補の枚数（自動判定）
         this.lockShots = 0;          // ターゲットロック成功回数
         this.filmStripVisible = false;
         this.filmStripEl = null;
+        // ベストショットはコンタクトシート上でプレイヤーが「候補」から1枚選ぶ方式。
+        this.chosenBestIndex = null; // プレイヤーが選んだベストショットのphotoLog内index
+        this.bestChosenTimeStr = null; // 選定したベストの撮影タイム（結果表示用）
+        this._bestChosen = false;    // 選定済みフラグ（多重選択ガード）
 
         // --- 被写体VRM（「シャッターチャンス」はミク&リンのデュエット曲。2体を並べる） ---
         this.mikuVRM = null;         // 主役(ミク)。ライティング/破棄の後方互換参照
@@ -452,9 +456,16 @@ export class SongShutter extends BaseSong {
         console.log("[SHUTTER] init finished completely");
     }
 
-    // 撮影成果サマリーの登録（撮影のたびに最新値で上書き）
+    // 撮影成果サマリーの登録（撮影のたび／ベスト選定時に最新値で上書き）
     updateResultSummary() {
-        const lines = [`撮影 ${this.totalShots}枚 ・ ★ベストショット ${this.starShots}枚`];
+        const lines = [];
+        if (this.bestChosenTimeStr) {
+            // プレイヤーが「決定的な1枚」を選んだ後
+            lines.push(`★ ベストショット選定 ✓ (${this.bestChosenTimeStr})`);
+            lines.push(`撮影 ${this.totalShots}枚 ・ 候補 ${this.starShots}枚`);
+        } else {
+            lines.push(`撮影 ${this.totalShots}枚 ・ 候補 ${this.starShots}枚`);
+        }
         if (this.lockShots > 0) {
             lines.push(`ターゲットロック成功 ${this.lockShots}回`);
         }
@@ -1027,39 +1038,12 @@ export class SongShutter extends BaseSong {
             this.frames.push(frame);
         }
 
-        // 3Dオートフォーカス・ターゲットレティクル（フォトスポット）の生成
-        const targetGeo = new THREE.RingGeometry(0.8, 0.9, 32);
-        const targetMat = new THREE.MeshBasicMaterial({
-            color: new THREE.Color('#FFEE11'), // リンイエローをベースに光らせる
-            transparent: true,
-            opacity: 0.8,
-            side: THREE.DoubleSide
-        });
-        this.targetScope = new THREE.Mesh(targetGeo, targetMat);
-        
-        // ターゲットスコープにお洒落なAF照準ブラケット（十字インジケーター）を子要素として追加
-        const crossGeo = new THREE.PlaneGeometry(0.15, 0.4);
-        const crossMat = new THREE.MeshBasicMaterial({ color: 0x39C5BB, transparent: true, opacity: 0.8 });
-        
-        const topBar = new THREE.Mesh(crossGeo, crossMat);
-        topBar.position.set(0, 1.0, 0);
-        this.targetScope.add(topBar);
-        
-        const bottomBar = topBar.clone();
-        bottomBar.position.set(0, -1.0, 0);
-        this.targetScope.add(bottomBar);
-        
-        const leftBar = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 0.15), crossMat);
-        leftBar.position.set(-1.0, 0, 0);
-        this.targetScope.add(leftBar);
-        
-        const rightBar = leftBar.clone();
-        rightBar.position.set(1.0, 0, 0);
-        this.targetScope.add(rightBar);
-
-        // フォトスポットのお洒落な座標 (ビューファインダー中央 (0, 0) に完全配置してピント合わせ機能と物理連動)
-        this.targetScope.position.set(0, 0, -15);
-        this.scene.add(this.targetScope);
+        // 中央のAFターゲットレティクルは廃止。
+        // 旧実装は z=-15 の3Dリングだったが、被写体ミクが手前(z>-15)へ動くと
+        // リングがミクの背後に回り込んで見えるレイヤー破綻があり、かつ実際のピント合わせ機能も
+        // 持たない飾りだったため撤去する。これに依存していたロック判定/「NOW!」合図は
+        // すべて `if (this.targetScope)` ガードで自動的に無効化される。
+        this.targetScope = null;
     }
 
     injectCustomStyles() {
@@ -1192,20 +1176,95 @@ export class SongShutter extends BaseSong {
                 color: rgba(255,255,255,0.85);
                 text-shadow: 0 0 3px #000;
             }
-            /* ベストショットのグリースペンシル風マーキング */
-            .cs-cell.cs-star { border-color: #FFEE11; }
-            .cs-grease {
+            /* ベストショット候補（プレイヤーが選ぶ・金色に脈動するリング） */
+            .cs-cell.cs-candidate { border-color: #FFEE11; cursor: pointer; pointer-events: auto; }
+            .cs-cell.cs-candidate:hover { transform: translate(0,0) rotate(var(--tilt,0deg)) scale(1.06); }
+            .cs-cand-ring {
                 position: absolute;
-                inset: -7%;
+                inset: -6%;
                 border: 3px solid #FFEE11;
-                border-radius: 52% 48% 49% 51% / 49% 51% 49% 51%;
-                box-shadow: 0 0 10px rgba(255, 238, 17, 0.8);
-                transform: rotate(-8deg) scale(0.4);
-                opacity: 0;
-                transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+                border-radius: 6px;
+                box-shadow: 0 0 12px rgba(255, 238, 17, 0.85), inset 0 0 8px rgba(255, 238, 17, 0.5);
                 pointer-events: none;
+                animation: cs-cand-pulse 1.1s ease-in-out infinite;
             }
-            .cs-cell.cs-mark .cs-grease { transform: rotate(-8deg) scale(1); opacity: 1; }
+            @keyframes cs-cand-pulse {
+                0%, 100% { opacity: 0.45; transform: scale(0.97); }
+                50%      { opacity: 1;    transform: scale(1.02); }
+            }
+            /* 選定後: 選ばれなかった写真はモノクロに沈む */
+            .cs-cell.cs-loser { filter: grayscale(1) brightness(0.42); transition: filter 0.5s ease; }
+            /* 選択を促すプロンプト */
+            .cs-prompt {
+                position: relative; z-index: 7;
+                min-height: 18px; margin: -4px 0 10px; text-align: center;
+                font-family: monospace; font-size: clamp(11px, 1.9vw, 14px); letter-spacing: 1px;
+                color: #FFEE11; text-shadow: 0 0 8px rgba(255,238,17,0.55), 0 0 2px #000;
+            }
+            .cs-header, .cs-footer { position: relative; z-index: 7; }
+            /* スポットライトの暗幕 */
+            .cs-veil {
+                position: absolute; inset: 0; z-index: 5;
+                background: radial-gradient(ellipse at center, rgba(4,2,1,0.50) 0%, rgba(2,1,0,0.86) 70%);
+                opacity: 0; transition: opacity 0.45s ease; pointer-events: none;
+            }
+            .cs-veil.on { opacity: 1; }
+            /* 主役化した決定的1枚 */
+            .cs-hero {
+                position: absolute; left: 50%; top: 48%; z-index: 6;
+                width: min(44%, 280px); aspect-ratio: 1 / 1;
+                transform: translate(-50%, -50%) scale(0.55) rotate(-4deg);
+                opacity: 0; pointer-events: none;
+                border: 4px solid #fff; border-radius: 3px;
+                box-shadow: 0 0 0 3px #FFEE11, 0 0 34px 6px rgba(255,238,17,0.7), 0 16px 40px rgba(0,0,0,0.8);
+                transition: transform 0.55s cubic-bezier(0.18, 1.3, 0.4, 1), opacity 0.35s ease;
+                overflow: visible;
+            }
+            .cs-hero.on { transform: translate(-50%, -50%) scale(1) rotate(-2deg); opacity: 1; }
+            .cs-hero img { width: 100%; height: 100%; object-fit: cover; display: block; }
+            /* 「★ BEST SHOT」スタンプ（写真の左上角に斜めに押す。中央を潰さない） */
+            .cs-stamp {
+                position: absolute; left: -10px; top: 8px;
+                transform-origin: center;
+                transform: rotate(-15deg) scale(2.4);
+                padding: 4px 10px;
+                font-family: monospace; font-weight: bold; font-size: clamp(12px, 2vw, 17px);
+                letter-spacing: 1.5px; white-space: nowrap;
+                color: #ff3b30; border: 2.5px solid #ff3b30; border-radius: 4px;
+                background: rgba(255,255,255,0.08);
+                text-shadow: 0 0 6px rgba(255,59,48,0.6); box-shadow: 0 0 14px rgba(255,59,48,0.5);
+                opacity: 0;
+            }
+            .cs-hero.on .cs-stamp { animation: cs-stamp-slam 0.5s cubic-bezier(0.2, 1.4, 0.4, 1) 0.35s both; }
+            @keyframes cs-stamp-slam {
+                0%   { opacity: 0; transform: rotate(-15deg) scale(2.4); }
+                70%  { opacity: 1; transform: rotate(-15deg) scale(0.92); }
+                100% { opacity: 1; transform: rotate(-15deg) scale(1); }
+            }
+            /* 火花バースト */
+            .cs-spark {
+                position: absolute; left: 50%; top: 50%; width: 7px; height: 7px;
+                margin: -3.5px 0 0 -3.5px; border-radius: 50%;
+                background: #FFEE11; box-shadow: 0 0 8px 2px rgba(255,238,17,0.9);
+                opacity: 0; pointer-events: none;
+            }
+            .cs-hero.on .cs-spark { animation: cs-spark-burst 0.6s ease-out 0.3s both; }
+            @keyframes cs-spark-burst {
+                0%   { opacity: 1; transform: translate(0, 0) scale(1); }
+                100% { opacity: 0; transform: translate(var(--dx, 0), var(--dy, 0)) scale(0.3); }
+            }
+            /* 「次へ」ボタン */
+            .cs-next {
+                position: relative; z-index: 8;
+                display: block; margin: 14px auto 2px; padding: 9px 26px;
+                font-family: monospace; font-weight: bold; font-size: clamp(13px, 2vw, 16px);
+                letter-spacing: 2px; cursor: pointer; pointer-events: auto;
+                color: #fff; background: rgba(216,90,48,0.85);
+                border: 1px solid #FF9A3C; border-radius: 6px;
+                text-shadow: 0 0 6px rgba(0,0,0,0.6); box-shadow: 0 0 14px rgba(216,90,48,0.5);
+                transition: transform 0.12s ease, background 0.12s ease;
+            }
+            .cs-next:hover { transform: translateY(-2px); background: rgba(216,90,48,1); }
             .cs-footer {
                 display: flex;
                 align-items: center;
@@ -1297,14 +1356,10 @@ export class SongShutter extends BaseSong {
             <div style="position: absolute; top: 50px; left: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-zoom-label">ZOOM 1.0x</div>
             <div style="position: absolute; top: 50px; right: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-aperture-label">F2.8 [OPEN]</div>
 
-            <!-- Center Crosshair (AF Focus Reticle) -->
-            <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 30px; height: 30px; border: 1.5px solid ${this.themeColor}; border-radius: 50%; opacity: 0.7; box-shadow: 0 0 6px ${this.themeColor}; display: flex; align-items: center; justify-content: center;" id="shutter-center-reticle">
-                <div style="width: 8px; height: 1.5px; background: ${this.themeColor}; position: absolute;"></div>
-                <div style="width: 1.5px; height: 8px; background: ${this.themeColor}; position: absolute;"></div>
-            </div>
-            <!-- AF Indicator Text -->
-            <div style="position: absolute; top: calc(50% + 25px); left: 50%; transform: translateX(-50%); font-family: monospace; font-size: 9px; color: ${this.themeColor}; opacity: 0.7; font-weight: bold; letter-spacing: 1px; text-shadow: 0 0 3px ${this.themeColor};" id="shutter-af-label">AUTO FOCUS</div>
-            
+            <!-- 中央のAFフォーカスマーク(クロスヘア＋AUTO FOCUS表示)は廃止。
+                 画面中央に貼り付くだけで実際のピント合わせには連動しておらず、
+                 3Dのターゲットレティクル撤去に合わせてこの飾りも削除した。 -->
+
             <!-- MIKU CH-1 Indicator (Left) -->
             <div style="${indicatorContainerStyle}; left: 40px;" id="miku-indicator-container">
                 <div style="font-weight: bold; margin-bottom: 5px; color: #39C5BB; text-shadow: 0 0 4px #39C5BB;" id="miku-vocal-label">MIKU CH-1</div>
@@ -2102,8 +2157,6 @@ export class SongShutter extends BaseSong {
                     recLabel.style.textShadow = '0 0 16px #ff3b30, 0 0 6px #fff';
                     recLabel.innerText = '● REC';
                 }
-                const afLabel = document.getElementById('shutter-af-label');
-                if (afLabel) { afLabel.innerText = 'FOCUS LOCKED'; afLabel.style.opacity = '1'; }
                 // 被写体が一瞬キメ顔＋キメポーズ(peace)
                 const shown = this.subjects && this.subjects.find(s => s.key === this.shownKey);
                 if (shown) shown.smileTimer = 1200;
@@ -2112,33 +2165,17 @@ export class SongShutter extends BaseSong {
             }
         }
 
-        // 合焦一閃の減衰(レティクルの強調に使用)
+        // 合焦一閃の減衰
         if (this.openingFocusFlash > 0) {
             this.openingFocusFlash *= 0.9;
             if (this.openingFocusFlash < 0.01) this.openingFocusFlash = 0;
         }
-        // 中央レティクルを合焦に合わせて締める(寄って合焦している感)
-        const reticle = document.getElementById('shutter-center-reticle');
-        if (reticle) {
-            const focusScale = 1.0 + (1 - t) * 0.6 + this.openingFocusFlash * 0.4;
-            reticle.style.transform = `translate(-50%, -50%) scale(${focusScale.toFixed(3)})`;
-            reticle.style.opacity = (0.5 + 0.5 * t).toFixed(2);
-        }
-        // AFラベルを合焦前は走らせる
-        if (t < focusPoint) {
-            const afLabel = document.getElementById('shutter-af-label');
-            if (afLabel) {
-                afLabel.innerText = (Math.floor(position / 200) % 2 === 0) ? 'FOCUSING...' : 'FOCUSING';
-            }
-        }
 
         if (t >= 1) {
             this.openingDone = true;
-            // 既定ダンス(armStyle)へ戻し、レティクルのインラインscaleを解除して通常更新へ。
+            // 既定ダンス(armStyle)へ戻して通常更新へ。
             const preset = SHUTTER_DANCE_PRESETS.find(p => p.name === this.dancePresetName);
             this.armStyle = (preset && preset.armStyle) || 'cheer';
-            const reticleEnd = document.getElementById('shutter-center-reticle');
-            if (reticleEnd) reticleEnd.style.transform = 'translate(-50%, -50%)';
         }
     }
 
@@ -2238,9 +2275,9 @@ export class SongShutter extends BaseSong {
     }
 
     // 撮影写真をフィルムストリップ用に内部記録（小型サムネイル化・最大12枚で古い順に間引き）
-    recordPhotoToFilm(canvas, starred, timeStr) {
+    recordPhotoToFilm(canvas, candidate, score, timeStr) {
         sfx.play('shutter_click');
-        if (starred) sfx.play('shutter_star');
+        if (candidate) sfx.play('shutter_star');
         const thumbSize = this.isMobile ? 112 : 160;
         const thumb = document.createElement('canvas');
         thumb.width = thumbSize;
@@ -2249,7 +2286,7 @@ export class SongShutter extends BaseSong {
         tctx.drawImage(canvas, 0, 0, thumbSize, thumbSize);
         const url = thumb.toDataURL('image/jpeg', 0.72);
 
-        this.photoLog.push({ url: url, starred: starred, timeStr: timeStr });
+        this.photoLog.push({ url: url, candidate: candidate, score: score || 0, timeStr: timeStr });
         while (this.photoLog.length > this.MAX_FILM_PHOTOS) {
             this.photoLog.shift(); // 超過分は古い順に間引く
         }
@@ -2269,6 +2306,12 @@ export class SongShutter extends BaseSong {
         // 現像ラボ風の一閃でコンタクトシートへ切り替わる印象を作る
         try { this.triggerShutterFlash(); } catch (e) { /* 無害 */ }
 
+        // 写真があればここで再生を一時停止し、プレイヤーが落ち着いてベストを選べる“選考の間”を作る。
+        // 選定後に「次へ」で再生を終端まで進めて通常のリザルトへ繋ぐ。
+        if (this.photoLog.length > 0 && playerManager.player && playerManager.player.isPlaying) {
+            try { playerManager.pause(); } catch (e) { /* 無害 */ }
+        }
+
         // ミク/リンは「被写体(Model)」。撮影したのはプレイヤー自身なので Photo by YOU。
         const shownName = this.shownKey === 'rin' ? 'リン⚡' : 'ミク♡';
         const sheet = document.createElement('div');
@@ -2280,35 +2323,71 @@ export class SongShutter extends BaseSong {
                     <span class="cs-title">CONTACT SHEET</span>
                     <span class="cs-sub">— BEST MOMENTS —</span>
                 </div>
+                <div class="cs-prompt" id="shutter-cs-prompt"></div>
                 <div class="cs-grid" id="shutter-cs-grid"></div>
                 <div class="cs-footer">
                     <span class="cs-stats" id="shutter-cs-stats"></span>
                     <span class="cs-sign">Model ${shownName}　·　Photo by YOU</span>
                 </div>
+                <button class="cs-next" id="shutter-cs-next" style="display:none;">次へ ▶</button>
             </div>
         `;
         this.songWrapper.appendChild(sheet);
         this.filmStripEl = sheet;
+
+        // 「次へ」: 再生を終端へ進めて通常のリザルト（楽曲選択へ復帰）に繋ぐ
+        const nextBtn = sheet.querySelector('#shutter-cs-next');
+        if (nextBtn) {
+            nextBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                nextBtn.disabled = true;
+                nextBtn.textContent = '♪';
+                // 一時停止していた再生を再開し、残りの outro を流して自然終了させる。
+                // 自然終了が通常のリザルト（クリア記録→楽曲選択へ復帰）を発火する経路。
+                try { playerManager.play(); } catch (er) { /* 無害 */ }
+            });
+        }
+
         this.renderFilmStripPhotos();
 
         requestAnimationFrame(() => sheet.classList.add('cs-in'));
+    }
+
+    // コンタクトシートに「ベストショット候補」を決定する。
+    // 自動判定の候補(candidate)を基本にし、少なすぎる場合は構図スコア上位で補完。
+    computeBestCandidates() {
+        const cand = new Set();
+        this.photoLog.forEach((p, i) => { if (p.candidate) cand.add(i); });
+        if (cand.size < 2 && this.photoLog.length >= 2) {
+            [...this.photoLog.keys()]
+                .sort((a, b) => (this.photoLog[b].score || 0) - (this.photoLog[a].score || 0))
+                .forEach((i) => { if (cand.size < 2) cand.add(i); });
+        }
+        if (cand.size === 0 && this.photoLog.length > 0) cand.add(0);
+        return cand;
     }
 
     renderFilmStripPhotos() {
         if (!this.filmStripEl) return;
         const grid = this.filmStripEl.querySelector('#shutter-cs-grid');
         const stats = this.filmStripEl.querySelector('#shutter-cs-stats');
+        const prompt = this.filmStripEl.querySelector('#shutter-cs-prompt');
+        const nextBtn = this.filmStripEl.querySelector('#shutter-cs-next');
         if (!grid) return;
 
         if (stats) {
-            stats.innerHTML = `撮影 <b>${this.totalShots}</b>枚 ・ ★ベスト <b>${this.starShots}</b>枚`
+            stats.innerHTML = `撮影 <b>${this.totalShots}</b>枚 ・ 候補 <b>${this.starShots}</b>枚`
                 + (this.lockShots > 0 ? ` ・ ロック <b>${this.lockShots}</b>回` : '');
         }
 
         if (this.photoLog.length === 0) {
-            grid.innerHTML = `<div class="cs-empty">NO FILM — タップでシャッターを切ろう！</div>`;
+            grid.innerHTML = `<div class="cs-empty">NO FILM — 1枚も撮れませんでした</div>`;
+            if (prompt) prompt.textContent = '';
+            if (nextBtn) nextBtn.style.display = '';   // 撮影ゼロなら選択不要、すぐ次へ
             return;
         }
+
+        const candSet = this.computeBestCandidates();
 
         // 各セルは画面外〜近傍にランダムに散らばった状態で生成し、整列させる
         const cells = this.photoLog.map((p, i) => {
@@ -2317,33 +2396,102 @@ export class SongShutter extends BaseSong {
             const srot = (Math.random() * 2 - 1) * 40;
             const tilt = ((i % 2 === 0) ? -1 : 1) * (1 + (i % 3));
             const frameNo = String(i + 1).padStart(2, '0');
+            const isCand = candSet.has(i);
             return `
-                <div class="cs-cell${p.starred ? ' cs-star' : ''}"
+                <div class="cs-cell${isCand ? ' cs-candidate' : ' cs-noncand'}" data-idx="${i}"
                      style="--sx:${sx.toFixed(1)}vw; --sy:${sy.toFixed(1)}vh; --srot:${srot.toFixed(1)}deg; --tilt:${tilt}deg;">
                     <img src="${p.url}" alt="">
                     <span class="cs-frame-no">${frameNo}</span>
                     <span class="cs-time">${p.timeStr}</span>
-                    ${p.starred ? '<span class="cs-grease"></span>' : ''}
+                    ${isCand ? '<span class="cs-cand-ring"></span>' : ''}
                 </div>
             `;
         }).join('');
         grid.innerHTML = cells;
 
-        // 散らばり → 整列（インデックス順にスタッガー）、整列後にベスト印を描画
+        // 散らばり → 整列（インデックス順にスタッガー）
         const cellEls = grid.querySelectorAll('.cs-cell');
         cellEls.forEach((el, i) => {
             el.style.transitionDelay = `${i * 0.07}s`;
             requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('cs-settled')));
         });
-        const markDelay = 250 + cellEls.length * 70 + 350;
+
+        // 整列が終わったら「候補から1枚を選ぶ」操作を有効化
+        this._bestChosen = false;
+        const enableDelay = 250 + cellEls.length * 70 + 300;
         if (!this._csMarkTimers) this._csMarkTimers = [];
         this._csMarkTimers.forEach(clearTimeout);
         this._csMarkTimers = [];
-        cellEls.forEach((el) => {
-            if (el.classList.contains('cs-star')) {
-                this._csMarkTimers.push(setTimeout(() => el.classList.add('cs-mark'), markDelay));
-            }
+        this._csMarkTimers.push(setTimeout(() => {
+            if (this._bestChosen) return;
+            if (prompt) prompt.textContent = '★ 決定的な1枚を選ぼう — 光る候補をタップ';
+            cellEls.forEach((el) => {
+                if (el.classList.contains('cs-candidate')) {
+                    el.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        const idx = parseInt(el.getAttribute('data-idx'), 10);
+                        this.chooseBestShot(idx, el);
+                    });
+                }
+            });
+        }, enableDelay));
+    }
+
+    // プレイヤーが候補から1枚を選んだ時の「スポットライト＆スタンプ」昇格演出。
+    chooseBestShot(index, cellEl) {
+        if (this._bestChosen || !this.filmStripEl) return;
+        this._bestChosen = true;
+        this.chosenBestIndex = index;
+        const p = this.photoLog[index];
+        this.bestChosenTimeStr = p ? p.timeStr : null;
+        try { sfx.play('shutter_star'); } catch (e) { /* 無害 */ }
+        try { sfx.play('shutter_click'); } catch (e) { /* 無害 */ }
+
+        const sheet = this.filmStripEl.querySelector('.cs-sheet');
+        const grid = this.filmStripEl.querySelector('#shutter-cs-grid');
+        const prompt = this.filmStripEl.querySelector('#shutter-cs-prompt');
+        const stats = this.filmStripEl.querySelector('#shutter-cs-stats');
+        const nextBtn = this.filmStripEl.querySelector('#shutter-cs-next');
+        if (!sheet || !grid) return;
+
+        // 周囲をモノクロ＆沈ませ、選んだ1枚を主役に（クリックは以後無効）
+        grid.querySelectorAll('.cs-cell').forEach((el) => {
+            el.style.pointerEvents = 'none';
+            el.classList.remove('cs-candidate');
+            if (el !== cellEl) el.classList.add('cs-loser');
         });
+
+        // スポットライトの暗幕
+        const veil = document.createElement('div');
+        veil.className = 'cs-veil';
+        sheet.appendChild(veil);
+
+        // ヒーロー（拡大した決定的1枚）＋ スタンプ ＋ 火花
+        const hero = document.createElement('div');
+        hero.className = 'cs-hero';
+        hero.innerHTML = `<img src="${p.url}" alt=""><div class="cs-stamp">★ BEST SHOT</div>`;
+        for (let k = 0; k < 12; k++) {
+            const ang = (k / 12) * Math.PI * 2;
+            const sp = document.createElement('span');
+            sp.className = 'cs-spark';
+            sp.style.setProperty('--dx', `${Math.round(Math.cos(ang) * 150)}px`);
+            sp.style.setProperty('--dy', `${Math.round(Math.sin(ang) * 150)}px`);
+            hero.appendChild(sp);
+        }
+        sheet.appendChild(hero);
+        requestAnimationFrame(() => { veil.classList.add('on'); hero.classList.add('on'); });
+
+        if (prompt) prompt.textContent = '';
+        if (stats) stats.innerHTML = `★ <b>BEST SHOT 決定！</b> ・ 撮影 <b>${this.totalShots}</b>枚`;
+
+        // 最終リザルトにも反映
+        this.updateResultSummary();
+
+        // 演出が落ち着いたら「次へ」を提示
+        if (!this._csMarkTimers) this._csMarkTimers = [];
+        this._csMarkTimers.push(setTimeout(() => {
+            if (nextBtn) nextBtn.style.display = '';
+        }, 1200));
     }
 
     triggerShutterFlash() {
@@ -3292,7 +3440,7 @@ export class SongShutter extends BaseSong {
         this.totalShots++;
         if (isBestShot) this.starShots++;
         if (isTargetLocked) this.lockShots++;
-        this.recordPhotoToFilm(canvas, isBestShot, timeStr);
+        this.recordPhotoToFilm(canvas, isBestShot, composition.score, timeStr);
         this.updateResultSummary();
 
         // 3. CanvasTexture の生成と設定
