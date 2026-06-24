@@ -10,6 +10,7 @@ import { CompletionScreen } from './ui/CompletionScreen.js';
 import { LoadingScreen } from './ui/LoadingScreen.js';
 import { ErrorScreen } from './ui/ErrorScreen.js';
 import './core/sfx.js'; // 全曲共通UIの効果音(eventBus/DOM購読で自己登録)
+import './core/bgm.js'; // 選曲画面のフェーズ別BGM(eventBus購読で自己登録)
 
 // 曲シーンは1曲ずつしか遊ばないので、静的importで全曲(+pixi/three-vrm)を
 // 初回バンドルに同梱するのは無駄。曲ごとに dynamic import() し、選んだ曲の

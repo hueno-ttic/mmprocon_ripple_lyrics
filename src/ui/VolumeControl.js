@@ -69,6 +69,7 @@ export class VolumeControl {
             this._applyToPlayer();
             this._save();
             this._refresh();
+            eventBus.emit('appVolumeChange', this._effectiveVolume());
         });
 
         this.muteBtn.addEventListener('click', () => {
@@ -76,6 +77,7 @@ export class VolumeControl {
             this._applyToPlayer();
             this._save();
             this._refresh();
+            eventBus.emit('appVolumeChange', this._effectiveVolume());
         });
 
         this._refresh();

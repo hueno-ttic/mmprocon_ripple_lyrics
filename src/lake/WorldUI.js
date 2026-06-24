@@ -84,6 +84,9 @@ export class WorldUI {
         this._clockStart = Date.now();
         this.animate = this.animate.bind(this);
         this.animationId = requestAnimationFrame(this.animate);
+
+        // 選曲画面に入った合図 — フェーズ別BGM(bgm.js)が現在フェーズの曲を流す。
+        eventBus.emit('lakeEnter');
     }
 
     // 「ここを押せる」と一目で分かるアフォーダンスをまとめて注入する。
@@ -554,6 +557,9 @@ export class WorldUI {
     }
 
     show() {
+        // 曲本編から選曲画面へ戻った合図 — BGMを(進行後の)現在フェーズで鳴らし直す。
+        eventBus.emit('lakeEnter');
+
         this.renderer.domElement.style.display = 'block';
         this.labelsContainer.style.display = 'block';
         if (this.selectionPanel) this.selectionPanel.style.display = 'flex';
