@@ -317,6 +317,7 @@ export class SongShutter extends BaseSong {
         this._beatFrac = 0;   // 拍内位相(0=拍頭)
         this._barAccent = 0;  // 小節頭アクセント(発火→減衰)
         this._swayCur = 0;    // 体重移動の平滑値
+        this._climaxAmt = 0;  // サビ強度の平滑値(0..1。振幅スナップ防止)
 
         // 「可愛い動き」ストックから既定プリセットを適用（grooveConfig と armStyle を設定）
         this.armStyle = 'cheer';
@@ -934,7 +935,11 @@ export class SongShutter extends BaseSong {
         const get = (n) => this.getMMDBone(subject, n);
         const hips = get('hips'), spine = get('spine'), chest = get('upperChest') || get('chest') || get('spine'), head = get('head');
         if (!spine && !hips) return;
-        const gain = cfg.gain * (this.isClimax ? cfg.climaxGain * 1.5 : 1.0);
+        // サビ強度を 0→1 で平滑化（isClimaxの真偽が切り替わる瞬間に振幅がスナップして
+        // 腕がガクッと跳ねるのを防ぐ。ダンス全体がサビへ滑らかに盛り上がる）。
+        this._climaxAmt += ((this.isClimax ? 1 : 0) - this._climaxAmt) * Math.min(1, deltaSec * 2.5);
+        const cx = this._climaxAmt;
+        const gain = cfg.gain * (1 + (cfg.climaxGain * 1.5 - 1) * cx);
         const g = this._groove;
 
         // 拍頭で胴を前に沈めて跳ね返す（スクワッシュ＆ストレッチ）。小節頭は踏み込みを強調
@@ -948,8 +953,8 @@ export class SongShutter extends BaseSong {
         const s = this._swayCur;
         const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
         if (hips) { hips.rotation.z = s; hips.rotation.y = swayN * cfg.twist * 0.4; }
-        if (spine) { spine.rotation.z = -s * 0.6; spine.rotation.y = swayN * cfg.twist; } // 上半身をひねる
-        if (chest) chest.rotation.y = swayN * cfg.twist * 0.5;
+        if (spine) { spine.rotation.z = -s * 0.55; spine.rotation.y = swayN * cfg.twist * 0.65; } // 上半身をひねる
+        if (chest) chest.rotation.y = swayN * cfg.twist * 0.3;
 
         // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
         if (head) {
@@ -974,29 +979,35 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 型(SHUTTER_MIKU_POSES)に重ねてビートで動かす。サビは振り上げ＋左右ウェーブ。
+        // 腕: 体内を貫通せず・細かく振動もしないことを最優先に、armStyleに依らず安全包絡へ固定。
+        // 安全包絡は実機計測で確定: 上腕 z=+0.5前後(左)/-0.5前後(右)で腕は体の脇に下りて胴の外
+        // (左肘 e²≈2.7・左手首 e²≈6)。z を負へ振ると腕が胸前へ回り込み貫通するので使わない。
+        // 駆動は sin(t)＋平滑sway のみ(拍の急峻パルス g は使わない)＝スナップ/振動が出ない。
+        // （旧: サビで rotation.x=-pump の絶対代入が拍ごとにスナップし腕がガクガク振動＋
+        //   反応クランプが上腕を毎フレーム押し返して細かく振動していた）
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        if (this.isClimax) {
-            const pump = g * cfg.armPump * gain;
-            if (lUA) { lUA.rotation.x = -pump; lUA.rotation.z += -s * 0.6; }   // 振り上げ＋左右に振る
-            if (rUA) { rUA.rotation.x = -pump; rUA.rotation.z += -s * 0.6; }
-            if (lLA) lLA.rotation.x += -g * 0.2;                               // 肘も弾ませる
-            if (rLA) rLA.rotation.x += -g * 0.2;
-        } else {
-            const swing = swayN * cfg.armSway;       // 体重移動に同期した前後の振り
-            const bob = g * cfg.armBob * gain;       // 拍ごとの弾み
-            if (lUA) lUA.rotation.x += swing - bob;
-            if (rUA) rUA.rotation.x += -swing - bob;
-            if (lLA) lLA.rotation.x += -bob * 0.8;   // 肘の弾み
-            if (rLA) rLA.rotation.x += -bob * 0.8;
-        }
+        const baseZ = 0.60;                                  // 上腕を脇へ下ろす安全角(左+/右-)
+        const wv = Math.sin(t * 2.0);                        // 連続波(滑らか)
+        const wv2 = Math.sin(t * 1.3 + 0.6);
+        const sw = this._swayCur;                            // 体重移動の平滑値(滑らか)
+        const lift = 0.10 + 0.06 * cx;                       // サビは少し大きく開く(平滑)
+        const armZsway = sw * 0.7 + wv2 * (0.13 + 0.07 * cx);  // 脇での開閉(安全範囲内)
+        const armX = wv * (0.14 + 0.08 * cx);                // 前後の振り(両腕同相)
+        if (lUA) lUA.rotation.set(armX, 0,  baseZ + lift + armZsway * 0.4);
+        if (rUA) rUA.rotation.set(armX, 0, -baseZ - lift + armZsway * 0.4);
+        // 肘は軽く曲げ伸ばし(連続・浅め)。脇に下りているので折っても手は体側で胴に入らない
+        const fold = 0.18 + (wv * 0.5 + 0.5) * (0.22 + 0.08 * cx);
+        if (lLA) lLA.rotation.set(0, 0, -fold);
+        if (rLA) rLA.rotation.set(0, 0,  fold);
 
         // 小節頭アクセントの減衰
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
     }
 
-    // 腕の体内貫通を「絶対に」防ぐ幾何クランプ。ポーズ＋グルーヴ適用後に毎フレーム実行。
+    // 腕の体内貫通を「絶対に」防ぐ幾何クランプ。体に寄せるキメポーズ(ホールド中)だけ呼ぶ。
+    // 通常ダンスは applySubjectGroove が腕を安全包絡(脇)で動かすため呼ばない＝毎フレーム補正
+    // による細かい振動を出さない。ホールドは静止しているのでこのクランプも安定し振動しない。
     // ねんどろ(チビ)体型は胴が深く腕が短いため、ポーズ値だけ見ても合成結果が胴へ食い込む
     // （実測: 胴の前面はz≈0.95・側面はx≈0.7まで張り出し、踊ると肘がd≈0.66まで埋まる）。
     // 手首だけ逃がすと前腕・肘が残って貫通するため、肘・手首・手先の3点をワールド座標で判定し、
@@ -2556,8 +2567,9 @@ export class SongShutter extends BaseSong {
                 // 腕の型へ補間 → 通常時はその上にビートグルーヴを重ねて踊らせる（ホールド中は抑える）
                 this.lerpSubjectPose(subject, gesture, poseLerp);
                 if (isShown && !posing) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
-                // ポーズ＋グルーヴ合成後に腕の体内貫通を幾何クランプで確実に防ぐ
-                this.clampArmsWorld(subject);
+                // 通常ダンスは applySubjectGroove が腕を安全包絡内(脇)で動かすのでクランプ不要＝振動しない。
+                // 体に寄せるキメポーズ(ホールド中)だけ、静止状態で幾何クランプして貫通を防ぐ(静止=安定で無振動)。
+                if (posing) this.clampArmsWorld(subject);
 
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
