@@ -979,32 +979,33 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 体内を貫通せず・細かく振動もせず、かつ「ねんどろっぽく動く」振付。
-        // 安全包絡は実機計測で確定: 上腕 z を脇側(左+0.4〜1.0 / 右はその符号反転)に保てば、
-        // 前後スイング(uaX)も肘の曲げ伸ばし(faZ)も自由に付けて肘/手首とも e²≥2.4で貫通しない。
-        // → 上腕は脇に下ろしたまま、前後スイング＋上下＋肘の曲げ伸ばしを左右“交互”に付けて、
-        //   手が体の前で弾むかわいい動きにする。駆動は拍の急峻パルスg不使用・連続sin＋平滑swayのみ
-        //   ＝スナップ/振動が出ない。反応クランプも不要(=無振動)。
+        // 腕: 体内を貫通せず・振動もせず、ねんどろいど定番ポーズを参照した自然で可愛い動き。
+        // 20体のサブエージェントで多数の候補振付を設計→実機で全候補の貫通/振動/見栄えを評価し合成。
+        // 設計の要点(実機計測):
+        //  - 肘の体内貫通は「上腕の向き(z,x)」だけで決まり、前腕の曲げ(肘の開閉)は肘位置を変えない。
+        //    → 上腕は肘クリアランスが高い安全角(z≈0.64, やや前x≈0.30=体の前に構えTポーズ回避)に保ち、
+        //      前腕を大きく曲げ伸ばしして手を胸〜顔へ運ぶ(=よく動くが貫通しない)。
+        //  - 30秒周期のゆっくりした drift で「顔に手を寄せる甘い」⟷「前で元気にポンプ」を行き来させ、
+        //    3分間でも単調にならない。左右は逆相(交互)で躍動感。サビ(cx)で開きを拡大。
+        //  - 駆動は連続sin＋平滑swayのみ(拍の急峻パルスg不使用)＝スナップ/振動なし。反応クランプ不要。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        // 実機計測の要点: 肘の位置は「上腕」だけで決まり、前腕の曲げ(肘の開閉)は肘位置を変えない。
-        // → 上腕は安全圏で“控えめ”に動かして肘を体外に保ち、前腕は“大きく”曲げ伸ばしして
-        //   手を体の前で大きく弾ませる（＝よく動いて見えるが貫通しない）。左右交互で躍動感。
-        const sn = swayN;                                   // 体重移動 -1..1(平滑・拍同期)
-        const amp = 1.0 + 0.30 * cx;                        // サビで大きく(平滑)
-        const ph = t * 2.6;                                 // 腕の連続位相
-        const bobL = Math.sin(ph), bobR = Math.sin(ph + Math.PI);   // 左右逆相＝交互
-        // 上腕z: 肘クリアランス最大の角(実測 z≈0.65で肘 e²ピーク)に置く。控えめに上下。
-        // ※チビ体型では「腕を真下に下ろす(z大)」と肘が幅広の胴側面へ寄って逆に危険なので使わない。
-        const zL = 0.66 - sn * 0.10, zR = 0.66 + sn * 0.10;
-        // 上腕x: 控えめな前後スイング(肘を体外に保つため小さめ)。やや前へ構える
-        const swgL = (sn * 0.13 + bobL * 0.10 + 0.05) * amp;
-        const swgR = (-sn * 0.13 + bobR * 0.10 + 0.05) * amp;
-        if (lUA) lUA.rotation.set(swgL, 0,  zL);
-        if (rUA) rUA.rotation.set(swgR, 0, -zR);
-        // 前腕(肘): 大きく曲げ伸ばし(左右交互)＝手が体の前で大きく弾む。肘位置は不変なので安全
-        const foldL = 0.40 + (bobL * 0.5 + 0.5) * (0.95 * amp);
-        const foldR = 0.40 + (bobR * 0.5 + 0.5) * (0.95 * amp);
+        const cxA = 1.0 + 0.35 * cx;                          // サビで大きく(平滑)
+        const ph = t * 2.6;                                  // 拍位相
+        const drift = Math.sin(t * 0.2) * 0.5 + 0.5;         // 0..1 ゆっくり表情変化(~31s周期)
+        const bL = Math.sin(ph), bR = Math.sin(ph + Math.PI); // 左右逆相＝交互
+        // 上腕: 体の前にやや構える(自然)＋控えめな前後スイング。zは肘クリアランス確保の安全角
+        const zL = 0.64 - swayN * 0.06, zR = 0.64 + swayN * 0.06;
+        const swL = (0.30 + swayN * 0.10 + bL * 0.10) * cxA;
+        const swR = (0.30 - swayN * 0.10 + bR * 0.10) * cxA;
+        if (lUA) lUA.rotation.set(swL, 0,  zL);
+        if (rUA) rUA.rotation.set(swR, 0, -zR);
+        // 前腕(肘): 甘い時(drift小)は深く折って手を顔へ、元気な時(drift大)は大きくポンプ。左右交互。
+        // 肘位置は不変なので深く折っても貫通しない。1.6で頭打ちにして折り過ぎを防ぐ。
+        const foldBase = 1.00 - drift * 0.40;                // 0.6..1.0
+        const pumpAmp = (0.40 + drift * 0.42) * cxA;
+        const foldL = Math.min(1.6, foldBase + (bL * 0.5 + 0.5) * pumpAmp);
+        const foldR = Math.min(1.6, foldBase + (bR * 0.5 + 0.5) * pumpAmp);
         if (lLA) lLA.rotation.set(0, 0, -foldL);
         if (rLA) rLA.rotation.set(0, 0,  foldR);
 
