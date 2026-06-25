@@ -990,22 +990,21 @@ export class SongShutter extends BaseSong {
         //  - 駆動は連続sin＋平滑swayのみ(拍の急峻パルスg不使用)＝スナップ/振動なし。反応クランプ不要。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        const cxA = 1.0 + 0.35 * cx;                          // サビで大きく(平滑)
         const ph = t * 2.6;                                  // 拍位相
-        const drift = Math.sin(t * 0.2) * 0.5 + 0.5;         // 0..1 ゆっくり表情変化(~31s周期)
-        const bL = Math.sin(ph), bR = Math.sin(ph + Math.PI); // 左右逆相＝交互
-        // 上腕: 体の前にやや構える(自然)＋控えめな前後スイング。zは肘クリアランス確保の安全角
-        const zL = 0.64 - swayN * 0.06, zR = 0.64 + swayN * 0.06;
-        const swL = (0.30 + swayN * 0.10 + bL * 0.10) * cxA;
-        const swR = (0.30 - swayN * 0.10 + bR * 0.10) * cxA;
-        if (lUA) lUA.rotation.set(swL, 0,  zL);
-        if (rUA) rUA.rotation.set(swR, 0, -zR);
-        // 前腕(肘): 甘い時(drift小)は深く折って手を顔へ、元気な時(drift大)は大きくポンプ。左右交互。
-        // 肘位置は不変なので深く折っても貫通しない。1.6で頭打ちにして折り過ぎを防ぐ。
-        const foldBase = 1.00 - drift * 0.40;                // 0.6..1.0
-        const pumpAmp = (0.40 + drift * 0.42) * cxA;
-        const foldL = Math.min(1.6, foldBase + (bL * 0.5 + 0.5) * pumpAmp);
-        const foldR = Math.min(1.6, foldBase + (bR * 0.5 + 0.5) * pumpAmp);
+        const gL = Math.sin(ph) * 0.5 + 0.5;                 // 0..1
+        const gR = Math.sin(ph + Math.PI) * 0.5 + 0.5;      // 逆相＝左右交互
+        // 上腕: 体の前へしっかり構える(x≈0.42)＝深く折った手が顔の高さ(頬の横)へ来る。
+        // z は肘クリアランス最大の安全角。やや前に出すことで「胸前で横折れ」する不自然さを回避し、
+        // 手が顔を縁取る“きゅるん/てふり”の可愛いシルエットになる。
+        const zL = 0.60 - swayN * 0.05, zR = 0.60 + swayN * 0.05;
+        const xL = (0.42 + gL * 0.07) * (1.0 + 0.12 * cx);
+        const xR = (0.42 + gR * 0.07) * (1.0 + 0.12 * cx);
+        if (lUA) lUA.rotation.set(xL, 0,  zL);
+        if (rUA) rUA.rotation.set(xR, 0, -zR);
+        // 前腕(肘): 深く折って手を顔の横へ(かわいい)。左右交互に大きく弾ませて躍動感。
+        // 肘位置は不変なので深く折っても貫通しない。サビ(cx)で弾みを拡大。
+        const foldL = 1.15 + gL * 0.45 * (1.0 + 0.3 * cx);
+        const foldR = 1.15 + gR * 0.45 * (1.0 + 0.3 * cx);
         if (lLA) lLA.rotation.set(0, 0, -foldL);
         if (rLA) rLA.rotation.set(0, 0,  foldR);
 
