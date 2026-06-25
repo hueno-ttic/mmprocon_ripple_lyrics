@@ -3,7 +3,7 @@ export const CONSTANTS = {
     RIPPLE_RADIUS: 3
 };
 
-// Accent colors follow the redesign art direction (湖のソナーレ scene design)
+// Accent colors follow the redesign art direction (Lake Sonare scene design)
 export const PHASES = [
     { id: 0, name: '晴れ',   nameEn: 'clear sky', color: '#6CB04A' },
     { id: 1, name: '雲',     nameEn: 'clouds', color: '#5C9EE0' },

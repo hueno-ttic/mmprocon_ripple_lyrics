@@ -75,7 +75,7 @@ export class CompletionScreen {
 
         // Title
         const title = document.createElement('h1');
-        title.textContent = '湖のソナーレ';
+        title.textContent = 'Lake Sonare';
         title.style.cssText = `
             color: #fff; font-size: clamp(20px, 5vw, 34px);
             font-weight: 300; letter-spacing: 0.35em;
@@ -137,7 +137,7 @@ export class CompletionScreen {
 
         // Close button
         const btn = document.createElement('button');
-        btn.textContent = '湖のソナーレへ';
+        btn.textContent = 'Lake Sonareへ';
         btn.style.cssText = `
             padding: 11px 30px;
             border: 1px solid rgba(255,255,255,0.35);
@@ -159,7 +159,7 @@ export class CompletionScreen {
         this.el.appendChild(btn);
 
         // SNS Share button
-        const shareText = encodeURIComponent('マジカルミライ2026「湖のソナーレ」で6つの問いすべてに向き合いました！ #マジカルミライ2026 #初音ミク');
+        const shareText = encodeURIComponent('マジカルミライ2026「Lake Sonare」で6つの問いすべてに向き合いました！ #マジカルミライ2026 #初音ミク');
         const shareUrl = encodeURIComponent(location.href);
         const shareBtn = document.createElement('a');
         shareBtn.href = `https://twitter.com/intent/tweet?text=${shareText}&url=${shareUrl}`;
