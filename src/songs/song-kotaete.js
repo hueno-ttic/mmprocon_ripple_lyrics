@@ -209,6 +209,15 @@ export class SongKotaete extends BaseSong {
         this.songWrapper.addEventListener('pointerdown', this.boundOnPointerDown);
 
         super.init();
+
+        // 初回誘導: 最初に流れてきた歌詞スプライトの実位置にガイドを重ねる(共通機構)。
+        // 一度でも共鳴したら resonate() 側で dismiss する。
+        this.highlightFirstInteractable(() => {
+            if (this.resonanceCount > 0) return null;
+            const target = this.activeSprites.find(s => s && !s.userData.resonated);
+            if (!target) return null;
+            return this.worldToScreen(target.position.clone());
+        }, { label: '歌詞をタップ' });
     }
 
     initThree() {
@@ -949,6 +958,7 @@ export class SongKotaete extends BaseSong {
     }
 
     resonate(sprite, clientX, clientY) {
+        this.dismissFirstInteractable(); // 初回共鳴で誘導ガイドを片付ける
         sfx.play('kotaete_resonance');
         sprite.userData.resonated = true;
         sprite.userData.resonateFlash = 1.4; // 強めにポップ

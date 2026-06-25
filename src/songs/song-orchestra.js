@@ -45,7 +45,6 @@ export class SongOrchestra extends BaseSong {
         // 序盤の予兆(premonition): 再生開始直後、まだ歌詞も操作も無い「無音地帯」を
         // 埋めるため、テーマ色のごく淡いオーブを数個ゆっくり漂わせ「触れられる」ことを示唆する。
         this.premonitionOrbs = [];
-        this.PREMONITION_END = 10000;     // この時刻(ms)を過ぎたら予兆を畳んで破棄する
         this._premonitionDone = false;    // 予兆オーブを全て破棄し終えたら true
         this._premonitionFoldStart = undefined; // 昇華(消滅)フェーズ開始時刻(ms)
         this._tutCardTimer = null;
@@ -167,6 +166,15 @@ export class SongOrchestra extends BaseSong {
         );
 
         super.init();
+
+        // 初回誘導: 最初にアクティブ化した歌詞スプライト(星座ノードは除く)の実位置に
+        // ガイドを重ねる(共通機構)。初回の色共鳴で resonateLyricColor() 側が dismiss する。
+        this.highlightFirstInteractable(() => {
+            if (this.hasResonatedColor) return null;
+            const target = this.activeSprites.find(s => s && !s.userData.isNode);
+            if (!target) return null;
+            return this.worldToScreen(target.position.clone());
+        }, { label: '歌詞をタップ' });
     }
 
     initThree() {
@@ -260,8 +268,8 @@ export class SongOrchestra extends BaseSong {
         // --- オーロラ状の光のカーテン: 緩く脈動する2枚の縦帯 ---
         this.auroras = [];
         const auroraDefs = [
-            { hex: 0x2f7fff, x: -10, w: 22, h: 34, op: 0.10 },
-            { hex: 0x18c79a, x: 10, w: 20, h: 30, op: 0.08 }
+            { hex: 0x2f7fff, x: -10, w: 22, h: 34, op: 0.18 },
+            { hex: 0x18c79a, x: 10, w: 20, h: 30, op: 0.15 }
         ];
         for (const d of auroraDefs) {
             const tex = this.createAuroraTexture(d.hex);
@@ -331,7 +339,7 @@ export class SongOrchestra extends BaseSong {
         // 天の川: 開幕からゆっくりフェードイン、サビでさらに明るく
         if (this.milkyWay) {
             const introFade = Math.min(1.0, position / 6000); // 最初の6秒で満ちる
-            const target = (0.30 + 0.45 * open) * introFade;
+            const target = (0.42 + 0.45 * open) * introFade;
             const m = this.milkyWay.material;
             m.opacity += (target - m.opacity) * 0.04;
             this.milkyWay.rotation.z += 0.00012; // ごく緩やかに流す
@@ -358,7 +366,7 @@ export class SongOrchestra extends BaseSong {
     initPremonitionOrbs() {
         if (!this.glowTexture || !this.scene) return;
         const isMobile = window.innerWidth < 768;
-        const count = isMobile ? 3 : 5;
+        const count = isMobile ? 4 : 8;
         // 共鳴で実際に生まれるオーブ色(getSemanticColor の6色)＋テーマ青。
         // これらを予兆に使うことで「触れるとこの色たちが集まる」と視覚的に予告する。
         const PALETTE = ['#185FA5', '#ffb834', '#ff3b5c', '#00d4ff', '#00ffb0', '#d95bff'];
@@ -407,11 +415,12 @@ export class SongOrchestra extends BaseSong {
             return;
         }
 
-        // 操作済み or 予兆時間切れで畳み(昇華)フェーズへ
-        const folding = this.hasResonatedColor || position > this.PREMONITION_END;
+        // 初回共鳴で畳み(昇華)フェーズへ。時間切れによる一斉消滅はしない
+        // ので、無操作でも予兆オーブが漂い続けて序盤の画面が痩せない。
+        const folding = this.hasResonatedColor;
         if (folding) {
             if (this._premonitionFoldStart === undefined) this._premonitionFoldStart = position;
-            // ゲージの「序盤の脈動」も操作開始 or 時間切れで解除
+            // ゲージの「序盤の脈動」も操作開始で解除
             if (this.orbGaugeEl) this.orbGaugeEl.classList.remove('orchestra-orb-gauge-intro');
         }
 
@@ -1017,6 +1026,7 @@ export class SongOrchestra extends BaseSong {
         this.currentColor = nextColorHex;
         localStorage.setItem('orchestra_color', this.currentColor);
         this.hasResonatedColor = true; // カラー変更体験済みフラグ
+        this.dismissFirstInteractable(); // 初回の色共鳴で誘導ガイドを片付ける
 
         const newColor = new THREE.Color(this.currentColor);
 
