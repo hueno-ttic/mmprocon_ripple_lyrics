@@ -48,7 +48,7 @@ export class Credits {
             <div class="credits-panel" role="dialog" aria-label="クレジット">
                 <button class="credits-close" aria-label="閉じる">×</button>
                 <h2 class="credits-heading">Lake Sonare</h2>
-                <p class="credits-subheading">湖のソナーレ — クレジット</p>
+                <p class="credits-subheading">Lake Sonare — クレジット</p>
 
                 <section class="credits-section">
                     <h3 class="credits-section-title">楽曲</h3>

@@ -25,7 +25,7 @@ export class WorldUI {
         // Retina/高DPIでは塗りピクセルがdpr²倍になりfillrate律速になるため上限を抑える。
         this.renderer.setPixelRatio(quality.effectivePixelRatio());
         this.renderer.__qpr = quality.effectivePixelRatio();
-        // Cinematic grading to match the redesign (湖のソナーレ scene art direction)
+        // Cinematic grading to match the redesign (Lake Sonare scene art direction)
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.12;
