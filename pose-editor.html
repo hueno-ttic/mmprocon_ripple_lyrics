@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>シャッター ポーズエディタ</title>
+<style>
+  :root { --bg:#1b1b22; --panel:#23232c; --accent:#7fe3ff; --txt:#e9e9ef; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family:-apple-system,'Hiragino Sans',sans-serif; overflow:hidden; }
+  #app { display:flex; height:100vh; }
+  #view { flex:1; position:relative; }
+  #canvasWrap { width:100%; height:100%; }
+  #panel { width:330px; background:var(--panel); height:100vh; overflow-y:auto; padding:10px 12px 60px; border-left:1px solid #000; }
+  #panel h1 { font-size:15px; margin:4px 0 8px; color:var(--accent); }
+  .row { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+  button, select, label.file { background:#34343f; color:var(--txt); border:1px solid #4a4a58; border-radius:6px; padding:6px 9px; font-size:12px; cursor:pointer; }
+  button:hover { background:#42424f; }
+  button.primary { background:#1f6f86; border-color:#2a90ad; }
+  .bone { border:1px solid #33333e; border-radius:7px; margin-bottom:6px; background:#1f1f27; }
+  .bone summary { padding:6px 8px; font-size:13px; cursor:pointer; user-select:none; list-style:none; display:flex; justify-content:space-between; }
+  .bone summary::-webkit-details-marker { display:none; }
+  .bone[data-dirty="1"] summary { color:#ffd24a; }
+  .axis { display:flex; align-items:center; gap:6px; padding:3px 8px; font-size:11px; }
+  .axis span.k { width:12px; color:#9aa; }
+  .axis input[type=range] { flex:1; }
+  .axis input[type=number] { width:58px; background:#15151b; color:var(--txt); border:1px solid #3a3a46; border-radius:4px; font-size:11px; padding:2px 4px; }
+  #out { width:100%; height:150px; background:#12121a; color:#bfe; border:1px solid #3a3a46; border-radius:6px; font-family:monospace; font-size:11px; margin-top:6px; }
+  #hint { font-size:11px; color:#99a; line-height:1.5; margin:6px 0; }
+  #status { position:absolute; left:10px; top:10px; background:rgba(0,0,0,.55); padding:5px 9px; border-radius:6px; font-size:12px; }
+  #camhint { position:absolute; right:10px; bottom:10px; background:rgba(0,0,0,.5); padding:5px 9px; border-radius:6px; font-size:11px; color:#bbb; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="view">
+    <div id="canvasWrap"></div>
+    <div id="status">読み込み中…</div>
+    <div id="camhint">ドラッグ=回転 / ホイール=ズーム / 右ドラッグ=平行移動</div>
+  </div>
+  <div id="panel">
+    <h1>ポーズエディタ</h1>
+    <div class="row">
+      <select id="modelSel">
+        <option value="nendo_miku/nendo_miku.pmx">ミク</option>
+        <option value="nendo_rin/nendo_rin.pmx">リン</option>
+      </select>
+      <label class="file">VPD読込<input id="vpdInput" type="file" accept=".vpd" style="display:none" /></label>
+      <button id="resetBtn">リセット</button>
+    </div>
+    <div class="row">
+      <button id="frontBtn">正面</button>
+      <button id="leftBtn">左から</button>
+      <button id="rightBtn">右から</button>
+      <button id="topBtn">上から</button>
+    </div>
+    <div id="hint">各ボーンを開いてX/Y/Z（ラジアン）を動かす。左パネルは全身（肩・腕・ひじ・手首・上半身・腰・脚）。決まったら「書き出し」でSHUTTER_CUTE_POSES形式を取得。</div>
+    <div id="bones"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="exportBtn">書き出し(JSON)</button>
+      <button id="copyBtn">コピー</button>
+    </div>
+    <textarea id="out" readonly placeholder="ここに pose JSON が出ます"></textarea>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { MMDLoader } from '/src/utils/MMDLoader.js';
+import { MMDParser } from 'mmd-parser';
+
+const VRM_TO_MMD = {
+  hips:'下半身', spine:'上半身', chest:'上半身2', upperChest:'上半身2', head:'頭', neck:'首',
+  leftShoulder:'左肩', leftUpperArm:'左腕', leftLowerArm:'左ひじ', leftHand:'左手首',
+  rightShoulder:'右肩', rightUpperArm:'右腕', rightLowerArm:'右ひじ', rightHand:'右手首',
+  leftUpperLeg:'左足', leftLowerLeg:'左ひざ', leftFoot:'左足首',
+  rightUpperLeg:'右足', rightLowerLeg:'右ひざ', rightFoot:'右足首',
+};
+const MMD_TO_VRM = Object.fromEntries(Object.entries(VRM_TO_MMD).map(([v,m])=>[m,v]));
+// applySubjectPoseImmediate が上腕zに加える補正（左 -0.5 / 右 +0.5）。書き出しは逆補正して埋め込む。
+const Z_CORR = { '左腕': -0.5, '右腕': 0.5 };
+
+// 編集対象ボーン（上→下、左右）。labelは表示用
+const EDIT_BONES = [
+  ['上半身','上半身(背)'], ['上半身2','上半身2(胸)'], ['首','首'], ['頭','頭'],
+  ['左肩','左肩'], ['左腕','左腕(上腕)'], ['左ひじ','左ひじ(前腕)'], ['左手首','左手首'],
+  ['右肩','右肩'], ['右腕','右腕(上腕)'], ['右ひじ','右ひじ(前腕)'], ['右手首','右手首'],
+  ['下半身','下半身(腰)'],
+  ['左足','左足(腿)'], ['左ひざ','左ひざ'], ['左足首','左足首'],
+  ['右足','右足(腿)'], ['右ひざ','右ひざ'], ['右足首','右足首'],
+];
+
+const wrap = document.getElementById('canvasWrap');
+const statusEl = document.getElementById('status');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+wrap.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x10101a);
+const camera = new THREE.PerspectiveCamera(35, wrap.clientWidth/wrap.clientHeight, 0.1, 1000);
+camera.position.set(0, 9, 22);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 8, 0);
+controls.update();
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+const dl = new THREE.DirectionalLight(0xffffff, 1.4); dl.position.set(4,12,8); scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0x88aaff, 0.5); dl2.position.set(-6,4,-6); scene.add(dl2);
+scene.add(new THREE.GridHelper(20, 20, 0x333344, 0x222230));
+
+let mesh=null, bonesByName={}, dirty={};
+
+function convertMat(m){
+  const nm = new THREE.MeshPhongMaterial({
+    name:m.name||'', color:m.color?m.color.clone():(m.diffuse?m.diffuse.clone():new THREE.Color(0xffffff)),
+    specular:m.specular?m.specular.clone():new THREE.Color(0x111111), shininess:m.shininess!==undefined?m.shininess:30,
+    emissive:m.emissive?m.emissive.clone():new THREE.Color(0x000000), transparent:m.transparent!==undefined?m.transparent:false,
+    opacity:m.opacity!==undefined?m.opacity:1.0, side:m.side!==undefined?m.side:THREE.DoubleSide,
+    depthWrite:m.depthWrite!==undefined?m.depthWrite:true,
+  });
+  if(m.map){ nm.map=m.map; nm.alphaTest=0.5; }
+  return nm;
+}
+
+function loadModel(path){
+  statusEl.textContent='読み込み中… '+path;
+  if(mesh){ scene.remove(mesh); mesh.traverse(o=>{ if(o.geometry)o.geometry.dispose(); }); mesh=null; }
+  const loader = new MMDLoader();
+  loader.load('/assets/models/'+path, (m)=>{
+    m.traverse((c)=>{ if(c.isMesh&&c.material){ c.material = Array.isArray(c.material)?c.material.map(convertMat):convertMat(c.material); }});
+    // scale to ~16 height, feet on grid
+    const box=new THREE.Box3().setFromObject(m); const size=new THREE.Vector3(); box.getSize(size);
+    const s = size.y>0.1 ? 16/size.y : 1; m.scale.setScalar(s);
+    const box2=new THREE.Box3().setFromObject(m); m.position.y -= box2.min.y;
+    m.rotation.y = 0;
+    scene.add(m); mesh=m;
+    bonesByName={}; dirty={};
+    m.traverse(o=>{ if(o.isBone) bonesByName[o.name]=o; });
+    if(m.skeleton) m.skeleton.bones.forEach(b=>bonesByName[b.name]=b);
+    buildPanel();
+    statusEl.textContent = 'ボーン数: '+Object.keys(bonesByName).length+' / モデル: '+path.split('/')[0];
+  }, undefined, (e)=>{ statusEl.textContent='読み込み失敗: '+e; console.error(e); });
+}
+
+function buildPanel(){
+  const cont = document.getElementById('bones'); cont.innerHTML='';
+  EDIT_BONES.forEach(([name,label])=>{
+    const bone = bonesByName[name];
+    if(!bone) return;
+    const det=document.createElement('details'); det.className='bone'; det.dataset.bone=name;
+    const sum=document.createElement('summary'); sum.innerHTML='<span>'+label+'</span><span style="color:#667">'+name+'</span>'; det.appendChild(sum);
+    ['x','y','z'].forEach(axis=>{
+      const ax=document.createElement('div'); ax.className='axis';
+      const k=document.createElement('span'); k.className='k'; k.textContent=axis.toUpperCase();
+      const range=document.createElement('input'); range.type='range'; range.min=-3.15; range.max=3.15; range.step=0.01; range.value=bone.rotation[axis];
+      const num=document.createElement('input'); num.type='number'; num.min=-3.15; num.max=3.15; num.step=0.01; num.value=(+bone.rotation[axis].toFixed(2));
+      const set=(v)=>{ v=Math.max(-3.15,Math.min(3.15,+v||0)); bone.rotation[axis]=v; range.value=v; num.value=(+v.toFixed(2)); dirty[name]=true; det.dataset.dirty='1'; };
+      range.addEventListener('input',()=>set(range.value));
+      num.addEventListener('input',()=>set(num.value));
+      ax.append(k,range,num); det.appendChild(ax);
+      det._sync = det._sync||[]; det._sync.push(()=>{ range.value=bone.rotation[axis]; num.value=(+bone.rotation[axis].toFixed(2)); });
+    });
+    cont.appendChild(det);
+  });
+}
+
+function syncPanel(){ document.querySelectorAll('.bone').forEach(d=>{ (d._sync||[]).forEach(f=>f()); if(dirty[d.dataset.bone]) d.dataset.dirty='1'; }); }
+
+function applyVPD(vpd){
+  if(!vpd||!vpd.bones) return;
+  vpd.bones.forEach(b=>{
+    const bone=bonesByName[b.name]; if(!bone) return;
+    if(b.quaternion) bone.quaternion.fromArray(b.quaternion);
+    dirty[b.name]=true;
+  });
+  if(mesh&&mesh.skeleton) mesh.skeleton.update?.();
+  syncPanel();
+  statusEl.textContent='VPD適用: '+vpd.bones.length+'ボーン';
+}
+
+function resetPose(){ Object.values(bonesByName).forEach(b=>b.rotation.set(0,0,0)); dirty={}; document.querySelectorAll('.bone').forEach(d=>d.dataset.dirty='0'); syncPanel(); }
+
+function exportPose(){
+  const pose={};
+  EDIT_BONES.forEach(([name])=>{
+    if(!dirty[name]) return;
+    const bone=bonesByName[name]; if(!bone) return;
+    const vrm=MMD_TO_VRM[name]; if(!vrm) return;
+    let z=bone.rotation.z;
+    if(Z_CORR[name]!==undefined) z = z - Z_CORR[name]; // 逆補正: 実回転 = pose.z + Z_CORR → pose.z = 実回転 - Z_CORR
+    pose[vrm]={ x:+bone.rotation.x.toFixed(3), y:+bone.rotation.y.toFixed(3), z:+z.toFixed(3) };
+  });
+  const txt = JSON.stringify(pose, null, 2);
+  document.getElementById('out').value = txt;
+  return txt;
+}
+
+document.getElementById('modelSel').addEventListener('change', e=>loadModel(e.target.value));
+document.getElementById('resetBtn').addEventListener('click', resetPose);
+document.getElementById('exportBtn').addEventListener('click', exportPose);
+document.getElementById('copyBtn').addEventListener('click', ()=>{ const t=exportPose(); navigator.clipboard.writeText(t); statusEl.textContent='コピーしました'; });
+document.getElementById('vpdInput').addEventListener('change', async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const buf=await f.arrayBuffer();
+  let text; try{ text=new TextDecoder('shift_jis').decode(buf); }catch(_){ text=new TextDecoder().decode(buf); }
+  try{ const vpd=new MMDParser.Parser().parseVpd(text, true); applyVPD(vpd); }
+  catch(err){ statusEl.textContent='VPD解析失敗: '+err; console.error(err); }
+});
+const setCam=(x,y,z)=>{ camera.position.set(x,y,z); controls.target.set(0,8,0); controls.update(); };
+document.getElementById('frontBtn').addEventListener('click',()=>setCam(0,8,22));
+document.getElementById('leftBtn').addEventListener('click',()=>setCam(-22,8,2));
+document.getElementById('rightBtn').addEventListener('click',()=>setCam(22,8,2));
+document.getElementById('topBtn').addEventListener('click',()=>setCam(0,24,6));
+
+window.addEventListener('resize',()=>{ renderer.setSize(wrap.clientWidth,wrap.clientHeight); camera.aspect=wrap.clientWidth/wrap.clientHeight; camera.updateProjectionMatrix(); });
+(function loop(){ requestAnimationFrame(loop); controls.update(); renderer.render(scene,camera); })();
+loadModel(document.getElementById('modelSel').value);
+</script>
+</body>
+</html>
