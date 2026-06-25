@@ -984,34 +984,30 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 脇を締めた(腕を下ろした)可愛いポーズ＝「両手を頬に添えるきゅるん」。
-        // 20体のサブエージェントで可愛いポーズを研究→別の20体で振付を実装し、実機で全候補の
-        // 貫通/振動/見栄えを採点して最良案(きゅるん頬よせ・小首かしげ)を採用。
-        // 設計の要点(実機計測):
-        //  - 上腕は z≈1.06 で**体の脇に下ろして脇を締める**(肩-肘が直角に張り出すロボットアームを回避)。
-        //    やや前(x≈0.42)へ出し、前腕を深く折る(肘 |1.46|前後)ことで手が頬の横へ上がる。
-        //  - 肘の曲げは肘位置を変えないので深く折っても貫通しない(=可愛さと動きの主役に使える)。
-        //  - 左右をゆっくり(≈2.2秒)交互に押し、拍で軽く呼吸、小首をかしげて躍動と表情を出す。
-        //  - 上体の傾き/ひねりは上限クランプ済みなので、脇を締めた肘が幅広の胴(リン)へ寄っても貫通しない。
+        // 腕: 脇を締めて両手を胸の前で揃える可愛いポーズ。
+        // 実機で腕角度マップを撮影しユーザが選定(チャートA/B)。確定した正しいボーン軸の対応:
+        //  - 上腕Z(luaZ)を**マイナス(≈ -0.35)にすると脇が締まって腕が下りる**。
+        //    0で真横(Tポーズ・脇全開)、プラスで腕が上がり +1.6 でバンザイ。以前の「≈1.8で脇締め」は誤り。
+        //  - 上腕を脇に下ろした(luaZ -0.35)まま、やや前(luaX≈0.20)へ出し、
+        //    前腕(肘)を深く折る(llaZ≈-1.6)と、脇を締めたまま手が胸の前で揃う。
+        //  - 肘の曲げは肘位置(肩からの距離)を変えないので深く折っても貫通しない＝可愛さと動きの主役。
+        //  - 両手対称。ゆっくり呼吸(手が胸↔やや下を往復)＋小首かしげで、脇を締めたまま躍動と表情を出す。
+        //  - 上体の傾き/ひねりは下流で上限クランプ済みなので、脇を締めた肘が幅広の胴(リン)へ寄っても貫通しない。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        const br = Math.sin(t * 2.6) * 0.5 + 0.5;            // 拍の呼吸(0..1)
-        const swA = Math.sin(t * 0.45) * 0.5 + 0.5;         // ゆっくり左右スワップ(≈2.2s)
-        const swB = Math.sin(t * 0.45 + Math.PI) * 0.5 + 0.5;
-        // 上腕: 脇を締めて下ろす(z≈1.06)＋やや前(手が頬へ届く)
-        const zL = 1.06 - swayN * 0.03, zR = 1.06 + swayN * 0.03;
-        const xL = (0.42 + br * 0.03 + swA * 0.02) * (1.0 + 0.04 * cx);
-        const xR = (0.42 + br * 0.03 + swB * 0.02) * (1.0 + 0.04 * cx);
-        if (lUA) lUA.rotation.set(xL, 0,  zL);
-        if (rUA) rUA.rotation.set(xR, 0, -zR);
-        // 前腕(肘): 深く折って手を頬の横へ(きゅるん)。左右交互にゆっくり押して躍動感。
-        const foldL = (1.46 + br * 0.06 + swA * 0.10) * (1.0 + 0.05 * cx);
-        const foldR = (1.46 + br * 0.06 + swB * 0.10) * (1.0 + 0.05 * cx);
-        if (lLA) lLA.rotation.set(0, 0, -foldL);
-        if (rLA) rLA.rotation.set(0, 0,  foldR);
-        // 小首かしげ(可愛さUP)。グルーヴが設定した頭の傾きに加算
+        const breathe = Math.sin(t * 1.4);                       // ゆっくりした呼吸(両手同位相＝対称)
+        const rise = breathe * 0.5 + 0.5;                        // 0..1
+        const uaZ = 0.35 - swayN * 0.03;                         // 脇締め維持。体重移動で僅かに
+        const uaX = 0.20 + rise * 0.06;                          // 手をやや前後に
+        if (lUA) lUA.rotation.set(uaX, 0, -uaZ);                 // 左: 脇締め(z負)
+        if (rUA) rUA.rotation.set(uaX, 0,  uaZ);                 // 右: 脇締め(z正・左右対称)
+        // 前腕: 深く折って手を胸の前へ。呼吸で胸↔やや下をゆっくり往復(サビで少し大きく)。
+        const fold = 1.55 + rise * 0.22 * (1 + 0.25 * cx);
+        if (lLA) lLA.rotation.set(0, 0, -fold);
+        if (rLA) rLA.rotation.set(0, 0,  fold);
+        // 小首かしげ(可愛さを添える)。グルーヴが設定した頭の傾きに加算
         const headB = get('head');
-        if (headB) headB.rotation.z += 0.17 * Math.sin(t * 0.45) + 0.04 * Math.sin(t * 1.3);
+        if (headB) headB.rotation.z += 0.12 * Math.sin(t * 0.5);
 
         // 小節頭アクセントの減衰
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
