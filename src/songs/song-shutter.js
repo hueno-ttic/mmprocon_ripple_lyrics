@@ -952,9 +952,9 @@ export class SongShutter extends BaseSong {
         this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
         const s = this._swayCur;
         const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
-        if (hips) { hips.rotation.z = s; hips.rotation.y = swayN * cfg.twist * 0.4; }
-        if (spine) { spine.rotation.z = -s * 0.55; spine.rotation.y = swayN * cfg.twist * 0.65; } // 上半身をひねる
-        if (chest) chest.rotation.y = swayN * cfg.twist * 0.3;
+        if (hips) { hips.rotation.z = s * 0.85; hips.rotation.y = swayN * cfg.twist * 0.4; }
+        if (spine) { spine.rotation.z = -s * 0.5; spine.rotation.y = swayN * cfg.twist * 0.5; } // 上半身をひねる(腕が胴へ寄り過ぎないよう抑制)
+        if (chest) chest.rotation.y = swayN * cfg.twist * 0.25;
 
         // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
         if (head) {
@@ -979,27 +979,34 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 体内を貫通せず・細かく振動もしないことを最優先に、armStyleに依らず安全包絡へ固定。
-        // 安全包絡は実機計測で確定: 上腕 z=+0.5前後(左)/-0.5前後(右)で腕は体の脇に下りて胴の外
-        // (左肘 e²≈2.7・左手首 e²≈6)。z を負へ振ると腕が胸前へ回り込み貫通するので使わない。
-        // 駆動は sin(t)＋平滑sway のみ(拍の急峻パルス g は使わない)＝スナップ/振動が出ない。
-        // （旧: サビで rotation.x=-pump の絶対代入が拍ごとにスナップし腕がガクガク振動＋
-        //   反応クランプが上腕を毎フレーム押し返して細かく振動していた）
+        // 腕: 体内を貫通せず・細かく振動もせず、かつ「ねんどろっぽく動く」振付。
+        // 安全包絡は実機計測で確定: 上腕 z を脇側(左+0.4〜1.0 / 右はその符号反転)に保てば、
+        // 前後スイング(uaX)も肘の曲げ伸ばし(faZ)も自由に付けて肘/手首とも e²≥2.4で貫通しない。
+        // → 上腕は脇に下ろしたまま、前後スイング＋上下＋肘の曲げ伸ばしを左右“交互”に付けて、
+        //   手が体の前で弾むかわいい動きにする。駆動は拍の急峻パルスg不使用・連続sin＋平滑swayのみ
+        //   ＝スナップ/振動が出ない。反応クランプも不要(=無振動)。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        const baseZ = 0.60;                                  // 上腕を脇へ下ろす安全角(左+/右-)
-        const wv = Math.sin(t * 2.0);                        // 連続波(滑らか)
-        const wv2 = Math.sin(t * 1.3 + 0.6);
-        const sw = this._swayCur;                            // 体重移動の平滑値(滑らか)
-        const lift = 0.10 + 0.06 * cx;                       // サビは少し大きく開く(平滑)
-        const armZsway = sw * 0.7 + wv2 * (0.13 + 0.07 * cx);  // 脇での開閉(安全範囲内)
-        const armX = wv * (0.14 + 0.08 * cx);                // 前後の振り(両腕同相)
-        if (lUA) lUA.rotation.set(armX, 0,  baseZ + lift + armZsway * 0.4);
-        if (rUA) rUA.rotation.set(armX, 0, -baseZ - lift + armZsway * 0.4);
-        // 肘は軽く曲げ伸ばし(連続・浅め)。脇に下りているので折っても手は体側で胴に入らない
-        const fold = 0.18 + (wv * 0.5 + 0.5) * (0.22 + 0.08 * cx);
-        if (lLA) lLA.rotation.set(0, 0, -fold);
-        if (rLA) rLA.rotation.set(0, 0,  fold);
+        // 実機計測の要点: 肘の位置は「上腕」だけで決まり、前腕の曲げ(肘の開閉)は肘位置を変えない。
+        // → 上腕は安全圏で“控えめ”に動かして肘を体外に保ち、前腕は“大きく”曲げ伸ばしして
+        //   手を体の前で大きく弾ませる（＝よく動いて見えるが貫通しない）。左右交互で躍動感。
+        const sn = swayN;                                   // 体重移動 -1..1(平滑・拍同期)
+        const amp = 1.0 + 0.30 * cx;                        // サビで大きく(平滑)
+        const ph = t * 2.6;                                 // 腕の連続位相
+        const bobL = Math.sin(ph), bobR = Math.sin(ph + Math.PI);   // 左右逆相＝交互
+        // 上腕z: 肘クリアランス最大の角(実測 z≈0.65で肘 e²ピーク)に置く。控えめに上下。
+        // ※チビ体型では「腕を真下に下ろす(z大)」と肘が幅広の胴側面へ寄って逆に危険なので使わない。
+        const zL = 0.66 - sn * 0.10, zR = 0.66 + sn * 0.10;
+        // 上腕x: 控えめな前後スイング(肘を体外に保つため小さめ)。やや前へ構える
+        const swgL = (sn * 0.13 + bobL * 0.10 + 0.05) * amp;
+        const swgR = (-sn * 0.13 + bobR * 0.10 + 0.05) * amp;
+        if (lUA) lUA.rotation.set(swgL, 0,  zL);
+        if (rUA) rUA.rotation.set(swgR, 0, -zR);
+        // 前腕(肘): 大きく曲げ伸ばし(左右交互)＝手が体の前で大きく弾む。肘位置は不変なので安全
+        const foldL = 0.40 + (bobL * 0.5 + 0.5) * (0.95 * amp);
+        const foldR = 0.40 + (bobR * 0.5 + 0.5) * (0.95 * amp);
+        if (lLA) lLA.rotation.set(0, 0, -foldL);
+        if (rLA) rLA.rotation.set(0, 0,  foldR);
 
         // 小節頭アクセントの減衰
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
