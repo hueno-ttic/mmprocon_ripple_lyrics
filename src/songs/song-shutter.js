@@ -107,8 +107,8 @@ const ARM_GESTURES = {
 // 注: 上腕 z は「左=正で下ろし／右=負で下ろし」。左は z を下げ、右は z を上げると腕が高く挙がる。
 // 肘(LowerArm)の z は左=負・右=正で内側に折れる。ちび体型でも読めるよう大きめ＆左右非対称に。
 const SHUTTER_CUTE_POSES = [
-    // 両手ハート
-    { id: 'heart', label: 'ハート', emoji: '💞', pose: { leftUpperArm: { x: 0.55, y: 0.12, z: 0.2 }, rightUpperArm: { x: 0.55, y: -0.12, z: -0.2 }, leftLowerArm: { x: 0, y: 0, z: -2 }, rightLowerArm: { x: 0, y: 0, z: 2 }, head: { x: 0.1, y: 0, z: 0.1 }, neck: { x: 0.06, y: 0, z: 0 }, spine: { x: 0.08, y: 0, z: 0 } } },
+    // 両手ハート（上腕x負で前へ出し、前腕を折って胸の前・上めで両手を合わせる）
+    { id: 'heart', label: 'ハート', emoji: '💞', pose: { leftUpperArm: { x: -0.9, y: 0.3, z: 0.1 }, rightUpperArm: { x: -0.9, y: -0.3, z: -0.1 }, leftLowerArm: { x: 0.1, y: 0.9, z: -2 }, rightLowerArm: { x: 0.1, y: -0.9, z: 2 }, head: { x: 0.02, y: 0, z: 0.12 }, neck: { x: 0.03, y: 0, z: 0.06 }, spine: { x: 0.04, y: 0, z: 0 } } },
     // きゅるん
     { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: { leftUpperArm: { x: 0.5, y: 0, z: 0.36 }, rightUpperArm: { x: 0.5, y: 0, z: -0.36 }, leftLowerArm: { x: 0, y: 0.12, z: -2.28 }, rightLowerArm: { x: 0, y: -0.12, z: 2.28 }, head: { x: 0.06, y: 0.03, z: 0.26 }, neck: { x: 0.03, y: 0, z: 0.12 }, spine: { x: 0.02, y: 0, z: 0.04 } } },
     // お祈り
@@ -886,7 +886,7 @@ export class SongShutter extends BaseSong {
         const cp = SHUTTER_CUTE_POSES.find((p) => p.id === poseId);
         if (!cp) return;
         const holdMs = 3200;
-        this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId };
+        this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId, startedAt: performance.now() };
         // 表情も笑顔に寄せて可愛さを強調
         const shown = this.subjects.find((s) => s.key === this.shownKey);
         if (shown) shown.smileTimer = holdMs;
@@ -2553,21 +2553,25 @@ export class SongShutter extends BaseSong {
 
                 // 腕の型: ポーズ・ホールド中は指定ポーズ最優先。通常はプリセットの armStyle を基調に
                 // （穏やか系はサビで cheer へ切替えて盛り上げる）
-                let gesture, poseLerp = 0.08;
                 if (posing) {
-                    gesture = this.poseOverride.pose;
-                    poseLerp = 0.16; // キメ顔ポーズへ素早く寄せる
+                    // キメポーズは「入りだけ補間＋クランプ」、決まったら凍結＝固定する。
+                    // 毎フレーム補間とクランプを続けると、肘がクランプ楕円の境界にある時に
+                    // 押し戻し⇔補間の引っ張り合いで上腕がプルプル振動する。一定時間で凍結し根絶。
+                    const elapsed = performance.now() - (this.poseOverride.startedAt || 0);
+                    if (elapsed < 420) {
+                        // 入り: 素早く寄せつつ貫通をクランプで補正（この区間だけ動く）
+                        this.lerpSubjectPose(subject, this.poseOverride.pose, 0.34);
+                        this.clampArmsWorld(subject);
+                    }
+                    // elapsed>=420ms: 何もしない＝最後の補正済みポーズで固定（振動なし）
                 } else {
                     const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
                     const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
-                    gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                    const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                    // 腕の型へ補間 → その上にビートグルーヴを重ねて踊らせる
+                    this.lerpSubjectPose(subject, gesture, 0.08);
+                    if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
                 }
-                // 腕の型へ補間 → 通常時はその上にビートグルーヴを重ねて踊らせる（ホールド中は抑える）
-                this.lerpSubjectPose(subject, gesture, poseLerp);
-                if (isShown && !posing) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
-                // 通常ダンスは applySubjectGroove が腕を安全包絡内(脇)で動かすのでクランプ不要＝振動しない。
-                // 体に寄せるキメポーズ(ホールド中)だけ、静止状態で幾何クランプして貫通を防ぐ(静止=安定で無振動)。
-                if (posing) this.clampArmsWorld(subject);
 
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
