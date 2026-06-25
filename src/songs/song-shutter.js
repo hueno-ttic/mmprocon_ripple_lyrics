@@ -952,9 +952,14 @@ export class SongShutter extends BaseSong {
         this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
         const s = this._swayCur;
         const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
-        if (hips) { hips.rotation.z = s * 0.85; hips.rotation.y = swayN * cfg.twist * 0.4; }
-        if (spine) { spine.rotation.z = -s * 0.5; spine.rotation.y = swayN * cfg.twist * 0.5; } // 上半身をひねる(腕が胴へ寄り過ぎないよう抑制)
-        if (chest) chest.rotation.y = swayN * cfg.twist * 0.25;
+        // 脇を締めた(腕を下ろした)振付では、胴の傾き/ひねりが大きいと下ろした肘が幅広の胴(特にリン)へ
+        // 寄って貫通する。上体の傾き・ひねりは一定上限でクランプし、どのプリセット(大振りのappeal等)でも
+        // 脇締めの肘が体へ寄り過ぎないようにする。
+        const sB = Math.max(-0.13, Math.min(0.13, s));       // 体の傾きに使う上限付きsway
+        const twN = Math.max(-0.55, Math.min(0.55, swayN * cfg.twist)); // ひねり上限
+        if (hips) { hips.rotation.z = sB * 0.6; hips.rotation.y = twN * 0.3; }
+        if (spine) { spine.rotation.z = -sB * 0.4; spine.rotation.y = twN * 0.34; }
+        if (chest) chest.rotation.y = twN * 0.18;
 
         // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
         if (head) {
@@ -979,34 +984,34 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 体内を貫通せず・振動もせず、ねんどろいど定番ポーズを参照した自然で可愛い動き。
-        // 20体のサブエージェントで多数の候補振付を設計→実機で全候補の貫通/振動/見栄えを評価し合成。
+        // 腕: 脇を締めた(腕を下ろした)可愛いポーズ＝「両手を頬に添えるきゅるん」。
+        // 20体のサブエージェントで可愛いポーズを研究→別の20体で振付を実装し、実機で全候補の
+        // 貫通/振動/見栄えを採点して最良案(きゅるん頬よせ・小首かしげ)を採用。
         // 設計の要点(実機計測):
-        //  - 肘の体内貫通は「上腕の向き(z,x)」だけで決まり、前腕の曲げ(肘の開閉)は肘位置を変えない。
-        //    → 上腕は肘クリアランスが高い安全角(z≈0.64, やや前x≈0.30=体の前に構えTポーズ回避)に保ち、
-        //      前腕を大きく曲げ伸ばしして手を胸〜顔へ運ぶ(=よく動くが貫通しない)。
-        //  - 30秒周期のゆっくりした drift で「顔に手を寄せる甘い」⟷「前で元気にポンプ」を行き来させ、
-        //    3分間でも単調にならない。左右は逆相(交互)で躍動感。サビ(cx)で開きを拡大。
-        //  - 駆動は連続sin＋平滑swayのみ(拍の急峻パルスg不使用)＝スナップ/振動なし。反応クランプ不要。
+        //  - 上腕は z≈1.06 で**体の脇に下ろして脇を締める**(肩-肘が直角に張り出すロボットアームを回避)。
+        //    やや前(x≈0.42)へ出し、前腕を深く折る(肘 |1.46|前後)ことで手が頬の横へ上がる。
+        //  - 肘の曲げは肘位置を変えないので深く折っても貫通しない(=可愛さと動きの主役に使える)。
+        //  - 左右をゆっくり(≈2.2秒)交互に押し、拍で軽く呼吸、小首をかしげて躍動と表情を出す。
+        //  - 上体の傾き/ひねりは上限クランプ済みなので、脇を締めた肘が幅広の胴(リン)へ寄っても貫通しない。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        const ph = t * 2.6;                                  // 拍位相
-        const gL = Math.sin(ph) * 0.5 + 0.5;                 // 0..1
-        const gR = Math.sin(ph + Math.PI) * 0.5 + 0.5;      // 逆相＝左右交互
-        // 上腕: 体の前へしっかり構える(x≈0.42)＝深く折った手が顔の高さ(頬の横)へ来る。
-        // z は肘クリアランス最大の安全角。やや前に出すことで「胸前で横折れ」する不自然さを回避し、
-        // 手が顔を縁取る“きゅるん/てふり”の可愛いシルエットになる。
-        const zL = 0.60 - swayN * 0.05, zR = 0.60 + swayN * 0.05;
-        const xL = (0.42 + gL * 0.07) * (1.0 + 0.12 * cx);
-        const xR = (0.42 + gR * 0.07) * (1.0 + 0.12 * cx);
+        const br = Math.sin(t * 2.6) * 0.5 + 0.5;            // 拍の呼吸(0..1)
+        const swA = Math.sin(t * 0.45) * 0.5 + 0.5;         // ゆっくり左右スワップ(≈2.2s)
+        const swB = Math.sin(t * 0.45 + Math.PI) * 0.5 + 0.5;
+        // 上腕: 脇を締めて下ろす(z≈1.06)＋やや前(手が頬へ届く)
+        const zL = 1.06 - swayN * 0.03, zR = 1.06 + swayN * 0.03;
+        const xL = (0.42 + br * 0.03 + swA * 0.02) * (1.0 + 0.04 * cx);
+        const xR = (0.42 + br * 0.03 + swB * 0.02) * (1.0 + 0.04 * cx);
         if (lUA) lUA.rotation.set(xL, 0,  zL);
         if (rUA) rUA.rotation.set(xR, 0, -zR);
-        // 前腕(肘): 深く折って手を顔の横へ(かわいい)。左右交互に大きく弾ませて躍動感。
-        // 肘位置は不変なので深く折っても貫通しない。サビ(cx)で弾みを拡大。
-        const foldL = 1.15 + gL * 0.45 * (1.0 + 0.3 * cx);
-        const foldR = 1.15 + gR * 0.45 * (1.0 + 0.3 * cx);
+        // 前腕(肘): 深く折って手を頬の横へ(きゅるん)。左右交互にゆっくり押して躍動感。
+        const foldL = (1.46 + br * 0.06 + swA * 0.10) * (1.0 + 0.05 * cx);
+        const foldR = (1.46 + br * 0.06 + swB * 0.10) * (1.0 + 0.05 * cx);
         if (lLA) lLA.rotation.set(0, 0, -foldL);
         if (rLA) rLA.rotation.set(0, 0,  foldR);
+        // 小首かしげ(可愛さUP)。グルーヴが設定した頭の傾きに加算
+        const headB = get('head');
+        if (headB) headB.rotation.z += 0.17 * Math.sin(t * 0.45) + 0.04 * Math.sin(t * 1.3);
 
         // 小節頭アクセントの減衰
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
