@@ -107,46 +107,30 @@ const ARM_GESTURES = {
 // 注: 上腕 z は「左=正で下ろし／右=負で下ろし」。左は z を下げ、右は z を上げると腕が高く挙がる。
 // 肘(LowerArm)の z は左=負・右=正で内側に折れる。ちび体型でも読めるよう大きめ＆左右非対称に。
 const SHUTTER_CUTE_POSES = [
-    // 右手を顔の横へ上げてピース（Vサイン）、左手は下ろす。頭をピース側へ傾ける
-    // ※ 専用エージェントがねんどろポージング参考に実機反復調整（手が顔の横に来る定番ピース）
-    { id: 'peace', label: 'ピース', emoji: '✌️', pose: {
-        leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0, z: 0 },
-        rightUpperArm: { x: 0.3, y: 0, z: -2.95 }, rightLowerArm: { x: -0.15, y: 0, z: 0.5 },
-        head: { x: 0.05, y: 0.04, z: 0.27 }, neck: { x: 0, y: 0, z: 0.13 }
-    } },
-    // 胸の前で両手を合わせて小さくハート、頭を下げて手元を見る
-    // ※ モデル制約: 腕は頭上まで上がらず、ツインテールで手元が隠れやすい。胸前ハートが最良形。
-    { id: 'heart', label: 'ハート', emoji: '💗', pose: {
-        leftUpperArm: { x: 1.05, y: 0, z: 0.35 }, rightUpperArm: { x: 1.05, y: 0, z: -0.35 },
-        leftLowerArm: { x: 0, y: 0, z: -1.55 }, rightLowerArm: { x: 0, y: 0, z: 1.55 },
-        head: { x: 0.26, y: 0, z: 0 }, spine: { x: 0.06, y: 0, z: 0 }
-    } },
-    // 両手を顎〜頬の高さに添えてきゅるん（顔を包む）
-    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: {
-        leftUpperArm: { x: 0.3, y: 0, z: 0.42 }, rightUpperArm: { x: 0.3, y: 0, z: -0.42 },
-        leftLowerArm: { x: 0, y: 0.14, z: -2.1 }, rightLowerArm: { x: 0, y: -0.14, z: 2.1 },
-        head: { x: 0.08, y: 0.02, z: 0.22 }, neck: { x: 0.04, y: 0, z: 0.07 }, spine: { x: 0.01, y: 0, z: 0.04 }
-    } },
-    // 両肘を鋭く横へ張って手を腰に当てる凛とした決めポーズ（アキンボ・胸張り）
-    { id: 'sumashi', label: 'おすまし', emoji: '😌', pose: {
-        leftUpperArm: { x: 0.05, y: 0, z: 1.2 }, rightUpperArm: { x: 0.05, y: 0, z: -1.2 },
-        leftLowerArm: { x: 0.4, y: 1.58, z: -0.72 }, rightLowerArm: { x: 0.4, y: -1.58, z: 0.72 },
-        head: { x: 0.05, y: -0.04, z: 0.1 }, neck: { x: 0.04, y: 0, z: 0 }, chest: { x: -0.05, y: 0, z: 0 }, spine: { x: -0.09, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 }
-    } },
-    // 右腕を肘を伸ばしたまま斜め上・外へ一直線に差し出す指さし、左手は腰。顔と視線を指先へ
-    { id: 'point', label: 'ゆびさし', emoji: '☝️', pose: {
-        leftUpperArm: { x: 0, y: 0, z: 1.0 }, leftLowerArm: { x: 0, y: 0.55, z: -0.7 },
-        rightUpperArm: { x: -0.4, y: -0.05, z: 1.72 }, rightLowerArm: { x: 0, y: 0, z: 0.0 },
-        head: { x: -0.13, y: 0.3, z: 0.17 }, neck: { x: -0.06, y: 0.15, z: 0.09 }, spine: { x: -0.02, y: 0.06, z: 0 }
-    } },
-    // 右手を斜め上へ挙げ、肘を軽く曲げ前腕を外へ開き手のひらを正面に見せる「手を振る挨拶」。
-    // 左手は下ろし頭を逆へ傾けて親しげに。point(肘伸ばし＋顔を指先へ)と区別。
-    // ※ 重要: 各ボーンは x/y/z を必ず全部指定（欠けると補間で NaN になりボーンが壊れる）
-    { id: 'wave', label: 'てふり', emoji: '👋', pose: {
-        leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0.26, z: 0 },
-        rightUpperArm: { x: -0.5, y: -0.12, z: 1.55 }, rightLowerArm: { x: 0, y: -0.28, z: 0.72 }, rightHand: { x: 0, y: 0, z: -0.1 },
-        head: { x: 0.02, y: 0.07, z: -0.27 }, neck: { x: 0.04, y: 0.04, z: -0.16 }, chest: { x: 0, y: 0, z: 0.05 }, spine: { x: 0, y: 0.02, z: 0.04 }
-    } },
+    // 両手ハート
+    { id: 'heart', label: 'ハート', emoji: '💞', pose: { leftUpperArm: { x: 0.55, y: 0.12, z: 0.2 }, rightUpperArm: { x: 0.55, y: -0.12, z: -0.2 }, leftLowerArm: { x: 0, y: 0, z: -2 }, rightLowerArm: { x: 0, y: 0, z: 2 }, head: { x: 0.1, y: 0, z: 0.1 }, neck: { x: 0.06, y: 0, z: 0 }, spine: { x: 0.08, y: 0, z: 0 } } },
+    // きゅるん
+    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: { leftUpperArm: { x: 0.5, y: 0, z: 0.36 }, rightUpperArm: { x: 0.5, y: 0, z: -0.36 }, leftLowerArm: { x: 0, y: 0.12, z: -2.28 }, rightLowerArm: { x: 0, y: -0.12, z: 2.28 }, head: { x: 0.06, y: 0.03, z: 0.26 }, neck: { x: 0.03, y: 0, z: 0.12 }, spine: { x: 0.02, y: 0, z: 0.04 } } },
+    // お祈り
+    { id: 'pray', label: 'お祈り', emoji: '🙏', pose: { leftUpperArm: { x: 0.42, y: 0, z: 0.18 }, rightUpperArm: { x: 0.42, y: 0, z: -0.18 }, leftLowerArm: { x: 0, y: 0.55, z: -1.95 }, rightLowerArm: { x: 0, y: -0.55, z: 1.95 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.16, y: 0, z: 0.14 }, neck: { x: 0.08, y: 0, z: 0.06 }, chest: { x: 0.05, y: 0, z: 0 }, spine: { x: 0.08, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 } } },
+    // かんがえ中
+    { id: 'thinking', label: 'かんがえ', emoji: '🤔', pose: { leftUpperArm: { x: 0.5, y: 0, z: 0.62 }, rightUpperArm: { x: 0.45, y: 0, z: -0.42 }, leftLowerArm: { x: 0, y: 0.2, z: -1.95 }, rightLowerArm: { x: -0.1, y: 0, z: 2.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.1 }, head: { x: -0.08, y: 0.16, z: 0.3 }, neck: { x: -0.04, y: 0.08, z: 0.14 }, chest: { x: 0, y: 0.06, z: 0.05 }, spine: { x: 0.02, y: 0.04, z: 0.04 }, hips: { x: 0, y: 0, z: 0 } } },
+    // おすまし
+    { id: 'sumashi', label: 'おすまし', emoji: '😤', pose: { leftUpperArm: { x: 0.08, y: 0, z: 1.28 }, rightUpperArm: { x: 0.08, y: 0, z: -1.28 }, leftLowerArm: { x: 0.45, y: 1.62, z: -0.8 }, rightLowerArm: { x: 0.45, y: -1.62, z: 0.8 }, head: { x: -0.1, y: -0.03, z: 0.08 }, neck: { x: -0.05, y: 0, z: 0 }, chest: { x: -0.07, y: 0, z: 0 }, spine: { x: -0.09, y: 0, z: 0 } } },
+    // ダブルピース
+    { id: 'peace', label: 'ピース', emoji: '✌️', pose: { leftUpperArm: { x: 0.35, y: 0, z: 1.5 }, rightUpperArm: { x: 0.35, y: 0, z: -1.5 }, leftLowerArm: { x: 0, y: 0.1, z: -2.15 }, rightLowerArm: { x: 0, y: -0.1, z: 2.15 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.04, y: 0.03, z: 0.22 }, neck: { x: 0.03, y: 0, z: 0.1 }, chest: { x: 0.02, y: 0, z: 0 }, spine: { x: 0.03, y: 0, z: 0.03 }, hips: { x: 0, y: 0, z: 0 } } },
+    // バンザイ
+    { id: 'banzai', label: 'バンザイ', emoji: '🙌', pose: { leftUpperArm: { x: 0.1, y: 0, z: 2.15 }, rightUpperArm: { x: 0.1, y: 0, z: -2.15 }, leftLowerArm: { x: 0, y: -0.15, z: -0.25 }, rightLowerArm: { x: 0, y: 0.15, z: 0.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: -0.16, y: 0, z: 0 }, neck: { x: -0.08, y: 0, z: 0 }, chest: { x: -0.07, y: 0, z: 0 }, spine: { x: -0.06, y: 0, z: 0 }, hips: { x: 0.02, y: 0, z: 0 } } },
+    // ガッツ
+    { id: 'guts', label: 'ガッツ', emoji: '✊', pose: { leftUpperArm: { x: 0.05, y: 0, z: 0.52 }, rightUpperArm: { x: 0.22, y: 0, z: -2.18 }, leftLowerArm: { x: 0.35, y: 1.55, z: -0.78 }, rightLowerArm: { x: 0, y: 0, z: 0.5 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: -0.12, y: -0.18, z: -0.18 }, neck: { x: -0.06, y: -0.08, z: -0.1 }, chest: { x: -0.04, y: -0.06, z: -0.06 }, spine: { x: -0.05, y: -0.05, z: -0.05 }, hips: { x: 0, y: 0, z: 0.02 } } },
+    // ゆびさし
+    { id: 'point', label: 'ゆびさし', emoji: '☝️', pose: { leftUpperArm: { x: 0.05, y: 0, z: 0.55 }, rightUpperArm: { x: -0.15, y: -0.1, z: -1.98 }, leftLowerArm: { x: 0, y: -1.5, z: -0.55 }, rightLowerArm: { x: 0, y: 0, z: 0.05 }, head: { x: -0.12, y: 0.3, z: 0.18 }, neck: { x: 0.05, y: 0.08, z: 0.06 }, spine: { x: 0, y: 0.04, z: -0.06 } } },
+    // てふり
+    { id: 'wave', label: 'てふり', emoji: '👋', pose: { leftUpperArm: { x: 0, y: 0, z: 0.45 }, rightUpperArm: { x: -0.3, y: -0.12, z: -1.62 }, leftLowerArm: { x: 0, y: 0.2, z: -0.5 }, rightLowerArm: { x: 0, y: -0.2, z: 0.7 }, head: { x: 0.02, y: 0.06, z: -0.24 }, neck: { x: 0.04, y: 0.03, z: -0.14 }, chest: { x: 0, y: 0, z: 0.05 } } },
+    // 投げキッス
+    { id: 'kiss', label: 'キッス', emoji: '😘', pose: { leftUpperArm: { x: -0.35, y: 0, z: 1.62 }, rightUpperArm: { x: 0.42, y: 0, z: -0.5 }, leftLowerArm: { x: 0, y: 0, z: -0.18 }, rightLowerArm: { x: -0.1, y: 0, z: 2.18 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.2 }, head: { x: -0.1, y: -0.08, z: 0.28 }, neck: { x: -0.05, y: -0.04, z: 0.14 }, chest: { x: 0, y: 0, z: -0.05 }, spine: { x: 0, y: 0.03, z: -0.06 }, hips: { x: 0, y: 0, z: 0 } } },
+    // 腰ピース
+    { id: 'hippeace', label: '腰ピース', emoji: '✌️', pose: { leftUpperArm: { x: 0.05, y: 0, z: 0.55 }, rightUpperArm: { x: 0.35, y: 0, z: -0.45 }, leftLowerArm: { x: 0, y: 1.5, z: -0.5 }, rightLowerArm: { x: 0, y: 0, z: 1.3 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.05, y: 0.25, z: 0.22 }, neck: { x: 0, y: 0.1, z: 0.05 }, chest: { x: 0, y: 0.1, z: 0 }, spine: { x: 0, y: 0.08, z: 0 }, hips: { x: 0, y: -0.05, z: 0 } } },
 ];
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
@@ -1754,13 +1738,19 @@ export class SongShutter extends BaseSong {
                 pointer-events: auto; padding: 6px 10px;
                 background: rgba(8, 4, 3, 0.55); border: 1px solid rgba(185, 84, 60, 0.45);
                 border-radius: 12px; backdrop-filter: blur(2px);
+                max-width: 94%; overflow-x: auto; overflow-y: hidden;
+                -webkit-overflow-scrolling: touch; scrollbar-width: none;
             }
+            #shutter-pose-bar::-webkit-scrollbar { display: none; height: 0; }
             #shutter-pose-bar .pose-bar-label {
                 font-family: monospace; font-size: 10px; letter-spacing: 2px; font-weight: bold;
                 color: rgba(255, 210, 180, 0.8); margin-right: 2px; user-select: none;
+                flex: 0 0 auto; position: sticky; left: 0;
+                background: rgba(8, 4, 3, 0.85); padding-right: 4px;
             }
             .shutter-pose-btn {
                 display: flex; flex-direction: column; align-items: center; gap: 1px;
+                flex: 0 0 auto;
                 min-width: 50px; padding: 5px 7px; cursor: pointer;
                 background: rgba(0, 0, 0, 0.4); color: #fff;
                 border: 1px solid rgba(216, 90, 48, 0.55); border-radius: 8px;
