@@ -89,6 +89,17 @@ export class SongTakeover extends BaseSong {
         // 空のまま固定され、歌詞が一切出ないことがあった（ステージ選択へ戻って
         // 入り直すと表示される、という症状の原因）。
         super.init();
+
+        // 初回誘導: 最初に出現した暗号ブロック(scrambled状態)の実位置にガイドを重ねる
+        // (共通機構)。初回の復号成功で _revealTarget() 側が dismiss する。
+        this.highlightFirstInteractable(() => {
+            if (this.takenCount > 0) return null;
+            const target = this.phraseTargets.find(t => t && t.state === 'scrambled' && t.el);
+            if (!target) return null;
+            const r = target.el.getBoundingClientRect();
+            if (!r.width && !r.height) return null;
+            return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }, { label: 'タップして復号' });
     }
 
     initThree() {
@@ -879,6 +890,7 @@ export class SongTakeover extends BaseSong {
     _revealTarget(target, plaintext) {
         if (target.state !== 'decrypting') return; // expired between click and decrypt resolve
         target.state = 'decoded';
+        this.dismissFirstInteractable(); // 初回復号成功で誘導ガイドを片付ける
 
         // Remove decryption hint from target element if it exists
         const hint = target.el.querySelector('.to-hint');

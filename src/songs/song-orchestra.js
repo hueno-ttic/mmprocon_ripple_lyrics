@@ -166,6 +166,15 @@ export class SongOrchestra extends BaseSong {
         );
 
         super.init();
+
+        // 初回誘導: 最初にアクティブ化した歌詞スプライト(星座ノードは除く)の実位置に
+        // ガイドを重ねる(共通機構)。初回の色共鳴で resonateLyricColor() 側が dismiss する。
+        this.highlightFirstInteractable(() => {
+            if (this.hasResonatedColor) return null;
+            const target = this.activeSprites.find(s => s && !s.userData.isNode);
+            if (!target) return null;
+            return this.worldToScreen(target.position.clone());
+        }, { label: '歌詞をタップ' });
     }
 
     initThree() {
@@ -1017,6 +1026,7 @@ export class SongOrchestra extends BaseSong {
         this.currentColor = nextColorHex;
         localStorage.setItem('orchestra_color', this.currentColor);
         this.hasResonatedColor = true; // カラー変更体験済みフラグ
+        this.dismissFirstInteractable(); // 初回の色共鳴で誘導ガイドを片付ける
 
         const newColor = new THREE.Color(this.currentColor);
 
