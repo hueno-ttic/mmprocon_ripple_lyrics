@@ -41,5 +41,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        // dev用ポーズエディタも本番ビルドに含める（GitHub Pagesで /pose-editor.html を配信）
+        poseEditor: 'pose-editor.html',
+      },
+    },
   }
 });
