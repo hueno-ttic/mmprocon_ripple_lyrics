@@ -9,9 +9,13 @@ import { stageRoot } from '../core/stage.js';
  * タイトル画面の右下ボタンからのみ開かれる。
  */
 
-// 開発メンバーは後から追記する。空配列のままだと "（準備中）" と表示される。
-// 例: const DEV_MEMBERS = [{ role: '企画・実装', name: '山田太郎' }];
-const DEV_MEMBERS = [];
+// 開発チーム名とメンバー。DEV_MEMBERS が空配列だと "（準備中）" と表示される。
+const DEV_TEAM = 'すぱりだ〜ず';
+const DEV_MEMBERS = [
+    { name: 'すぱりだ' },
+    { name: 'summerive' },
+    { name: 'HiroyukiIsoe' },
+];
 
 export class Credits {
     constructor() {
@@ -38,10 +42,9 @@ export class Credits {
         `).join('');
 
         const devRows = DEV_MEMBERS.length
-            ? DEV_MEMBERS.map((m) => `
-                <div class="credits-dev-row">
-                    <span class="credits-label">${m.role}</span>${m.name}
-                </div>`).join('')
+            ? `<div class="credits-dev-team">${DEV_TEAM}</div>` +
+              DEV_MEMBERS.map((m) => `
+                <div class="credits-dev-row">${m.role ? `<span class="credits-label">${m.role}</span>` : ''}${m.name}</div>`).join('')
             : `<div class="credits-dev-placeholder">（開発メンバーは後日掲載）</div>`;
 
         this.el.innerHTML = `
@@ -170,7 +173,11 @@ export class Credits {
                 font-size: 10.5px; color: rgba(255,255,255,0.4);
             }
             .credits-dot { margin: 0 8px; color: rgba(255,255,255,0.3); }
-            .credits-dev-row { padding: 7px 0; font-size: 14px; }
+            .credits-dev-team {
+                font-size: 15px; font-weight: 600; letter-spacing: 0.06em;
+                color: rgba(160, 200, 255, 0.95); margin-bottom: 4px;
+            }
+            .credits-dev-row { padding: 5px 0 5px 12px; font-size: 14px; }
             .credits-dev-placeholder {
                 padding: 14px 0; font-size: 13px;
                 color: rgba(255,255,255,0.4); font-style: italic;
