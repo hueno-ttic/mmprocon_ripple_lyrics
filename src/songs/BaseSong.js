@@ -277,6 +277,200 @@ export class BaseSong {
         document.head.appendChild(style);
     }
 
+    /**
+     * 「最初のタップ対象」を実対象に重ねて強調する共通ガイド。
+     * チュートリアルを読み飛ばしたユーザーでも、画面のどこを・いつ触ればよいかを
+     * 実位置に重ねたパルスリング＋「タップ ✋」ラベルで教える狙い(全曲共通)。
+     *
+     * 各曲は「最初のタップ対象が画面に現れたら一度だけ呼ぶ」だけでよい。
+     * 初回操作が成功したら dismissFirstInteractable() を呼ぶ(または12秒で自動消滅)。
+     *
+     * @param {() => ({x:number, y:number}|null)} getScreenPos
+     *        毎フレーム呼ばれ、対象のCSSピクセル座標 {x, y} を返す関数。
+     *        null を返した間は一時的に非表示(対象が画面外/未出現のとき)。
+     * @param {object} [opts]
+     * @param {string} [opts.label='タップ'] ラベル文言。
+     * @param {number} [opts.autoDismissMs=12000] 一度も触られなくても自動で消す猶予(ms)。
+     */
+    highlightFirstInteractable(getScreenPos, opts = {}) {
+        if (typeof getScreenPos !== 'function') return;
+        // 二重起動防止(既に出ていれば何もしない)
+        if (this._firstGuideEl) return;
+
+        const { label = 'タップ', autoDismissMs = 12000 } = opts;
+        const songConfig = SONGS.find(s => s.id === this.songId);
+        const color = (songConfig && songConfig.color) || '#7F77DD';
+
+        this._ensureFirstGuideStyles();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'song-first-guide';
+        overlay.style.setProperty('--start-hint-color', color);
+        overlay.innerHTML = `
+            <span class="song-first-guide-ring" aria-hidden="true"></span>
+            <span class="song-first-guide-label">
+                <span class="song-first-guide-hand" aria-hidden="true">✋</span>${label}
+            </span>
+        `;
+        this.songWrapper.appendChild(overlay);
+        this._firstGuideEl = overlay;
+
+        // フェードイン(start-hint と同じ二段 rAF)
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                if (this._firstGuideEl === overlay) overlay.classList.add('visible');
+            });
+        });
+
+        // 対象位置に毎フレーム追従する
+        const follow = () => {
+            if (this._firstGuideEl !== overlay) return; // 既に片付け済み
+            let pos = null;
+            try { pos = getScreenPos(); } catch (_) { pos = null; }
+            if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.y)) {
+                overlay.style.transform = `translate(${pos.x}px, ${pos.y}px) translate(-50%, -50%)`;
+                overlay.classList.remove('hidden');
+                // 自動消滅タイマーは「実際に対象へ重なって見え始めてから」起動する。
+                // 歌詞スプライトの初出が遅い曲でも、出る前に消えてしまわないようにする狙い。
+                if (!this._firstGuideTimeout) {
+                    this._firstGuideTimeout = setTimeout(
+                        () => this.dismissFirstInteractable(), autoDismissMs);
+                }
+            } else {
+                // 対象が未出現/画面外のときは一旦隠す(消滅はしない)
+                overlay.classList.add('hidden');
+            }
+            this._firstGuideRaf = requestAnimationFrame(follow);
+        };
+        this._firstGuideRaf = requestAnimationFrame(follow);
+    }
+
+    /**
+     * highlightFirstInteractable のガイドをフェードアウトして除去する。
+     * 初回操作成功時に各曲から呼ぶ。多重呼び出し・破棄後でも安全。
+     */
+    dismissFirstInteractable() {
+        if (this._firstGuideRaf) {
+            cancelAnimationFrame(this._firstGuideRaf);
+            this._firstGuideRaf = null;
+        }
+        clearTimeout(this._firstGuideTimeout);
+        this._firstGuideTimeout = null;
+        clearTimeout(this._firstGuideRemoveTimer);
+
+        const overlay = this._firstGuideEl;
+        this._firstGuideEl = null;
+        if (!overlay) return;
+
+        overlay.classList.remove('visible');
+        overlay.classList.add('fade-out');
+        this._firstGuideRemoveTimer = setTimeout(() => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        }, 500);
+    }
+
+    /**
+     * Three.js のワールド座標を画面CSSピクセルへ射影する共通ヘルパー。
+     * highlightFirstInteractable の getScreenPos から使う想定。
+     * カメラ背面(z>1)に回り込んだら null を返してガイドを隠す。
+     * @param {THREE.Vector3} worldPos クローン前提(内部で project が破壊するため呼び出し側で clone 推奨)
+     * @returns {{x:number, y:number}|null}
+     */
+    worldToScreen(worldPos) {
+        if (!this.camera || !worldPos) return null;
+        const ndc = worldPos.project(this.camera);
+        if (ndc.z > 1) return null; // カメラ背面
+        return {
+            x: (ndc.x * 0.5 + 0.5) * window.innerWidth,
+            y: (-ndc.y * 0.5 + 0.5) * window.innerHeight,
+        };
+    }
+
+    /**
+     * 初回誘導ガイド用のスタイルを1度だけ注入する(CSS-in-JS)。
+     * start-hint と同じ色変数(--start-hint-color)・z-index・reduce-motion 配慮を踏襲し、
+     * 全曲で見た目を統一する。位置は transform で対象に追従させるため top/left は持たない。
+     */
+    _ensureFirstGuideStyles() {
+        if (document.getElementById('song-first-guide-styles')) return;
+        const style = document.createElement('style');
+        style.id = 'song-first-guide-styles';
+        style.textContent = `
+            .song-first-guide {
+                position: absolute;
+                top: 0;
+                left: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 8px;
+                pointer-events: none;
+                opacity: 0;
+                z-index: 1000;
+                transition: opacity 0.5s ease;
+                will-change: transform, opacity;
+            }
+            .song-first-guide.visible { opacity: 1; }
+            .song-first-guide.hidden { opacity: 0; }
+            .song-first-guide.fade-out { opacity: 0; }
+            .song-first-guide-ring {
+                width: 64px;
+                height: 64px;
+                border-radius: 50%;
+                border: 2px solid var(--start-hint-color, #7F77DD);
+                box-shadow: 0 0 14px color-mix(in srgb, var(--start-hint-color, #7F77DD) 60%, transparent),
+                            inset 0 0 10px color-mix(in srgb, var(--start-hint-color, #7F77DD) 40%, transparent);
+                animation: songFirstGuidePulse 1.6s infinite ease-out;
+            }
+            .song-first-guide-label {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                padding: 5px 14px;
+                border-radius: 999px;
+                border: 1px solid color-mix(in srgb, var(--start-hint-color, #7F77DD) 55%, rgba(255,255,255,0.25));
+                background: rgba(8, 10, 18, 0.55);
+                backdrop-filter: blur(12px) saturate(150%);
+                -webkit-backdrop-filter: blur(12px) saturate(150%);
+                color: #ffffff;
+                font-family: 'Inter', 'Noto Sans JP', sans-serif;
+                font-size: 13px;
+                font-weight: 600;
+                letter-spacing: 0.4px;
+                white-space: nowrap;
+                text-shadow: 0 2px 6px rgba(0,0,0,0.55);
+                box-shadow: 0 6px 22px rgba(0,0,0,0.4),
+                            0 0 14px color-mix(in srgb, var(--start-hint-color, #7F77DD) 40%, transparent);
+            }
+            .song-first-guide-hand {
+                font-size: 14px;
+                animation: songFirstGuideTap 1.6s infinite ease-in-out;
+            }
+            @keyframes songFirstGuidePulse {
+                0%   { transform: scale(0.85); opacity: 0.9; }
+                70%  { transform: scale(1.25); opacity: 0; }
+                100% { transform: scale(1.25); opacity: 0; }
+            }
+            @keyframes songFirstGuideTap {
+                0%, 100% { transform: translateY(0); }
+                50%      { transform: translateY(3px); }
+            }
+            @media (max-width: 600px) {
+                .song-first-guide-ring { width: 54px; height: 54px; }
+                .song-first-guide-label { font-size: 12px; padding: 4px 12px; }
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .song-first-guide,
+                .song-first-guide-ring,
+                .song-first-guide-hand {
+                    transition-duration: 0.2s;
+                    animation: none;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
     showTutorial(songConfig) {
         const { tutorial, themeQuestion = '', color = '#7F77DD', bareQuestion = false } = songConfig;
 
@@ -515,7 +709,15 @@ export class BaseSong {
             this._startHintEl.parentNode.removeChild(this._startHintEl);
         }
         this._startHintEl = null;
-        
+
+        // 初回誘導ガイドの rAF/タイマー/要素を後始末(曲切替時のリーク防止)
+        this.dismissFirstInteractable();
+        clearTimeout(this._firstGuideRemoveTimer);
+        if (this._firstGuideEl && this._firstGuideEl.parentNode) {
+            this._firstGuideEl.parentNode.removeChild(this._firstGuideEl);
+        }
+        this._firstGuideEl = null;
+
         if (this.lyricRenderer) {
             this.lyricRenderer.destroy();
         }
