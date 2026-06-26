@@ -96,7 +96,7 @@ export class BaseSong {
                 }
             }
         } catch (err) {
-            console.warn('[Ripple Lyric] Web Audio unlock failed safely: ', err);
+            console.warn('[Ripple Lyrics] Web Audio unlock failed safely: ', err);
         }
         playerManager.seek(0);
         playerManager.fadeIn(1200); // 曲の頭出しをなめらかに

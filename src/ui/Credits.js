@@ -47,8 +47,8 @@ export class Credits {
         this.el.innerHTML = `
             <div class="credits-panel" role="dialog" aria-label="クレジット">
                 <button class="credits-close" aria-label="閉じる">×</button>
-                <h2 class="credits-heading">Ripple Lyric</h2>
-                <p class="credits-subheading">Ripple Lyric - 水の循環 - — クレジット</p>
+                <h2 class="credits-heading">Ripple Lyrics</h2>
+                <p class="credits-subheading">Ripple Lyrics - 水の循環 - — クレジット</p>
 
                 <section class="credits-section">
                     <h3 class="credits-section-title">楽曲</h3>

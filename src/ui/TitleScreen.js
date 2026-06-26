@@ -71,7 +71,7 @@ export class TitleScreen {
         this.title = document.createElement('h1');
         // 揺らぎは内側のspanに分離(フェードインのtransformと競合させない)
         this.titleInner = document.createElement('span');
-        this.titleInner.innerText = 'Ripple Lyric';
+        this.titleInner.innerText = 'Ripple Lyrics';
         this.titleInner.style.display = 'inline-block';
         // idleは文字を静止させる(波打たせない)。揺らぎ・歪みはタップ時のみ与える。
         // ※ filter は実際には一度も適用しない。will-change:filter を残すと一部のGPU/ドライバで
@@ -90,7 +90,7 @@ export class TitleScreen {
         this.title.style.transition = 'all 3s cubic-bezier(0.2, 0.8, 0.2, 1)';
         this.container.appendChild(this.title);
 
-        // サブタイトル「水の循環」。フルタイトルは "Ripple Lyric - 水の循環 -"。
+        // サブタイトル「水の循環」。フルタイトルは "Ripple Lyrics - 水の循環 -"。
         this.tagline = document.createElement('div');
         this.tagline.innerText = '- 水の循環 -';
         this.tagline.style.marginTop = '18px';
