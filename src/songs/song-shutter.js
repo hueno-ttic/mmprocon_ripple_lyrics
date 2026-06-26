@@ -736,8 +736,8 @@ export class SongShutter extends BaseSong {
     getMMDBone(subject, vrmBoneName) {
         const mesh = subject.mesh;
         if (!mesh) return null;
-        const mmdBoneName = VRM_TO_MMD_BONES[vrmBoneName];
-        if (!mmdBoneName) return null;
+        // VRM名→MMD名。未登録の名前は生のMMDボーン名(髪/ツインテール等)として直接解決。
+        const mmdBoneName = VRM_TO_MMD_BONES[vrmBoneName] || vrmBoneName;
         return mesh.getObjectByName(mmdBoneName);
     }
 

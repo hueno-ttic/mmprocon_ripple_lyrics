@@ -90,6 +90,14 @@ const EDIT_BONES = [
   ['左足','左足(腿)'], ['左ひざ','左ひざ'], ['左足首','左足首'],
   ['右足','右足(腿)'], ['右ひざ','右ひざ'], ['右足首','右足首'],
 ];
+// 髪（ツインテール）。根元(1)を回すと房全体が動く。前髪も。
+const HAIR_BONES = [
+  ['右髪１','右ツインテ 根元'], ['右髪２','右ツインテ ②'], ['右髪３','右ツインテ ③'], ['右髪４','右ツインテ ④'], ['右髪５','右ツインテ ⑤'], ['右髪６','右ツインテ 先'],
+  ['左髪１','左ツインテ 根元'], ['左髪２','左ツインテ ②'], ['左髪３','左ツインテ ③'], ['左髪４','左ツインテ ④'], ['左髪５','左ツインテ ⑤'], ['左髪６','左ツインテ 先'],
+  ['前髪１','前髪 中'], ['前髪２','前髪 右'], ['前髪３','前髪 左'],
+];
+// 表情モーフ（0=なし 1=最大）。ウィンク系を先頭に。
+const EXPR_MORPHS = ['ウィンク','ウィンク右','ウィンク２','ｳｨﾝｸ２右','まばたき','笑い','なごみ','びっくり','困る','照れ','怒り','涙','じゅるり','はぅ','あ','い','う','お','ワ','ω'];
 
 const wrap = document.getElementById('canvasWrap');
 const statusEl = document.getElementById('status');
@@ -109,7 +117,7 @@ const dl = new THREE.DirectionalLight(0xffffff, 1.4); dl.position.set(4,12,8); s
 const dl2 = new THREE.DirectionalLight(0x88aaff, 0.5); dl2.position.set(-6,4,-6); scene.add(dl2);
 scene.add(new THREE.GridHelper(20, 20, 0x333344, 0x222230));
 
-let mesh=null, bonesByName={}, dirty={};
+let mesh=null, bonesByName={}, dirty={}, morphMeshes=[], morphState={};
 
 function convertMat(m){
   const nm = new THREE.MeshPhongMaterial({
@@ -135,33 +143,57 @@ function loadModel(path){
     const box2=new THREE.Box3().setFromObject(m); m.position.y -= box2.min.y;
     m.rotation.y = 0;
     scene.add(m); mesh=m;
-    bonesByName={}; dirty={};
-    m.traverse(o=>{ if(o.isBone) bonesByName[o.name]=o; });
+    bonesByName={}; dirty={}; morphMeshes=[]; morphState={};
+    m.traverse(o=>{ if(o.isBone) bonesByName[o.name]=o; if(o.morphTargetDictionary&&o.morphTargetInfluences) morphMeshes.push(o); });
     if(m.skeleton) m.skeleton.bones.forEach(b=>bonesByName[b.name]=b);
+    window.__ed = { bonesByName, morphMeshes, exportPose };
     buildPanel();
-    statusEl.textContent = 'ボーン数: '+Object.keys(bonesByName).length+' / モデル: '+path.split('/')[0];
+    statusEl.textContent = 'ボーン数: '+Object.keys(bonesByName).length+' / 表情: '+(morphMeshes[0]?Object.keys(morphMeshes[0].morphTargetDictionary).length:0)+' / '+path.split('/')[0];
   }, undefined, (e)=>{ statusEl.textContent='読み込み失敗: '+e; console.error(e); });
+}
+
+function applyMorph(name, w){
+  morphState[name]=w;
+  morphMeshes.forEach(mm=>{ const i=mm.morphTargetDictionary[name]; if(i!==undefined) mm.morphTargetInfluences[i]=w; });
+}
+
+function boneDetail(name,label){
+  const bone = bonesByName[name]; if(!bone) return null;
+  const det=document.createElement('details'); det.className='bone'; det.dataset.bone=name;
+  const sum=document.createElement('summary'); sum.innerHTML='<span>'+label+'</span><span style="color:#667">'+name+'</span>'; det.appendChild(sum);
+  ['x','y','z'].forEach(axis=>{
+    const ax=document.createElement('div'); ax.className='axis';
+    const k=document.createElement('span'); k.className='k'; k.textContent=axis.toUpperCase();
+    const range=document.createElement('input'); range.type='range'; range.min=-3.15; range.max=3.15; range.step=0.01; range.value=bone.rotation[axis];
+    const num=document.createElement('input'); num.type='number'; num.min=-3.15; num.max=3.15; num.step=0.01; num.value=(+bone.rotation[axis].toFixed(2));
+    const set=(v)=>{ v=Math.max(-3.15,Math.min(3.15,+v||0)); bone.rotation[axis]=v; range.value=v; num.value=(+v.toFixed(2)); dirty[name]=true; det.dataset.dirty='1'; };
+    range.addEventListener('input',()=>set(range.value));
+    num.addEventListener('input',()=>set(num.value));
+    ax.append(k,range,num); det.appendChild(ax);
+    det._sync = det._sync||[]; det._sync.push(()=>{ range.value=bone.rotation[axis]; num.value=(+bone.rotation[axis].toFixed(2)); });
+  });
+  return det;
 }
 
 function buildPanel(){
   const cont = document.getElementById('bones'); cont.innerHTML='';
-  EDIT_BONES.forEach(([name,label])=>{
-    const bone = bonesByName[name];
-    if(!bone) return;
-    const det=document.createElement('details'); det.className='bone'; det.dataset.bone=name;
-    const sum=document.createElement('summary'); sum.innerHTML='<span>'+label+'</span><span style="color:#667">'+name+'</span>'; det.appendChild(sum);
-    ['x','y','z'].forEach(axis=>{
-      const ax=document.createElement('div'); ax.className='axis';
-      const k=document.createElement('span'); k.className='k'; k.textContent=axis.toUpperCase();
-      const range=document.createElement('input'); range.type='range'; range.min=-3.15; range.max=3.15; range.step=0.01; range.value=bone.rotation[axis];
-      const num=document.createElement('input'); num.type='number'; num.min=-3.15; num.max=3.15; num.step=0.01; num.value=(+bone.rotation[axis].toFixed(2));
-      const set=(v)=>{ v=Math.max(-3.15,Math.min(3.15,+v||0)); bone.rotation[axis]=v; range.value=v; num.value=(+v.toFixed(2)); dirty[name]=true; det.dataset.dirty='1'; };
-      range.addEventListener('input',()=>set(range.value));
-      num.addEventListener('input',()=>set(num.value));
-      ax.append(k,range,num); det.appendChild(ax);
-      det._sync = det._sync||[]; det._sync.push(()=>{ range.value=bone.rotation[axis]; num.value=(+bone.rotation[axis].toFixed(2)); });
-    });
-    cont.appendChild(det);
+  const grp=(title)=>{ const h=document.createElement('div'); h.textContent=title; h.style.cssText='font-size:12px;color:#9ad;margin:10px 0 4px;font-weight:700;border-bottom:1px solid #33333e;padding-bottom:3px'; cont.appendChild(h); };
+  grp('▼ 本体');
+  EDIT_BONES.forEach(([name,label])=>{ const d=boneDetail(name,label); if(d){ d._sync=d._sync||[]; cont.appendChild(d);} });
+  grp('▼ 髪・ツインテール');
+  HAIR_BONES.forEach(([name,label])=>{ const d=boneDetail(name,label); if(d) cont.appendChild(d); });
+  // 表情モーフ
+  grp('▼ 表情（目つむり/ウィンク等）');
+  EXPR_MORPHS.forEach(name=>{
+    if(!morphMeshes.some(mm=>mm.morphTargetDictionary[name]!==undefined)) return;
+    const ax=document.createElement('div'); ax.className='axis'; ax.style.padding='4px 8px';
+    const lab=document.createElement('span'); lab.textContent=name; lab.style.cssText='width:78px;font-size:12px';
+    const range=document.createElement('input'); range.type='range'; range.min=0; range.max=1; range.step=0.05; range.value=0;
+    const num=document.createElement('input'); num.type='number'; num.min=0; num.max=1; num.step=0.05; num.value=0;
+    const set=v=>{ v=Math.max(0,Math.min(1,+v||0)); applyMorph(name,v); range.value=v; num.value=(+v.toFixed(2)); };
+    range.addEventListener('input',()=>set(range.value));
+    num.addEventListener('input',()=>set(num.value));
+    ax.append(lab,range,num); cont.appendChild(ax);
   });
 }
 
@@ -179,10 +211,15 @@ function applyVPD(vpd){
   statusEl.textContent='VPD適用: '+vpd.bones.length+'ボーン';
 }
 
-function resetPose(){ Object.values(bonesByName).forEach(b=>b.rotation.set(0,0,0)); dirty={}; document.querySelectorAll('.bone').forEach(d=>d.dataset.dirty='0'); syncPanel(); }
+function resetPose(){
+  Object.values(bonesByName).forEach(b=>b.rotation.set(0,0,0)); dirty={};
+  EXPR_MORPHS.forEach(n=>applyMorph(n,0)); morphState={};
+  buildPanel(); syncPanel();
+}
 
 function exportPose(){
   const pose={};
+  // 本体: VRM名で出力（上腕zは±0.5逆補正）
   EDIT_BONES.forEach(([name])=>{
     if(!dirty[name]) return;
     const bone=bonesByName[name]; if(!bone) return;
@@ -191,6 +228,16 @@ function exportPose(){
     if(Z_CORR[name]!==undefined) z = z - Z_CORR[name]; // 逆補正: 実回転 = pose.z + Z_CORR → pose.z = 実回転 - Z_CORR
     pose[vrm]={ x:+bone.rotation.x.toFixed(3), y:+bone.rotation.y.toFixed(3), z:+z.toFixed(3) };
   });
+  // 髪・ツインテール: 生のMMDボーン名で出力（ゲーム側 getMMDBone がMMD名を直接解決）
+  HAIR_BONES.forEach(([name])=>{
+    if(!dirty[name]) return;
+    const bone=bonesByName[name]; if(!bone) return;
+    pose[name]={ x:+bone.rotation.x.toFixed(3), y:+bone.rotation.y.toFixed(3), z:+bone.rotation.z.toFixed(3) };
+  });
+  // 表情: 0より大きいモーフを expr に。1つだけ≒1なら文字列、それ以外は{名:重み}
+  const active=Object.entries(morphState).filter(([,w])=>w>0.01);
+  if(active.length===1 && active[0][1]>0.95){ pose.expr=active[0][0]; }
+  else if(active.length){ pose.expr=Object.fromEntries(active.map(([n,w])=>[n,+w.toFixed(2)])); }
   const txt = JSON.stringify(pose, null, 2);
   document.getElementById('out').value = txt;
   return txt;
