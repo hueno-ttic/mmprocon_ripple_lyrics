@@ -1,4 +1,4 @@
-// Shared low-poly 3D toolkit for the 楽曲選択画面「湖のソナーレ」world.
+// Shared low-poly 3D toolkit for the 楽曲選択画面「Ripple Lyric」water-cycle world.
 //
 // Adapted from the design draft's scenelib.js (design_drafts/湖のソナーレ_extracted/).
 // Unlike the draft, these builders do NOT own a renderer/scene/camera/loop:

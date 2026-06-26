@@ -25,7 +25,7 @@ export class WorldUI {
         // Retina/高DPIでは塗りピクセルがdpr²倍になりfillrate律速になるため上限を抑える。
         this.renderer.setPixelRatio(quality.effectivePixelRatio());
         this.renderer.__qpr = quality.effectivePixelRatio();
-        // Cinematic grading to match the redesign (湖のソナーレ scene art direction)
+        // Cinematic grading to match the redesign (Ripple Lyric scene art direction)
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.12;
@@ -508,7 +508,7 @@ export class WorldUI {
             text-shadow: 0 0 6px rgba(0,0,0,0.85), 0 0 18px rgba(212,175,55,0.5);
             opacity: 0; transition: opacity 1.4s ease;
         `;
-        ending.textContent = 'ソナーレ完成 — すべての水をめぐった';
+        ending.textContent = '水の循環、完成 — すべての水をめぐった';
         this.container.appendChild(ending);
         // ふわっと浮かび上がらせる
         requestAnimationFrame(() => { ending.style.opacity = '1'; });

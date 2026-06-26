@@ -139,7 +139,7 @@ class PlayerManager {
             // 読込/再生中の致命的エラー。読込中(またはタイマー未準備)なら
             // エラー画面でリトライ/戻るを案内する(無言の停止を防ぐ)。
             onError: (e) => {
-                console.error('[Lake Sonare] TextAlive error:', e);
+                console.error('[Ripple Lyric] TextAlive error:', e);
                 if (appState.isLoading || !this.isTimerReady) {
                     if (this._loadTimeout) { clearTimeout(this._loadTimeout); this._loadTimeout = null; }
                     appState.setLoading(false);
@@ -164,7 +164,7 @@ class PlayerManager {
             this._loadTimeout = setTimeout(() => {
                 this._loadTimeout = null;
                 if (appState.isLoading && !this.isTimerReady) {
-                    console.warn('[Lake Sonare] TextAlive load timeout');
+                    console.warn('[Ripple Lyric] TextAlive load timeout');
                     appState.setLoading(false);
                     eventBus.emit('songLoadError', { song: this._currentSong, reason: 'timeout' });
                 }

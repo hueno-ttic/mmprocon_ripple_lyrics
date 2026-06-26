@@ -528,7 +528,7 @@ async function main() {
     const ending = await page.evaluate(() => {
       const t = document.body.innerText || '';
       return {
-        exists: /完成|ソナーレ|おめでとう|6つ|制覇|全曲|ending/i.test(t),
+        exists: /完成|循環|おめでとう|6つ|制覇|全曲|ending/i.test(t),
         hasShare: /share|シェア|twitter|x\.com/i.test(t),
       };
     }).catch(() => ({ exists: false, hasShare: false }));
@@ -1124,7 +1124,7 @@ cat "${EVAL_OUT:-eval_output/latest}/eval_report.json" | python3 -m json.tool 2>
 
   クリエイティビティ (35点満点中 XX点)
   ─ 歌詞と映像の一体感はあるか（スクリーンショットから判断）
-  ─ マジカルミライ2026テーマ「湖のソナーレ」との結びつきは？
+  ─ マジカルミライ2026テーマ「Lake Sonare」との結びつきは？
   ─ 他の参加作品と差別化できる独自表現があるか
 
   イノベーション (35点満点中 XX点)
