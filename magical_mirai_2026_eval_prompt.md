@@ -528,7 +528,7 @@ async function main() {
     const ending = await page.evaluate(() => {
       const t = document.body.innerText || '';
       return {
-        exists: /完成|ソナーレ|おめでとう|6つ|制覇|全曲|ending/i.test(t),
+        exists: /完成|循環|おめでとう|6つ|制覇|全曲|ending/i.test(t),
         hasShare: /share|シェア|twitter|x\.com/i.test(t),
       };
     }).catch(() => ({ exists: false, hasShare: false }));

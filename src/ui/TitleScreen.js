@@ -71,7 +71,7 @@ export class TitleScreen {
         this.title = document.createElement('h1');
         // 揺らぎは内側のspanに分離(フェードインのtransformと競合させない)
         this.titleInner = document.createElement('span');
-        this.titleInner.innerText = 'Lake Sonare';
+        this.titleInner.innerText = 'Ripple Lyric';
         this.titleInner.style.display = 'inline-block';
         // idleは文字を静止させる(波打たせない)。揺らぎ・歪みはタップ時のみ与える。
         // ※ filter は実際には一度も適用しない。will-change:filter を残すと一部のGPU/ドライバで
@@ -89,6 +89,19 @@ export class TitleScreen {
         this.title.style.transform = 'translateY(20px)';
         this.title.style.transition = 'all 3s cubic-bezier(0.2, 0.8, 0.2, 1)';
         this.container.appendChild(this.title);
+
+        // サブタイトル「水の循環」。フルタイトルは "Ripple Lyric - 水の循環 -"。
+        this.tagline = document.createElement('div');
+        this.tagline.innerText = '- 水の循環 -';
+        this.tagline.style.marginTop = '18px';
+        this.tagline.style.fontSize = 'min(4vw, 20px)';
+        this.tagline.style.letterSpacing = '8px';
+        this.tagline.style.fontWeight = '300';
+        this.tagline.style.opacity = '0';
+        this.tagline.style.transition = 'opacity 2s ease';
+        this.tagline.style.position = 'relative';
+        this.tagline.style.zIndex = '1';
+        this.container.appendChild(this.tagline);
 
         this.subtitle = document.createElement('div');
         this.subtitle.innerText = '画面をクリックして波紋を起こす';
@@ -201,6 +214,7 @@ export class TitleScreen {
         requestAnimationFrame(() => {
             this.title.style.opacity = '1';
             this.title.style.transform = 'translateY(0)';
+            this.tagline.style.opacity = '0.85';
         });
 
         // 「画面をクリック」のヒントは早めに提示し、何をすればよいか3秒以内に伝える
@@ -235,9 +249,11 @@ export class TitleScreen {
         setTimeout(() => {
             this.title.style.transition = fadeOut;
             this.subtitle.style.transition = fadeOut;
+            this.tagline.style.transition = fadeOut;
             this.container.style.transition = fadeOut;
             this.title.style.opacity = '0';
             this.subtitle.style.opacity = '0';
+            this.tagline.style.opacity = '0';
             this.container.style.opacity = '0';
         }, 620);
 

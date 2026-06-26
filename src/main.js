@@ -47,7 +47,7 @@ window.addEventListener('unhandledrejection', (event) => {
 
     if (isAbortError || isParallelLoadError) {
         event.preventDefault(); // Prevent logging as a crash
-        console.warn(`[Lake Sonare] Safely caught and ignored API warning: ${reasonMessage || event.reason}`);
+        console.warn(`[Ripple Lyric] Safely caught and ignored API warning: ${reasonMessage || event.reason}`);
     }
 });
 
@@ -376,7 +376,7 @@ class Application {
             try {
                 SongClass = await loader();
             } catch (err) {
-                console.error(`[Lake Sonare] 曲チャンクのロードに失敗: ${songConfig.id}`, err);
+                console.error(`[Ripple Lyric] 曲チャンクのロードに失敗: ${songConfig.id}`, err);
                 SongClass = BaseSong;
             }
         }

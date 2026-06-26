@@ -1,4 +1,4 @@
-# Lake Sonare - QA Regression Checklist
+# Ripple Lyric - 水の循環 - — QA Regression Checklist
 
 コードを改修した際は、必ず以下の項目を \`browser_subagent\` を用いて**視覚的（スクリーンショット・録画）**に確認し、品質を担保すること。
 
