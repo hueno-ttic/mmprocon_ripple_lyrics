@@ -109,8 +109,8 @@ const ARM_GESTURES = {
 const SHUTTER_CUTE_POSES = [
     // 両手ハート（上腕x負で前へ、z負で内へ寄せ、前腕を折って胸の前中央で両手をぎりぎりまで合わせる）
     { id: 'heart', label: 'ハート', emoji: '💞', pose: { leftUpperArm: { x: -0.5, y: 0.1, z: -1 }, rightUpperArm: { x: -0.5, y: -0.1, z: 1 }, leftLowerArm: { x: 0.05, y: 0.2, z: -1.6 }, rightLowerArm: { x: 0.05, y: -0.2, z: 1.6 }, head: { x: 0.03, y: 0, z: 0.12 }, neck: { x: 0.03, y: 0, z: 0.06 }, spine: { x: 0.04, y: 0, z: 0 } } },
-    // きゅるん
-    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: { leftUpperArm: { x: -0.45, y: 0, z: 0.36 }, rightUpperArm: { x: -0.45, y: 0, z: -0.36 }, leftLowerArm: { x: 0, y: 0.12, z: -2.28 }, rightLowerArm: { x: 0, y: -0.12, z: 2.28 }, head: { x: 0.06, y: 0.03, z: 0.26 }, neck: { x: 0.03, y: 0, z: 0.12 }, spine: { x: 0.02, y: 0, z: 0.04 } } },
+    // きゅるん（ポーズエディタ製・全身＋片目ウィンク表情）
+    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: { spine: { x: 0, y: 0, z: 0 }, upperChest: { x: 0, y: 0, z: 0 }, neck: { x: 0, y: 0, z: 0 }, head: { x: 0, y: 0, z: 0 }, leftShoulder: { x: 0, y: 0, z: 0 }, leftUpperArm: { x: 0, y: 0, z: 0 }, leftLowerArm: { x: 0, y: -0.48, z: 0 }, leftHand: { x: 0, y: 0, z: 0 }, rightShoulder: { x: -0.07, y: 0.91, z: -0.11 }, rightUpperArm: { x: 0, y: 0, z: 0 }, rightLowerArm: { x: -1.16, y: 1.58, z: 0.05 }, rightHand: { x: -2.16, y: -0.52, z: -0.83 }, hips: { x: 0, y: 0, z: 0 }, leftUpperLeg: { x: 0.77, y: 0.1, z: 0 }, leftLowerLeg: { x: 0.91, y: 0.13, z: 0 }, leftFoot: { x: 0, y: 0, z: 0 }, rightUpperLeg: { x: 0.28, y: 0.03, z: -0.11 }, rightLowerLeg: { x: 0.25, y: -0.26, z: 0 }, rightFoot: { x: 0, y: 0, z: 0 }, expr: 'ウィンク' } },
     // お祈り
     { id: 'pray', label: 'お祈り', emoji: '🙏', pose: { leftUpperArm: { x: -0.45, y: 0, z: 0.18 }, rightUpperArm: { x: -0.45, y: 0, z: -0.18 }, leftLowerArm: { x: 0, y: 0.3, z: -1.95 }, rightLowerArm: { x: 0, y: -0.3, z: 1.95 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.16, y: 0, z: 0.14 }, neck: { x: 0.08, y: 0, z: 0.06 }, chest: { x: 0.05, y: 0, z: 0 }, spine: { x: 0.08, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 } } },
     // かんがえ中
@@ -709,6 +709,7 @@ export class SongShutter extends BaseSong {
                         key: def.key, mesh, vrm: mesh, baseX: def.baseX, baseRotY: def.baseRotY,
                         poseIndex: 0,
                         smile: 0, smileTimer: 0,      // にっこり（happy表情）のエンベロープ
+                        poseExpr: 0, poseExprName: null, poseExprApplied: null,  // ポーズ指定表情（ウィンク等）のエンベロープ
                         matCache: this.buildSubjectMatCache(mesh), // フェード/発光復元用
                     };
                     // 初期ポーズ（リラックス）を即適用
@@ -2573,14 +2574,29 @@ export class SongShutter extends BaseSong {
                     if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
                 }
 
+                // ポーズ指定の表情モーフ（ウィンク等）。expr は文字列 or {モーフ名:重み}。
+                // ウィンク等は片目だけ閉じるので、両目を閉じる自動笑顔(笑い)は表情指定中は抑制する。
+                const dict = subject.mesh.morphTargetDictionary;
+                const infl = subject.mesh.morphTargetInfluences;
+                const rawExpr = (posing && this.poseOverride.pose && this.poseOverride.pose.expr) ? this.poseOverride.pose.expr : null;
+                const exprObj = !rawExpr ? null : (typeof rawExpr === 'string' ? { [rawExpr]: 1 } : rawExpr);
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
-                const smileTarget = subject.smileTimer > 0 ? 1 : 0;
+                const smileTarget = (subject.smileTimer > 0 && !exprObj) ? 1 : 0;
                 subject.smile += (smileTarget - subject.smile) * 0.25;
-                if (subject.mesh.morphTargetDictionary) {
-                    const morphIndex = subject.mesh.morphTargetDictionary['笑い'] || subject.mesh.morphTargetDictionary['にっこり'] || subject.mesh.morphTargetDictionary['E_Happy'];
-                    if (morphIndex !== undefined) {
-                        subject.mesh.morphTargetInfluences[morphIndex] = subject.smile;
+                if (dict) {
+                    const morphIndex = dict['笑い'] || dict['にっこり'] || dict['E_Happy'];
+                    if (morphIndex !== undefined) infl[morphIndex] = subject.smile;
+                    // 表情の切替/解除: 前回適用したモーフを0へ戻す
+                    const exprKey = exprObj ? JSON.stringify(exprObj) : null;
+                    if (subject.poseExprApplied && subject.poseExprName !== exprKey) {
+                        Object.keys(subject.poseExprApplied).forEach(n => { const i = dict[n]; if (i !== undefined) infl[i] = 0; });
+                        subject.poseExpr = 0; subject.poseExprApplied = null; subject.poseExprName = null;
+                    }
+                    if (exprObj) {
+                        subject.poseExprName = exprKey; subject.poseExprApplied = exprObj;
+                        subject.poseExpr += (1 - subject.poseExpr) * 0.25;
+                        Object.entries(exprObj).forEach(([n, w]) => { const i = dict[n]; if (i !== undefined) infl[i] = w * subject.poseExpr; });
                     }
                 }
 
