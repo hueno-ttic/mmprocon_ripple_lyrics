@@ -107,46 +107,30 @@ const ARM_GESTURES = {
 // 注: 上腕 z は「左=正で下ろし／右=負で下ろし」。左は z を下げ、右は z を上げると腕が高く挙がる。
 // 肘(LowerArm)の z は左=負・右=正で内側に折れる。ちび体型でも読めるよう大きめ＆左右非対称に。
 const SHUTTER_CUTE_POSES = [
-    // 右手を顔の横へ上げてピース（Vサイン）、左手は下ろす。頭をピース側へ傾ける
-    // ※ 専用エージェントがねんどろポージング参考に実機反復調整（手が顔の横に来る定番ピース）
-    { id: 'peace', label: 'ピース', emoji: '✌️', pose: {
-        leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0, z: 0 },
-        rightUpperArm: { x: 0.3, y: 0, z: -2.95 }, rightLowerArm: { x: -0.15, y: 0, z: 0.5 },
-        head: { x: 0.05, y: 0.04, z: 0.27 }, neck: { x: 0, y: 0, z: 0.13 }
-    } },
-    // 胸の前で両手を合わせて小さくハート、頭を下げて手元を見る
-    // ※ モデル制約: 腕は頭上まで上がらず、ツインテールで手元が隠れやすい。胸前ハートが最良形。
-    { id: 'heart', label: 'ハート', emoji: '💗', pose: {
-        leftUpperArm: { x: 1.05, y: 0, z: 0.35 }, rightUpperArm: { x: 1.05, y: 0, z: -0.35 },
-        leftLowerArm: { x: 0, y: 0, z: -1.55 }, rightLowerArm: { x: 0, y: 0, z: 1.55 },
-        head: { x: 0.26, y: 0, z: 0 }, spine: { x: 0.06, y: 0, z: 0 }
-    } },
-    // 両手を顎〜頬の高さに添えてきゅるん（顔を包む）
-    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: {
-        leftUpperArm: { x: 0.3, y: 0, z: 0.42 }, rightUpperArm: { x: 0.3, y: 0, z: -0.42 },
-        leftLowerArm: { x: 0, y: 0.14, z: -2.1 }, rightLowerArm: { x: 0, y: -0.14, z: 2.1 },
-        head: { x: 0.08, y: 0.02, z: 0.22 }, neck: { x: 0.04, y: 0, z: 0.07 }, spine: { x: 0.01, y: 0, z: 0.04 }
-    } },
-    // 両肘を鋭く横へ張って手を腰に当てる凛とした決めポーズ（アキンボ・胸張り）
-    { id: 'sumashi', label: 'おすまし', emoji: '😌', pose: {
-        leftUpperArm: { x: 0.05, y: 0, z: 1.2 }, rightUpperArm: { x: 0.05, y: 0, z: -1.2 },
-        leftLowerArm: { x: 0.4, y: 1.58, z: -0.72 }, rightLowerArm: { x: 0.4, y: -1.58, z: 0.72 },
-        head: { x: 0.05, y: -0.04, z: 0.1 }, neck: { x: 0.04, y: 0, z: 0 }, chest: { x: -0.05, y: 0, z: 0 }, spine: { x: -0.09, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 }
-    } },
-    // 右腕を肘を伸ばしたまま斜め上・外へ一直線に差し出す指さし、左手は腰。顔と視線を指先へ
-    { id: 'point', label: 'ゆびさし', emoji: '☝️', pose: {
-        leftUpperArm: { x: 0, y: 0, z: 1.0 }, leftLowerArm: { x: 0, y: 0.55, z: -0.7 },
-        rightUpperArm: { x: -0.4, y: -0.05, z: 1.72 }, rightLowerArm: { x: 0, y: 0, z: 0.0 },
-        head: { x: -0.13, y: 0.3, z: 0.17 }, neck: { x: -0.06, y: 0.15, z: 0.09 }, spine: { x: -0.02, y: 0.06, z: 0 }
-    } },
-    // 右手を斜め上へ挙げ、肘を軽く曲げ前腕を外へ開き手のひらを正面に見せる「手を振る挨拶」。
-    // 左手は下ろし頭を逆へ傾けて親しげに。point(肘伸ばし＋顔を指先へ)と区別。
-    // ※ 重要: 各ボーンは x/y/z を必ず全部指定（欠けると補間で NaN になりボーンが壊れる）
-    { id: 'wave', label: 'てふり', emoji: '👋', pose: {
-        leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0.26, z: 0 },
-        rightUpperArm: { x: -0.5, y: -0.12, z: 1.55 }, rightLowerArm: { x: 0, y: -0.28, z: 0.72 }, rightHand: { x: 0, y: 0, z: -0.1 },
-        head: { x: 0.02, y: 0.07, z: -0.27 }, neck: { x: 0.04, y: 0.04, z: -0.16 }, chest: { x: 0, y: 0, z: 0.05 }, spine: { x: 0, y: 0.02, z: 0.04 }
-    } },
+    // 両手ハート（上腕x負で前へ、z負で内へ寄せ、前腕を折って胸の前中央で両手をぎりぎりまで合わせる）
+    { id: 'heart', label: 'ハート', emoji: '💞', pose: { leftUpperArm: { x: -0.5, y: 0.1, z: -1 }, rightUpperArm: { x: -0.5, y: -0.1, z: 1 }, leftLowerArm: { x: 0.05, y: 0.2, z: -1.6 }, rightLowerArm: { x: 0.05, y: -0.2, z: 1.6 }, head: { x: 0.03, y: 0, z: 0.12 }, neck: { x: 0.03, y: 0, z: 0.06 }, spine: { x: 0.04, y: 0, z: 0 } } },
+    // きゅるん（ポーズエディタ製・全身＋片目ウィンク表情）
+    { id: 'kyurun', label: 'きゅるん', emoji: '🥺', pose: { spine: { x: 0, y: 0, z: 0 }, upperChest: { x: 0, y: 0, z: 0 }, neck: { x: 0, y: 0, z: 0 }, head: { x: 0, y: 0, z: 0 }, leftShoulder: { x: 0, y: 0, z: 0 }, leftUpperArm: { x: 0, y: 0, z: 0 }, leftLowerArm: { x: 0, y: -0.48, z: 0 }, leftHand: { x: 0, y: 0, z: 0 }, rightShoulder: { x: -0.07, y: 0.91, z: -0.11 }, rightUpperArm: { x: 0, y: 0, z: 0 }, rightLowerArm: { x: -1.16, y: 1.58, z: 0.05 }, rightHand: { x: -2.16, y: -0.52, z: -0.83 }, hips: { x: 0, y: 0, z: 0 }, leftUpperLeg: { x: 0.77, y: 0.1, z: 0 }, leftLowerLeg: { x: 0.91, y: 0.13, z: 0 }, leftFoot: { x: 0, y: 0, z: 0 }, rightUpperLeg: { x: 0.28, y: 0.03, z: -0.11 }, rightLowerLeg: { x: 0.25, y: -0.26, z: 0 }, rightFoot: { x: 0, y: 0, z: 0 }, expr: 'ウィンク' } },
+    // お祈り
+    { id: 'pray', label: 'お祈り', emoji: '🙏', pose: { leftUpperArm: { x: -0.45, y: 0, z: 0.18 }, rightUpperArm: { x: -0.45, y: 0, z: -0.18 }, leftLowerArm: { x: 0, y: 0.3, z: -1.95 }, rightLowerArm: { x: 0, y: -0.3, z: 1.95 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.16, y: 0, z: 0.14 }, neck: { x: 0.08, y: 0, z: 0.06 }, chest: { x: 0.05, y: 0, z: 0 }, spine: { x: 0.08, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 } } },
+    // かんがえ中
+    { id: 'thinking', label: 'かんがえ', emoji: '🤔', pose: { leftUpperArm: { x: -0.4, y: 0, z: 0.62 }, rightUpperArm: { x: -0.45, y: 0, z: -0.42 }, leftLowerArm: { x: 0, y: 0.2, z: -1.95 }, rightLowerArm: { x: -0.1, y: 0, z: 2.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.1 }, head: { x: -0.08, y: 0.16, z: 0.3 }, neck: { x: -0.04, y: 0.08, z: 0.14 }, chest: { x: 0, y: 0.06, z: 0.05 }, spine: { x: 0.02, y: 0.04, z: 0.04 }, hips: { x: 0, y: 0, z: 0 } } },
+    // おすまし
+    { id: 'sumashi', label: 'おすまし', emoji: '😤', pose: { leftUpperArm: { x: 0.08, y: 0, z: 1.28 }, rightUpperArm: { x: 0.08, y: 0, z: -1.28 }, leftLowerArm: { x: 0.45, y: 1.62, z: -0.8 }, rightLowerArm: { x: 0.45, y: -1.62, z: 0.8 }, head: { x: -0.1, y: -0.03, z: 0.08 }, neck: { x: -0.05, y: 0, z: 0 }, chest: { x: -0.07, y: 0, z: 0 }, spine: { x: -0.09, y: 0, z: 0 } } },
+    // ダブルピース
+    { id: 'peace', label: 'ピース', emoji: '✌️', pose: { leftUpperArm: { x: -0.3, y: 0, z: 1.5 }, rightUpperArm: { x: -0.3, y: 0, z: -1.5 }, leftLowerArm: { x: 0, y: 0.1, z: -2.15 }, rightLowerArm: { x: 0, y: -0.1, z: 2.15 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.04, y: 0.03, z: 0.22 }, neck: { x: 0.03, y: 0, z: 0.1 }, chest: { x: 0.02, y: 0, z: 0 }, spine: { x: 0.03, y: 0, z: 0.03 }, hips: { x: 0, y: 0, z: 0 } } },
+    // バンザイ（ポーズエディタで作成・肩/脚まで含む全身ポーズ）
+    { id: 'banzai', label: 'バンザイ', emoji: '🙌', pose: { spine: { x: -0.01, y: 0, z: 0 }, leftShoulder: { x: -1.49, y: 0.5, z: 0.12 }, leftUpperArm: { x: -1.94, y: 0.95, z: 0.55 }, leftLowerArm: { x: 1.24, y: -0.94, z: 0.07 }, leftHand: { x: 0.71, y: -0.27, z: 0.7 }, rightShoulder: { x: -1.46, y: 0.01, z: -0.79 }, rightUpperArm: { x: -0.5, y: 0.53, z: 0.08 }, rightLowerArm: { x: 0.19, y: -0.09, z: 0 }, rightHand: { x: 0.17, y: 0.3, z: -0.56 }, leftLowerLeg: { x: 0.56, y: 0.01, z: 0 }, rightLowerLeg: { x: 1.47, y: 0.23, z: 0 }, rightFoot: { x: 0, y: -0.35, z: 0 } } },
+    // ガッツ
+    { id: 'guts', label: 'ガッツ', emoji: '✊', pose: { leftUpperArm: { x: 0.05, y: 0, z: 0.52 }, rightUpperArm: { x: 0.22, y: 0, z: -2.18 }, leftLowerArm: { x: 0.35, y: 1.55, z: -0.78 }, rightLowerArm: { x: 0, y: 0, z: 0.5 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: -0.12, y: -0.18, z: -0.18 }, neck: { x: -0.06, y: -0.08, z: -0.1 }, chest: { x: -0.04, y: -0.06, z: -0.06 }, spine: { x: -0.05, y: -0.05, z: -0.05 }, hips: { x: 0, y: 0, z: 0.02 } } },
+    // ゆびさし
+    { id: 'point', label: 'ゆびさし', emoji: '☝️', pose: { leftUpperArm: { x: 0.05, y: 0, z: 0.55 }, rightUpperArm: { x: -0.15, y: -0.1, z: -1.98 }, leftLowerArm: { x: 0, y: -1.5, z: -0.55 }, rightLowerArm: { x: 0, y: 0, z: 0.05 }, head: { x: -0.12, y: 0.3, z: 0.18 }, neck: { x: 0.05, y: 0.08, z: 0.06 }, spine: { x: 0, y: 0.04, z: -0.06 } } },
+    // てふり
+    { id: 'wave', label: 'てふり', emoji: '👋', pose: { leftUpperArm: { x: 0, y: 0, z: 0.45 }, rightUpperArm: { x: -0.3, y: -0.12, z: -1.62 }, leftLowerArm: { x: 0, y: 0.2, z: -0.5 }, rightLowerArm: { x: 0, y: -0.2, z: 0.7 }, head: { x: 0.02, y: 0.06, z: -0.24 }, neck: { x: 0.04, y: 0.03, z: -0.14 }, chest: { x: 0, y: 0, z: 0.05 } } },
+    // 投げキッス
+    { id: 'kiss', label: 'キッス', emoji: '😘', pose: { leftUpperArm: { x: -0.35, y: 0, z: 1.62 }, rightUpperArm: { x: -0.5, y: 0, z: -0.4 }, leftLowerArm: { x: 0, y: 0, z: -0.18 }, rightLowerArm: { x: -0.1, y: 0, z: 2.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.2 }, head: { x: -0.1, y: -0.08, z: 0.28 }, neck: { x: -0.05, y: -0.04, z: 0.14 }, chest: { x: 0, y: 0, z: -0.05 }, spine: { x: 0, y: 0.03, z: -0.06 }, hips: { x: 0, y: 0, z: 0 } } },
+    // 腰ピース
+    { id: 'hippeace', label: '腰ピース', emoji: '✌️', pose: { leftUpperArm: { x: 0.05, y: 0, z: 0.55 }, rightUpperArm: { x: -0.45, y: 0, z: -0.55 }, leftLowerArm: { x: 0, y: 1.5, z: -0.5 }, rightLowerArm: { x: -0.1, y: 0, z: 1.0 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.05, y: 0.25, z: 0.22 }, neck: { x: 0, y: 0.1, z: 0.05 }, chest: { x: 0, y: 0.1, z: 0 }, spine: { x: 0, y: 0.08, z: 0 }, hips: { x: 0, y: -0.05, z: 0 } } },
 ];
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
@@ -317,6 +301,7 @@ export class SongShutter extends BaseSong {
         this._beatFrac = 0;   // 拍内位相(0=拍頭)
         this._barAccent = 0;  // 小節頭アクセント(発火→減衰)
         this._swayCur = 0;    // 体重移動の平滑値
+        this._climaxAmt = 0;  // サビ強度の平滑値(0..1。振幅スナップ防止)
 
         // 「可愛い動き」ストックから既定プリセットを適用（grooveConfig と armStyle を設定）
         this.armStyle = 'cheer';
@@ -724,6 +709,7 @@ export class SongShutter extends BaseSong {
                         key: def.key, mesh, vrm: mesh, baseX: def.baseX, baseRotY: def.baseRotY,
                         poseIndex: 0,
                         smile: 0, smileTimer: 0,      // にっこり（happy表情）のエンベロープ
+                        poseExpr: 0, poseExprName: null, poseExprApplied: null,  // ポーズ指定表情（ウィンク等）のエンベロープ
                         matCache: this.buildSubjectMatCache(mesh), // フェード/発光復元用
                     };
                     // 初期ポーズ（リラックス）を即適用
@@ -750,8 +736,8 @@ export class SongShutter extends BaseSong {
     getMMDBone(subject, vrmBoneName) {
         const mesh = subject.mesh;
         if (!mesh) return null;
-        const mmdBoneName = VRM_TO_MMD_BONES[vrmBoneName];
-        if (!mmdBoneName) return null;
+        // VRM名→MMD名。未登録の名前は生のMMDボーン名(髪/ツインテール等)として直接解決。
+        const mmdBoneName = VRM_TO_MMD_BONES[vrmBoneName] || vrmBoneName;
         return mesh.getObjectByName(mmdBoneName);
     }
 
@@ -901,7 +887,7 @@ export class SongShutter extends BaseSong {
         const cp = SHUTTER_CUTE_POSES.find((p) => p.id === poseId);
         if (!cp) return;
         const holdMs = 3200;
-        this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId };
+        this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId, startedAt: performance.now() };
         // 表情も笑顔に寄せて可愛さを強調
         const shown = this.subjects.find((s) => s.key === this.shownKey);
         if (shown) shown.smileTimer = holdMs;
@@ -934,7 +920,11 @@ export class SongShutter extends BaseSong {
         const get = (n) => this.getMMDBone(subject, n);
         const hips = get('hips'), spine = get('spine'), chest = get('upperChest') || get('chest') || get('spine'), head = get('head');
         if (!spine && !hips) return;
-        const gain = cfg.gain * (this.isClimax ? cfg.climaxGain * 1.5 : 1.0);
+        // サビ強度を 0→1 で平滑化（isClimaxの真偽が切り替わる瞬間に振幅がスナップして
+        // 腕がガクッと跳ねるのを防ぐ。ダンス全体がサビへ滑らかに盛り上がる）。
+        this._climaxAmt += ((this.isClimax ? 1 : 0) - this._climaxAmt) * Math.min(1, deltaSec * 2.5);
+        const cx = this._climaxAmt;
+        const gain = cfg.gain * (1 + (cfg.climaxGain * 1.5 - 1) * cx);
         const g = this._groove;
 
         // 拍頭で胴を前に沈めて跳ね返す（スクワッシュ＆ストレッチ）。小節頭は踏み込みを強調
@@ -947,9 +937,14 @@ export class SongShutter extends BaseSong {
         this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
         const s = this._swayCur;
         const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
-        if (hips) { hips.rotation.z = s; hips.rotation.y = swayN * cfg.twist * 0.4; }
-        if (spine) { spine.rotation.z = -s * 0.6; spine.rotation.y = swayN * cfg.twist; } // 上半身をひねる
-        if (chest) chest.rotation.y = swayN * cfg.twist * 0.5;
+        // 脇を締めた(腕を下ろした)振付では、胴の傾き/ひねりが大きいと下ろした肘が幅広の胴(特にリン)へ
+        // 寄って貫通する。上体の傾き・ひねりは一定上限でクランプし、どのプリセット(大振りのappeal等)でも
+        // 脇締めの肘が体へ寄り過ぎないようにする。
+        const sB = Math.max(-0.13, Math.min(0.13, s));       // 体の傾きに使う上限付きsway
+        const twN = Math.max(-0.55, Math.min(0.55, swayN * cfg.twist)); // ひねり上限
+        if (hips) { hips.rotation.z = sB * 0.6; hips.rotation.y = twN * 0.3; }
+        if (spine) { spine.rotation.z = -sB * 0.4; spine.rotation.y = twN * 0.34; }
+        if (chest) chest.rotation.y = twN * 0.18;
 
         // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
         if (head) {
@@ -974,29 +969,38 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 型(SHUTTER_MIKU_POSES)に重ねてビートで動かす。サビは振り上げ＋左右ウェーブ。
+        // 腕: 脇を締めて両手を胸の前で揃える可愛いポーズ。
+        // 実機で腕角度マップを撮影しユーザが選定(チャートA/B)。確定した正しいボーン軸の対応:
+        //  - 上腕Z(luaZ)を**マイナス(≈ -0.35)にすると脇が締まって腕が下りる**。
+        //    0で真横(Tポーズ・脇全開)、プラスで腕が上がり +1.6 でバンザイ。以前の「≈1.8で脇締め」は誤り。
+        //  - 上腕を脇に下ろした(luaZ -0.35)まま、やや前(luaX≈0.20)へ出し、
+        //    前腕(肘)を深く折る(llaZ≈-1.6)と、脇を締めたまま手が胸の前で揃う。
+        //  - 肘の曲げは肘位置(肩からの距離)を変えないので深く折っても貫通しない＝可愛さと動きの主役。
+        //  - 両手対称。ゆっくり呼吸(手が胸↔やや下を往復)＋小首かしげで、脇を締めたまま躍動と表情を出す。
+        //  - 上体の傾き/ひねりは下流で上限クランプ済みなので、脇を締めた肘が幅広の胴(リン)へ寄っても貫通しない。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        if (this.isClimax) {
-            const pump = g * cfg.armPump * gain;
-            if (lUA) { lUA.rotation.x = -pump; lUA.rotation.z += -s * 0.6; }   // 振り上げ＋左右に振る
-            if (rUA) { rUA.rotation.x = -pump; rUA.rotation.z += -s * 0.6; }
-            if (lLA) lLA.rotation.x += -g * 0.2;                               // 肘も弾ませる
-            if (rLA) rLA.rotation.x += -g * 0.2;
-        } else {
-            const swing = swayN * cfg.armSway;       // 体重移動に同期した前後の振り
-            const bob = g * cfg.armBob * gain;       // 拍ごとの弾み
-            if (lUA) lUA.rotation.x += swing - bob;
-            if (rUA) rUA.rotation.x += -swing - bob;
-            if (lLA) lLA.rotation.x += -bob * 0.8;   // 肘の弾み
-            if (rLA) rLA.rotation.x += -bob * 0.8;
-        }
+        const breathe = Math.sin(t * 1.4);                       // ゆっくりした呼吸(両手同位相＝対称)
+        const rise = breathe * 0.5 + 0.5;                        // 0..1
+        const uaZ = 0.35 - swayN * 0.03;                         // 脇締め維持。体重移動で僅かに
+        const uaX = 0.20 + rise * 0.06;                          // 手をやや前後に
+        if (lUA) lUA.rotation.set(uaX, 0, -uaZ);                 // 左: 脇締め(z負)
+        if (rUA) rUA.rotation.set(uaX, 0,  uaZ);                 // 右: 脇締め(z正・左右対称)
+        // 前腕: 深く折って手を胸の前へ。呼吸で胸↔やや下をゆっくり往復(サビで少し大きく)。
+        const fold = 1.55 + rise * 0.22 * (1 + 0.25 * cx);
+        if (lLA) lLA.rotation.set(0, 0, -fold);
+        if (rLA) rLA.rotation.set(0, 0,  fold);
+        // 小首かしげ(可愛さを添える)。グルーヴが設定した頭の傾きに加算
+        const headB = get('head');
+        if (headB) headB.rotation.z += 0.12 * Math.sin(t * 0.5);
 
         // 小節頭アクセントの減衰
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
     }
 
-    // 腕の体内貫通を「絶対に」防ぐ幾何クランプ。ポーズ＋グルーヴ適用後に毎フレーム実行。
+    // 腕の体内貫通を「絶対に」防ぐ幾何クランプ。体に寄せるキメポーズ(ホールド中)だけ呼ぶ。
+    // 通常ダンスは applySubjectGroove が腕を安全包絡(脇)で動かすため呼ばない＝毎フレーム補正
+    // による細かい振動を出さない。ホールドは静止しているのでこのクランプも安定し振動しない。
     // ねんどろ(チビ)体型は胴が深く腕が短いため、ポーズ値だけ見ても合成結果が胴へ食い込む
     // （実測: 胴の前面はz≈0.95・側面はx≈0.7まで張り出し、踊ると肘がd≈0.66まで埋まる）。
     // 手首だけ逃がすと前腕・肘が残って貫通するため、肘・手首・手先の3点をワールド座標で判定し、
@@ -1735,13 +1739,19 @@ export class SongShutter extends BaseSong {
                 pointer-events: auto; padding: 6px 10px;
                 background: rgba(8, 4, 3, 0.55); border: 1px solid rgba(185, 84, 60, 0.45);
                 border-radius: 12px; backdrop-filter: blur(2px);
+                max-width: 94%; overflow-x: auto; overflow-y: hidden;
+                -webkit-overflow-scrolling: touch; scrollbar-width: none;
             }
+            #shutter-pose-bar::-webkit-scrollbar { display: none; height: 0; }
             #shutter-pose-bar .pose-bar-label {
                 font-family: monospace; font-size: 10px; letter-spacing: 2px; font-weight: bold;
                 color: rgba(255, 210, 180, 0.8); margin-right: 2px; user-select: none;
+                flex: 0 0 auto; position: sticky; left: 0;
+                background: rgba(8, 4, 3, 0.85); padding-right: 4px;
             }
             .shutter-pose-btn {
                 display: flex; flex-direction: column; align-items: center; gap: 1px;
+                flex: 0 0 auto;
                 min-width: 50px; padding: 5px 7px; cursor: pointer;
                 background: rgba(0, 0, 0, 0.4); color: #fff;
                 border: 1px solid rgba(216, 90, 48, 0.55); border-radius: 8px;
@@ -2544,29 +2554,49 @@ export class SongShutter extends BaseSong {
 
                 // 腕の型: ポーズ・ホールド中は指定ポーズ最優先。通常はプリセットの armStyle を基調に
                 // （穏やか系はサビで cheer へ切替えて盛り上げる）
-                let gesture, poseLerp = 0.08;
                 if (posing) {
-                    gesture = this.poseOverride.pose;
-                    poseLerp = 0.16; // キメ顔ポーズへ素早く寄せる
+                    // キメポーズは「入りだけ補間＋クランプ」、決まったら凍結＝固定する。
+                    // 毎フレーム補間とクランプを続けると、肘がクランプ楕円の境界にある時に
+                    // 押し戻し⇔補間の引っ張り合いで上腕がプルプル振動する。一定時間で凍結し根絶。
+                    const elapsed = performance.now() - (this.poseOverride.startedAt || 0);
+                    if (elapsed < 420) {
+                        // 入り: 素早く寄せつつ貫通をクランプで補正（この区間だけ動く）
+                        this.lerpSubjectPose(subject, this.poseOverride.pose, 0.34);
+                        this.clampArmsWorld(subject);
+                    }
+                    // elapsed>=420ms: 何もしない＝最後の補正済みポーズで固定（振動なし）
                 } else {
                     const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
                     const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
-                    gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                    const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                    // 腕の型へ補間 → その上にビートグルーヴを重ねて踊らせる
+                    this.lerpSubjectPose(subject, gesture, 0.08);
+                    if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
                 }
-                // 腕の型へ補間 → 通常時はその上にビートグルーヴを重ねて踊らせる（ホールド中は抑える）
-                this.lerpSubjectPose(subject, gesture, poseLerp);
-                if (isShown && !posing) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
-                // ポーズ＋グルーヴ合成後に腕の体内貫通を幾何クランプで確実に防ぐ
-                this.clampArmsWorld(subject);
 
+                // ポーズ指定の表情モーフ（ウィンク等）。expr は文字列 or {モーフ名:重み}。
+                // ウィンク等は片目だけ閉じるので、両目を閉じる自動笑顔(笑い)は表情指定中は抑制する。
+                const dict = subject.mesh.morphTargetDictionary;
+                const infl = subject.mesh.morphTargetInfluences;
+                const rawExpr = (posing && this.poseOverride.pose && this.poseOverride.pose.expr) ? this.poseOverride.pose.expr : null;
+                const exprObj = !rawExpr ? null : (typeof rawExpr === 'string' ? { [rawExpr]: 1 } : rawExpr);
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
-                const smileTarget = subject.smileTimer > 0 ? 1 : 0;
+                const smileTarget = (subject.smileTimer > 0 && !exprObj) ? 1 : 0;
                 subject.smile += (smileTarget - subject.smile) * 0.25;
-                if (subject.mesh.morphTargetDictionary) {
-                    const morphIndex = subject.mesh.morphTargetDictionary['笑い'] || subject.mesh.morphTargetDictionary['にっこり'] || subject.mesh.morphTargetDictionary['E_Happy'];
-                    if (morphIndex !== undefined) {
-                        subject.mesh.morphTargetInfluences[morphIndex] = subject.smile;
+                if (dict) {
+                    const morphIndex = dict['笑い'] || dict['にっこり'] || dict['E_Happy'];
+                    if (morphIndex !== undefined) infl[morphIndex] = subject.smile;
+                    // 表情の切替/解除: 前回適用したモーフを0へ戻す
+                    const exprKey = exprObj ? JSON.stringify(exprObj) : null;
+                    if (subject.poseExprApplied && subject.poseExprName !== exprKey) {
+                        Object.keys(subject.poseExprApplied).forEach(n => { const i = dict[n]; if (i !== undefined) infl[i] = 0; });
+                        subject.poseExpr = 0; subject.poseExprApplied = null; subject.poseExprName = null;
+                    }
+                    if (exprObj) {
+                        subject.poseExprName = exprKey; subject.poseExprApplied = exprObj;
+                        subject.poseExpr += (1 - subject.poseExpr) * 0.25;
+                        Object.entries(exprObj).forEach(([n, w]) => { const i = dict[n]; if (i !== undefined) infl[i] = w * subject.poseExpr; });
                     }
                 }
 
