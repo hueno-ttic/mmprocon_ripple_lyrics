@@ -317,6 +317,7 @@ export class SongShutter extends BaseSong {
         this._beatFrac = 0;   // 拍内位相(0=拍頭)
         this._barAccent = 0;  // 小節頭アクセント(発火→減衰)
         this._swayCur = 0;    // 体重移動の平滑値
+        this._climaxAmt = 0;  // サビ強度の平滑値(0..1。振幅スナップ防止)
 
         // 「可愛い動き」ストックから既定プリセットを適用（grooveConfig と armStyle を設定）
         this.armStyle = 'cheer';
@@ -396,6 +397,16 @@ export class SongShutter extends BaseSong {
         this.orbitRadius = 26.5;                          // カメラ初期位置(0,0,10)からの距離
         this._lyricScratch = new THREE.Vector3();         // 歌詞ワールド追従の作業用
         this._scratchVec = new THREE.Vector3();           // 毎フレームの一時計算用（写真トランジション等）
+        this._armScratchA = new THREE.Vector3();          // 腕クランプ（胴中心軸の算出）
+        this._armScratchB = new THREE.Vector3();
+        this._armScratchW = new THREE.Vector3();          // 腕クランプ（手首ワールド座標）
+        this._armScratchP = new THREE.Vector3();          // 腕クランプ（上腕の付け根ワールド座標）
+        this._armScratchT = new THREE.Vector3();          // 腕クランプ（手首の目標位置）
+        this._armScratchV1 = new THREE.Vector3();
+        this._armScratchV2 = new THREE.Vector3();
+        this._armScratchAxis = new THREE.Vector3();       // 腕クランプ（CCD回転軸）
+        this._armScratchFwd = new THREE.Vector3();        // 腕クランプ（被写体の前方ワールド）
+        this._armScratchQuat = new THREE.Quaternion();
         this._activeGroupsScratch = [];                   // 表示中ワードグループの再利用バッファ（毎フレーム再構築）
         this._seenTextScratch = new Set();                // 歌詞重複排除用の再利用Set（毎フレームclear）
         this.isDragging = false;
@@ -918,7 +929,11 @@ export class SongShutter extends BaseSong {
         const get = (n) => this.getMMDBone(subject, n);
         const hips = get('hips'), spine = get('spine'), chest = get('upperChest') || get('chest') || get('spine'), head = get('head');
         if (!spine && !hips) return;
-        const gain = cfg.gain * (this.isClimax ? cfg.climaxGain * 1.5 : 1.0);
+        // サビ強度を 0→1 で平滑化（isClimaxの真偽が切り替わる瞬間に振幅がスナップして
+        // 腕がガクッと跳ねるのを防ぐ。ダンス全体がサビへ滑らかに盛り上がる）。
+        this._climaxAmt += ((this.isClimax ? 1 : 0) - this._climaxAmt) * Math.min(1, deltaSec * 2.5);
+        const cx = this._climaxAmt;
+        const gain = cfg.gain * (1 + (cfg.climaxGain * 1.5 - 1) * cx);
         const g = this._groove;
 
         // 拍頭で胴を前に沈めて跳ね返す（スクワッシュ＆ストレッチ）。小節頭は踏み込みを強調
@@ -931,9 +946,13 @@ export class SongShutter extends BaseSong {
         this._swayCur += (swayTarget - this._swayCur) * Math.min(1, deltaSec * 6);
         const s = this._swayCur;
         const swayN = Math.max(-1, Math.min(1, s / Math.max(0.001, cfg.sway * gain))); // -1..1
-        if (hips) { hips.rotation.z = s; hips.rotation.y = swayN * cfg.twist * 0.4; }
-        if (spine) { spine.rotation.z = -s * 0.6; spine.rotation.y = swayN * cfg.twist; } // 上半身をひねる
-        if (chest) chest.rotation.y = swayN * cfg.twist * 0.5;
+        // 脇を締めた(腕を下ろした)振付では、胴の傾き/ひねりが大きいと下ろした肘が幅広の胴(特にリン)へ
+        // 寄って貫通する。上体の傾き・ひねりは一定上限でクランプし、どのプリセットでも脇締めの肘が安全。
+        const sB = Math.max(-0.13, Math.min(0.13, s));
+        const twN = Math.max(-0.55, Math.min(0.55, swayN * cfg.twist));
+        if (hips) { hips.rotation.z = sB * 0.6; hips.rotation.y = twN * 0.3; }
+        if (spine) { spine.rotation.z = -sB * 0.4; spine.rotation.y = twN * 0.34; }
+        if (chest) chest.rotation.y = twN * 0.18;
 
         // 頭: 拍で頷き＋体重移動に追従した傾き＆こちらを見るような向き
         if (head) {
@@ -958,26 +977,123 @@ export class SongShutter extends BaseSong {
         if (lSh) lSh.rotation.z = g * cfg.shoulder * gain;
         if (rSh) rSh.rotation.z = -g * cfg.shoulder * gain;
 
-        // 腕: 型(SHUTTER_MIKU_POSES)に重ねてビートで動かす。サビは振り上げ＋左右ウェーブ。
+        // 腕: 脇を締めた(腕を下ろした)可愛いポーズ＝「両手を頬に添えるきゅるん」。
+        // 20体のサブエージェントで可愛いポーズを研究→別の20体で振付を実装し、実機で全候補の
+        // 貫通/振動/見栄えを採点して最良案(きゅるん頬よせ・小首かしげ)を採用。
+        //  - 上腕は z≈1.06 で体の脇に下ろして脇を締める(肩-肘が直角に張り出すロボットアームを回避)。
+        //    やや前(x≈0.42)へ出し前腕を深く折る(肘 |1.46|前後)ことで手が頬の横へ上がる。
+        //  - 肘の曲げは肘位置を変えないので深く折っても貫通しない。左右ゆっくり交互＋小首かしげ。
         const lUA = get('leftUpperArm'), rUA = get('rightUpperArm');
         const lLA = get('leftLowerArm'), rLA = get('rightLowerArm');
-        if (this.isClimax) {
-            const pump = g * cfg.armPump * gain;
-            if (lUA) { lUA.rotation.x = -pump; lUA.rotation.z += -s * 0.6; }   // 振り上げ＋左右に振る
-            if (rUA) { rUA.rotation.x = -pump; rUA.rotation.z += -s * 0.6; }
-            if (lLA) lLA.rotation.x += -g * 0.2;                               // 肘も弾ませる
-            if (rLA) rLA.rotation.x += -g * 0.2;
-        } else {
-            const swing = swayN * cfg.armSway;       // 体重移動に同期した前後の振り
-            const bob = g * cfg.armBob * gain;       // 拍ごとの弾み
-            if (lUA) lUA.rotation.x += swing - bob;
-            if (rUA) rUA.rotation.x += -swing - bob;
-            if (lLA) lLA.rotation.x += -bob * 0.8;   // 肘の弾み
-            if (rLA) rLA.rotation.x += -bob * 0.8;
-        }
+        const br = Math.sin(t * 2.6) * 0.5 + 0.5;            // 拍の呼吸(0..1)
+        const swA = Math.sin(t * 0.45) * 0.5 + 0.5;         // ゆっくり左右スワップ(≈2.2s)
+        const swB = Math.sin(t * 0.45 + Math.PI) * 0.5 + 0.5;
+        const zL = 1.06 - swayN * 0.03, zR = 1.06 + swayN * 0.03;
+        const xL = (0.42 + br * 0.03 + swA * 0.02) * (1.0 + 0.04 * cx);
+        const xR = (0.42 + br * 0.03 + swB * 0.02) * (1.0 + 0.04 * cx);
+        if (lUA) lUA.rotation.set(xL, 0,  zL);
+        if (rUA) rUA.rotation.set(xR, 0, -zR);
+        const foldL = (1.46 + br * 0.06 + swA * 0.10) * (1.0 + 0.05 * cx);
+        const foldR = (1.46 + br * 0.06 + swB * 0.10) * (1.0 + 0.05 * cx);
+        if (lLA) lLA.rotation.set(0, 0, -foldL);
+        if (rLA) rLA.rotation.set(0, 0,  foldR);
+        const headB = get('head');
+        if (headB) headB.rotation.z += 0.17 * Math.sin(t * 0.45) + 0.04 * Math.sin(t * 1.3);
 
         // 小節頭アクセントの減衰
         this._barAccent = Math.max(0, this._barAccent - deltaSec * 2.2);
+    }
+
+    // 腕の体内貫通を「絶対に」防ぐ幾何クランプ。体に寄せるキメポーズ(ホールド中)だけ呼ぶ。
+    // 通常ダンスは applySubjectGroove が腕を安全包絡(脇)で動かすため呼ばない＝毎フレーム補正
+    // による細かい振動を出さない。ホールドは静止しているのでこのクランプも安定し振動しない。
+    // ねんどろ(チビ)体型は胴が深く腕が短いため、ポーズ値だけ見ても合成結果が胴へ食い込む
+    // （実測: 胴の前面はz≈0.95・側面はx≈0.7まで張り出し、踊ると肘がd≈0.66まで埋まる）。
+    // 手首だけ逃がすと前腕・肘が残って貫通するため、肘・手首・手先の3点をワールド座標で判定し、
+    // 「胴の縦バンド内」かつ「胴中心軸から水平半径R未満」なら、その点を制御する関節
+    // （肘=上腕／手首・手先=上腕→前腕）を1関節CCDで回し、軸から半径R以上の外側へ押し出す。
+    // 押し出し方向は胴中心軸からの放射(=最寄りの胴表面の外)。上腕ローカル軸の単純回転は腕姿勢で
+    // 前方へ動かないため、目標方向をワールド空間で与えて rotateOnWorldAxis で寄せる(姿勢非依存)。
+    clampArmsWorld(subject) {
+        const mesh = subject.mesh;
+        if (!mesh) return;
+        const spine = this.getMMDBone(subject, 'spine');     // 上半身
+        const hips = this.getMMDBone(subject, 'hips');       // 下半身
+        if (!spine || !hips) return;
+        const chest = mesh.getObjectByName('上半身2') || spine;
+        mesh.updateMatrixWorld(true);   // 読み取り前にボーン回転をワールド行列へ反映
+        const a = this._armScratchA, b = this._armScratchB, w = this._armScratchW;
+        const P = this._armScratchP, T = this._armScratchT, fwd = this._armScratchFwd;
+        const v1 = this._armScratchV1, v2 = this._armScratchV2, axis = this._armScratchAxis;
+        spine.getWorldPosition(a);
+        hips.getWorldPosition(b);
+        const axisX = (a.x + b.x) / 2, axisZ = (a.z + b.z) / 2;  // 胴の中心軸(x,z)
+        chest.getWorldPosition(a);
+        const bandLow = b.y - 0.45, bandHigh = a.y + 1.3;        // 胴の縦バンド(下半身〜胸〜首/顔下)
+        // 被写体の前方(ワールド)。near-center時のフォールバック方向に使う。
+        mesh.getWorldQuaternion(this._armScratchQuat);
+        fwd.set(0, 0, 1).applyQuaternion(this._armScratchQuat); fwd.y = 0;
+        if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, 1); else fwd.normalize();
+        // 胴の水平断面を楕円でモデル化(実測: 側面x≈0.7・前面z≈0.95と前後に深い)。
+        // 半径Aₓ(左右)・B_z(前後)＋余裕。点が楕円の内側(e2<1)なら貫通とみなし外周へ押す。
+        const A0 = 0.82, B0 = 1.05;
+        const MAX_ITER = 20, MAX_STEP = 0.2, STEP_LEN = 0.4;
+
+        // joint を回して point(関数で w に取得)を 胴楕円の外側へCCDで押し出す。scaleで余裕量を調整。
+        const pushOut = (joint, getPoint, scale, ownSign) => {
+            const A = A0 * scale, B = B0 * scale;
+            joint.getWorldPosition(P);
+            for (let it = 0; it < MAX_ITER; it++) {
+                getPoint(w);
+                if (w.y <= bandLow || w.y >= bandHigh) return;        // バンド外なら貫通しない
+                const dx = w.x - axisX, dz = w.z - axisZ;
+                const e2 = (dx / A) * (dx / A) + (dz / B) * (dz / B);
+                if (e2 >= 1.08) return;                                // 楕円の外側(余裕込み)＝クリア
+                // 楕円の外向き法線方向(∝ dx/A², dz/B²)。軸近傍は前方＋肩側へ逃がす
+                let nx = dx / (A * A), nz = dz / (B * B);
+                let nl = Math.hypot(nx, nz);
+                if (nl < 1e-4) { nx = fwd.x + ownSign * 0.6; nz = fwd.z; nl = Math.hypot(nx, nz) || 1; }
+                nx /= nl; nz /= nl;
+                T.set(w.x + nx * STEP_LEN, w.y + 0.03, w.z + nz * STEP_LEN);
+                v1.copy(w).sub(P); v2.copy(T).sub(P);
+                if (v1.lengthSq() < 1e-8 || v2.lengthSq() < 1e-8) return;
+                v1.normalize(); v2.normalize();
+                axis.crossVectors(v1, v2);
+                const len = axis.length();
+                if (len < 1e-5) return;
+                axis.divideScalar(len);
+                joint.rotateOnWorldAxis(axis, Math.min(MAX_STEP, Math.asin(Math.min(1, len))));
+                joint.getWorldPosition(P);   // 関節も動くので再取得
+            }
+        };
+
+        const arms = [
+            ['leftUpperArm', 'leftLowerArm', 'leftHand'],
+            ['rightUpperArm', 'rightLowerArm', 'rightHand'],
+        ];
+        for (const [uaName, faName, handName] of arms) {
+            const ua = this.getMMDBone(subject, uaName);     // 上腕(左腕/右腕)
+            const fa = this.getMMDBone(subject, faName);     // 前腕(左ひじ/右ひじ)
+            const wrist = this.getMMDBone(subject, handName);// 手首(左手首/右手首)
+            if (!ua || !fa || !wrist) continue;
+            ua.getWorldPosition(P);
+            const ownSign = Math.sign(P.x - axisX) || 1;
+            const getElbow = (o) => fa.getWorldPosition(o);
+            const getWrist = (o) => wrist.getWorldPosition(o);
+            // 手先(手首の少し先): 肘→手首方向へ延長した点
+            const getHand = (o) => {
+                wrist.getWorldPosition(o);
+                fa.getWorldPosition(a);             // a=肘
+                b.copy(o).sub(a);                   // 前腕方向
+                if (b.lengthSq() > 1e-8) o.add(b.normalize().multiplyScalar(0.35));
+                return o;
+            };
+            // 肘→手首→手先 の順に、上腕(肘)・前腕(手首/手先)で楕円外へ押し出す
+            pushOut(ua, getElbow, 1.0, ownSign);    // 肘を上腕で外へ
+            pushOut(ua, getWrist, 1.0, ownSign);    // 手首を上腕で外へ
+            pushOut(fa, getWrist, 1.0, ownSign);    // 手首を前腕で外へ
+            pushOut(fa, getHand, 1.05, ownSign);    // 手先を前腕で外へ(やや余裕)
+        }
     }
 
     disposeMMD(mesh) {
@@ -2450,6 +2566,9 @@ export class SongShutter extends BaseSong {
                 // 腕の型へ補間 → 通常時はその上にビートグルーヴを重ねて踊らせる（ホールド中は抑える）
                 this.lerpSubjectPose(subject, gesture, poseLerp);
                 if (isShown && !posing) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
+                // 通常ダンスは applySubjectGroove が腕を安全包絡内(脇)で動かすのでクランプ不要＝振動しない。
+                // 体に寄せるキメポーズ(ホールド中)だけ、静止状態で幾何クランプして貫通を防ぐ(静止=安定で無振動)。
+                if (posing) this.clampArmsWorld(subject);
 
                 // にっこり笑顔（happy表情）のエンベロープ。ビート同期撮影で smileTimer がセットされる
                 if (subject.smileTimer > 0) subject.smileTimer -= deltaTime * 1000;
