@@ -25,7 +25,7 @@ export class WorldUI {
         // Retina/高DPIでは塗りピクセルがdpr²倍になりfillrate律速になるため上限を抑える。
         this.renderer.setPixelRatio(quality.effectivePixelRatio());
         this.renderer.__qpr = quality.effectivePixelRatio();
-        // Cinematic grading to match the redesign (Ripple Lyric scene art direction)
+        // Cinematic grading to match the redesign (Ripple Lyrics scene art direction)
         this.renderer.outputColorSpace = THREE.SRGBColorSpace;
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 1.12;

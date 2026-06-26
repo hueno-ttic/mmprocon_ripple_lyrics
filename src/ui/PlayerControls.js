@@ -60,7 +60,7 @@ export class PlayerControls {
                     }
                 }
             } catch (err) {
-                console.warn('[Ripple Lyric] Web Audio unlock failed safely: ', err);
+                console.warn('[Ripple Lyrics] Web Audio unlock failed safely: ', err);
             }
         };
 

@@ -1,4 +1,4 @@
-# Ripple Lyric - 水の循環 -
+# Ripple Lyrics - 水の循環 -
 
 **マジカルミライ2026 プログラミング・コンテスト応募作 / TextAlive リリックアプリ**
 
