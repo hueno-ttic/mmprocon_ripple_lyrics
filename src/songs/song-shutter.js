@@ -102,6 +102,14 @@ const ARM_GESTURES = {
     },
 };
 
+// 待機モーション(ARM_GESTURES + applySubjectGroove)が制御しないボーン。
+// キメポーズ解除後に値が残って待機姿勢が壊れるのを防ぐため、idle時に中立(0)へ戻す対象。
+// (肩=grooveがzのみ制御/手首・首・足首=未制御/脚=grooveがx,zのみ制御でyが残る)
+const RELAX_IDLE_BONES = [
+    'neck', 'leftShoulder', 'rightShoulder', 'leftHand', 'rightHand',
+    'leftFoot', 'rightFoot', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg',
+];
+
 // 「かわいいポーズ」ボタン用プリセット（ミク/リン共通。ボタンを押すと数秒ホールド）。
 // 既存の ARM_GESTURES を土台に、頭の傾きや胴のひねりを足してキメ顔ポーズへ仕上げた6種。
 // 各 pose の値は ARM_GESTURES と同じ規約（leftUpperArm/rightUpperArm は適用時に±0.5補正される）。
@@ -965,6 +973,21 @@ export class SongShutter extends BaseSong {
     // ビート同期グルーヴ: 腰の体重移動・拍の沈み込み・膝バウンス・頭ノリ・腕振りを
     // 腕の型(armStyle)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
     // （song-kotaete.js の applyGroove を被写体1体構成向けに移植・調整）
+    // 待機モーション(ARM_GESTURES + applySubjectGroove)が制御しないボーンを中立(0)へ戻す。
+    // groove は腕・胴・頭・脚の主要軸を絶対値で上書きするが、肩のx/y・手首・首・足首・脚のyは
+    // 触らないため、それらを動かすキメポーズ(お願い/きゅるん/バンザイ等)の解除後に値が残って
+    // 待機姿勢が破綻する。idleブランチで groove の前にこれらを中立へイージングして根絶する。
+    // groove が扱う軸(肩z・脚x/z 等)はこの後 groove が上書きするので 0 へ寄せても安全。
+    relaxIdleBones(subject, t) {
+        for (const name of RELAX_IDLE_BONES) {
+            const bone = this.getMMDBone(subject, name);
+            if (!bone) continue;
+            bone.rotation.x += (0 - bone.rotation.x) * t;
+            bone.rotation.y += (0 - bone.rotation.y) * t;
+            bone.rotation.z += (0 - bone.rotation.z) * t;
+        }
+    }
+
     applySubjectGroove(subject, t, deltaSec, beatPulse) {
         if (!subject.mesh) return;
         const cfg = this.grooveConfig;
@@ -2632,8 +2655,12 @@ export class SongShutter extends BaseSong {
                     const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
                     const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
                     const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
-                    // 腕の型へ補間 → その上にビートグルーヴを重ねて踊らせる
+                    // 腕の型へ補間 → 待機が扱わないボーンを中立へ戻す → その上にビートグルーヴ
                     this.lerpSubjectPose(subject, gesture, 0.08);
+                    // キメポーズ(お願い等)が動かした「gesture/groove 管理外」のボーン
+                    // (肩のx/y・手首・首・足首・脚のy)を待機姿勢へ戻す。これが無いと
+                    // ポーズ解除後にそれらが残って待機モーションが破綻する。
+                    this.relaxIdleBones(subject, 0.18);
                     if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
                 }
 
