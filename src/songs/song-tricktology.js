@@ -821,12 +821,16 @@ export class SongTricktology extends BaseSong {
         const theta = p * Math.PI;
         let x = -Math.cos(theta) * this.moonR;   // 左(-R)→右(+R)
         let yAbs = Math.sin(theta) * this.moonArcH; // 地平から昇り天頂へ
-        // 2周目の終盤は中央へ寄って水に沈む
+        // 2周目の終盤は中央へ寄って水面(y=0)へ静かに沈む。
+        // かつては -5 まで沈めていたが、空の月が中心を越えて反対側の世界へ
+        // 潜り込み、その鏡像が逆側に昇るため、白(現実)とオレンジ(鏡像)の月が
+        // それぞれ逆の世界に現れてしまっていた。各月を自分の世界の側へ残すよう、
+        // 水面の手前(わずかな正の値)で留め、中心線を越えさせない。
         let sinking = 0;
         if (cycle === 1 && p > 0.8) {
             sinking = (p - 0.8) / 0.2;
             x *= (1 - sinking);
-            yAbs = yAbs * (1 - sinking) - sinking * 5;
+            yAbs = yAbs * (1 - sinking) + sinking * 0.3;
         }
         return { x, yAbs, cycle, p, sinking };
     }
