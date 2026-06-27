@@ -25,10 +25,17 @@
 const LANDSCAPE_RATIO = 16 / 9;  // 論理ステージの 幅/高さ (常に横長)
 const MOBILE_MAX_WIDTH = 768;    // responsive.css と同じスマホ境界(短辺で判定)
 
+// モバイル時の論理ステージは固定の基準解像度(16:9)にする。
+// こうすると固定px(フォント/パネル幅など)が画面に占める割合がPCと揃い、
+// 「スマホだけ文字やウィンドウが大きい」現象を解消できる。実寸へは scale で縮小。
+const REF_W = 1280, REF_H = 720;
+
 // 論理ステージ寸法(innerWidth/innerHeight が返す値。常に横長)
 let SW = 0, SH = 0;
 // デバイス画面上でステージが占める矩形(黒帯と #app 配置/回転に使う)
 let dL = 0, dT = 0, dW = 0, dH = 0;
+// 論理→デバイス の一様スケール(論理ステージ寸法 → 画面上の実寸)
+let scale = 1;
 let rotated = false;             // 縦持ち時に true (#app を 90° 回転)
 let active = false;
 let installed = false;
@@ -46,23 +53,29 @@ function recompute() {
     const vw = realVW(), vh = realVH();
     // 短辺がスマホ幅以下なら「モバイル」とみなす(縦横どちらの持ち方でも)
     active = Math.min(vw, vh) <= MOBILE_MAX_WIDTH;
-    if (!active) { SW = vw; SH = vh; dL = 0; dT = 0; dW = vw; dH = vh; rotated = false; return; }
+    if (!active) { SW = vw; SH = vh; dL = 0; dT = 0; dW = vw; dH = vh; rotated = false; scale = 1; return; }
+
+    // モバイルは論理寸法を固定基準(16:9)にし、画面へは scale で縮小して内接させる。
+    SW = REF_W; SH = REF_H;
 
     if (vw >= vh) {
         // 既に横向き → 回転不要。16:9 を画面に内接させる
         rotated = false;
         if (vw / vh > LANDSCAPE_RATIO) { dH = vh; dW = Math.round(vh * LANDSCAPE_RATIO); }
         else { dW = vw; dH = Math.round(vw / LANDSCAPE_RATIO); }
-        SW = dW; SH = dH;
+        scale = dW / SW;                  // 論理幅 → 画面上の実幅
         dL = Math.round((vw - dW) / 2);
         dT = Math.round((vh - dH) / 2);
     } else {
         // 縦持ち → 90° 回転して横向き 16:9 ステージにする。
-        // 回転後はステージの論理幅 SW が画面の縦に、論理高 SH が画面の横に並ぶ。
+        // 回転後はステージの論理幅(SW)が画面の縦に、論理高(SH)が画面の横に並ぶ。
         rotated = true;
-        if (vh / vw > LANDSCAPE_RATIO) { SH = vw; SW = Math.round(vw * LANDSCAPE_RATIO); }
-        else { SW = vh; SH = Math.round(vh / LANDSCAPE_RATIO); }
-        dW = SH; dH = SW;                 // デバイス空間でのフットプリント(回転後)
+        // ステージを画面(縦横入替)に内接させたときの「画面上の実寸」(横向き基準)
+        let onW, onH;                     // onW=ステージ幅方向の実寸, onH=高さ方向の実寸
+        if (vh / vw > LANDSCAPE_RATIO) { onW = vw; onH = Math.round(vw / LANDSCAPE_RATIO); }
+        else { onW = vh; onH = Math.round(vh / LANDSCAPE_RATIO); }
+        scale = onW / SW;                 // 論理幅 → 画面上の実寸
+        dW = onH; dH = onW;               // デバイス空間でのフットプリント(回転後)
         dL = Math.round((vw - dW) / 2);
         dT = Math.round((vh - dH) / 2);
     }
@@ -74,8 +87,8 @@ function recompute() {
 //   論理(x,y) → デバイス(rx,ry) = (dL+dW - y, dT + x)
 //   その逆写像が下式。
 function toLocal(rx, ry) {
-    if (!rotated) return { x: rx - dL, y: ry - dT };
-    return { x: ry - dT, y: (dL + dW) - rx };
+    if (!rotated) return { x: (rx - dL) / scale, y: (ry - dT) / scale };
+    return { x: (ry - dT) / scale, y: ((dL + dW) - rx) / scale };
 }
 
 // ── window.innerWidth / innerHeight を論理ステージ寸法に上書き ──
@@ -116,21 +129,21 @@ function installRectPatch() {
         const r = native.call(this);
         if (!active) return r;
         if (!rotated) {
-            if (dL === 0 && dT === 0) return r;
+            if (dL === 0 && dT === 0 && scale === 1) return r;
             return {
-                x: r.x - dL, y: r.y - dT,
-                left: r.left - dL, top: r.top - dT,
-                right: r.right - dL, bottom: r.bottom - dT,
-                width: r.width, height: r.height,
+                x: (r.x - dL) / scale, y: (r.y - dT) / scale,
+                left: (r.left - dL) / scale, top: (r.top - dT) / scale,
+                right: (r.right - dL) / scale, bottom: (r.bottom - dT) / scale,
+                width: r.width / scale, height: r.height / scale,
                 toJSON() { return this; },
             };
         }
         // 回転時: デバイス AABB の四隅を論理座標へ。90° なので軸整列は保たれる。
         // left/right は r.top/r.bottom 由来、top/bottom は r.right/r.left 由来になる。
-        const left = r.top - dT;
-        const top = (dL + dW) - r.right;
-        const right = r.bottom - dT;
-        const bottom = (dL + dW) - r.left;
+        const left = (r.top - dT) / scale;
+        const top = ((dL + dW) - r.right) / scale;
+        const right = (r.bottom - dT) / scale;
+        const bottom = ((dL + dW) - r.left) / scale;
         return {
             x: left, y: top, left, top, right, bottom,
             width: right - left, height: bottom - top,
@@ -185,16 +198,17 @@ function apply() {
             app.style.height = `${SH}px`;
             app.style.overflow = 'hidden';
             if (rotated) {
-                // 縦持ち: 左上原点で 90° 回転し、ステージ占有矩形へ平行移動。
+                // 縦持ち: 左上原点で 90° 回転＋scale 縮小し、ステージ占有矩形へ平行移動。
                 app.style.left = '0px';
                 app.style.top = '0px';
                 app.style.transformOrigin = 'top left';
-                app.style.transform = `translate(${dL + dW}px, ${dT}px) rotate(90deg)`;
+                app.style.transform = `translate(${dL + dW}px, ${dT}px) rotate(90deg) scale(${scale})`;
             } else {
+                // 横持ち: 左上原点で scale 縮小し、ステージ占有矩形へ配置。
                 app.style.left = `${dL}px`;
                 app.style.top = `${dT}px`;
-                app.style.transformOrigin = '';
-                app.style.transform = '';
+                app.style.transformOrigin = 'top left';
+                app.style.transform = `scale(${scale})`;
             }
         } else {
             app.classList.remove('is-mobile');
