@@ -1750,8 +1750,10 @@ export class SongTakeover extends BaseSong {
         target.el.style.top = `${tileRect.top - wrapperRect.top}px`;
         target.el.style.width = `${tileRect.width}px`;
         target.el.style.height = `${tileRect.height}px`;
-        target.el.style.fontSize = window.innerWidth <= 768 ? '10px' : '14px';
-        target.el.style.padding = window.innerWidth <= 768 ? '2px 4px' : '4px 8px';
+        // 着地先タイルの実寸（--to-tile-scale 反映後）に合わせ、飛行中の見た目をそろえる
+        const tileStyle = window.getComputedStyle(tile);
+        target.el.style.fontSize = tileStyle.fontSize;
+        target.el.style.padding = tileStyle.padding;
         target.el.style.borderColor = '#ff3a3a';
         target.el.style.boxShadow = '0 0 10px rgba(255, 58, 58, 0.5)';
 
@@ -2179,7 +2181,52 @@ export class SongTakeover extends BaseSong {
         this.totalCount = index;
         this.lyricCardBuilt = true;
         this.updateScore();
+        // フィットは update() の _maybeFitTiles() がレイアウト安定後に自動で掛ける。
+        // （構築直後は clientHeight が未確定で過剰縮小しうるため、ここでは掛けない）
+        this._lastFitClientH = null;
         return true;
+    }
+
+    // 毎フレーム呼ばれ、背景コンテナの高さが安定／変化したときだけタイルを再フィットする。
+    // 固定タイマーだと曲頭の演出中で clientHeight が暴れて過剰縮小するため、
+    // 「高さが前回フィット時から変わったら掛け直す」方式で安定後に一度だけ確定させる。
+    _maybeFitTiles() {
+        const c = this.bgContainer;
+        if (!c || !this.lyricCardBuilt) return;
+        const ch = c.clientHeight;
+        if (ch < 80) return; // レイアウト未確定（極小）のうちは見送る
+        if (this._lastFitClientH != null && Math.abs(ch - this._lastFitClientH) < 2) return;
+        this._lastFitClientH = ch;
+        this._fitTilesToContainer();
+    }
+
+    // 解読タイルを背景(.to-bg-container)の高さ内へ必ず収める。
+    // スマホ・タブレットでは折り返し行が増えて下にはみ出し、pointer-events:none で
+    // スクロールもできないため後半の歌詞が見えなくなる。全タイルは buildLyricCard で
+    // プレースホルダとして先に生成済みなので、この時点で総量を計測でき、収まるまで
+    // --to-tile-scale を段階的に下げて全歌詞を縮小表示する。
+    _fitTilesToContainer() {
+        const c = this.bgContainer;
+        if (!c) return;
+        // 計測中はタイルのサイズ遷移を止める（遷移途中の値で測ると過剰縮小するため）
+        c.classList.add('to-fitting');
+        // まず等倍へ戻してから計測（前回の縮小やリサイズの影響を引きずらない＝拡大方向にも追従）
+        c.style.setProperty('--to-tile-scale', '1');
+        void c.offsetHeight;
+        if (c.clientHeight >= 80) {
+            let scale = 1;
+            const minScale = 0.5; // これ以上は判読不能になるため下限を設ける
+            // scrollHeight が clientHeight を超える間、スケールを段階的に下げて収める
+            for (let i = 0; i < 16 && scale > minScale; i++) {
+                if (c.scrollHeight <= c.clientHeight + 1) break;
+                scale = Math.max(minScale, scale - 0.05);
+                c.style.setProperty('--to-tile-scale', scale.toFixed(3));
+                // 次ループの計測前にレイアウトを確定させる
+                void c.offsetHeight;
+            }
+        }
+        // 遷移を戻す（スケール値は確定済みなのでここでアニメは起きない）
+        c.classList.remove('to-fitting');
     }
 
     // Called externally (phrase boundary expire)
@@ -2222,6 +2269,10 @@ export class SongTakeover extends BaseSong {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
+        this.isMobile = window.innerWidth < 768;
+        // 画面サイズ/向きが変わると背景の高さも変わる。次フレームの _maybeFitTiles() が
+        // clientHeight の変化を検知して自動で掛け直すよう、フィット済みフラグを解除する。
+        this._lastFitClientH = null;
     }
 
     update() {
@@ -2232,6 +2283,9 @@ export class SongTakeover extends BaseSong {
         if (!this.lyricCardBuilt) {
             this.buildLyricCard();
         }
+
+        // 解読タイルを背景内へ収める自動フィット（レイアウト安定後/リサイズ後に再計算）
+        this._maybeFitTiles();
 
         // 再生中かどうか（PAUSE中は陣取りの減衰を止める／WARNINGの起点に使う）
         const isPlaying = !!(playerManager.player && playerManager.player.isPlaying);
