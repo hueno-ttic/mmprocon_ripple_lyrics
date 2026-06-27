@@ -281,6 +281,11 @@ export class SongTakeover extends BaseSong {
                     font-family:"Courier New",monospace;
                     font-weight:bold;
                     text-align:left;
+                    /* 内容を縦中央寄せ。ヒント行の有無で箱の見え方が変わらないようにする */
+                    display:flex;
+                    flex-direction:column;
+                    justify-content:center;
+                    align-items:flex-start;
                     padding:15px 34px;
                     background:#05000a; /* Solid black/purple background, no transparency */
                     border:1px solid rgba(255, 58, 58, 0.3);
@@ -298,11 +303,15 @@ export class SongTakeover extends BaseSong {
                         font-size: calc(var(--to-font-size, 14px) * 0.9) !important;
                         padding: 10px 20px; /* Easy-to-tap large padding on mobile */
                     }
+                    .to-phrase.scrambled { min-height: 50px; }
                 }
                 /* 暗号化された歌詞 = 赤(敵に支配されたロック状態) */
                 .to-phrase.scrambled {
                     color:#ff3a3a;
                     cursor:pointer;
+                    /* ヒント行の有無で高さが変わらないよう、最初の「良いサイズ」で統一する。
+                       box-sizing:border-box のため min-height はパディング込みの総高さ。 */
+                    min-height:64px;
                     border-color: rgba(255, 58, 58, 0.6);
                     text-shadow: 0 0 8px rgba(255, 58, 58, 0.6);
                     box-shadow: 0 0 12px rgba(255, 58, 58, 0.2), inset 0 0 8px rgba(255, 58, 58, 0.1);
@@ -1175,12 +1184,11 @@ export class SongTakeover extends BaseSong {
         const fontSizeVal = isMobile ? baseFontSize * 0.75 : baseFontSize;
         const scrambledWidth = winLen * (fontSizeVal * 0.65 + (isMobile ? 2.5 : 3.5));
         const plainWidth = group.text.length * (fontSizeVal * (isMobile ? 0.9 : 1.1));
-        // ボックスを少し大きくした分、重なり判定の余白も合わせて広げて間隔を保つ
+        // ボックスを少し大きくした分、重なり判定の余白も合わせて広げて間隔を保つ。
+        // 高さは CSS の min-height(PC64px/SP50px)で下限が決まり、ヒント行はその中に
+        // 収まって箱の高さを変えないため、hasHint 分の加算はしない。
         const widthPx = Math.max(scrambledWidth, plainWidth) + (isMobile ? 16 : 58);
-        let heightPx = fontSizeVal * 1.2 + (isMobile ? 8 : 30);
-        if (hasHint) {
-            heightPx += isMobile ? 18 : 25;
-        }
+        const heightPx = Math.max(isMobile ? 50 : 64, fontSizeVal * 2.6) + (isMobile ? 16 : 18);
 
         const W = Math.max(1, window.innerWidth);
         const H = Math.max(1, window.innerHeight);
@@ -1196,10 +1204,10 @@ export class SongTakeover extends BaseSong {
 
         // 出現領域: 通常は中央寄せ（端への出現を抑える）。サビは端まで広げ、
         // 端から中央端末へ流入してくる密度・混沌感を出す（#113 提案1・3）。
-        const regionLeft   = climax ? 8  : 14;
-        const regionWidth  = climax ? 84 : 72;
-        const regionTop    = climax ? 16 : 21;
-        const regionHeight = climax ? 60 : 54;
+        const regionLeft   = climax ? 8  : 16;
+        const regionWidth  = climax ? 84 : 68;
+        const regionTop    = climax ? 16 : 22;
+        const regionHeight = climax ? 60 : 51;
         const cellW = regionWidth / cols;
         const cellH = regionHeight / rows;
 
