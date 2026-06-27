@@ -10,7 +10,7 @@ import { stageRoot } from '../core/stage.js';
  */
 export class VolumeControl {
     constructor() {
-        this.volume = this._load('appVolume', 80);
+        this.volume = this._load('appVolume', 35);
         this.muted = this._load('appMuted', 0) === 1;
 
         this._injectStyles();
@@ -133,15 +133,15 @@ export class VolumeControl {
                 height: 130px;
                 border-radius: 3px;
                 background: linear-gradient(to top,
-                    rgba(255,255,255,0.9) var(--vol, 80%),
-                    rgba(255,255,255,0.22) var(--vol, 80%));
+                    rgba(255,255,255,0.9) var(--vol, 35%),
+                    rgba(255,255,255,0.22) var(--vol, 35%));
                 outline: none;
                 cursor: pointer;
             }
             .app-volume-control.muted .app-volume-slider {
                 background: linear-gradient(to top,
-                    rgba(255,255,255,0.35) var(--vol, 80%),
-                    rgba(255,255,255,0.15) var(--vol, 80%));
+                    rgba(255,255,255,0.35) var(--vol, 35%),
+                    rgba(255,255,255,0.15) var(--vol, 35%));
             }
             .app-volume-slider::-webkit-slider-thumb {
                 -webkit-appearance: none;
