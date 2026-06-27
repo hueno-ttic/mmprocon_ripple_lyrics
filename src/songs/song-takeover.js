@@ -99,7 +99,16 @@ export class SongTakeover extends BaseSong {
             const r = target.el.getBoundingClientRect();
             if (!r.width && !r.height) return null;
             return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        }, { label: 'タップして復号' });
+        }, {
+            label: 'タップして復号',
+            // 8秒触られなければ暗号ブロックを1つ自動復号し、スクランブル→平文(歌詞)の変化を実演する。
+            autoDemoMs: 8000,
+            onAutoDemo: () => {
+                if (this.takenCount > 0) return;
+                const target = this.phraseTargets.find(t => t && t.state === 'scrambled' && t.el);
+                if (target && target.el) target.el.click(); // 通常のクリック復号パスをそのまま発火
+            },
+        });
     }
 
     initThree() {
@@ -768,7 +777,7 @@ export class SongTakeover extends BaseSong {
 
         const baseFontSize = this.isClimax ? 20 : 14;
         const winLen = Math.min(Math.max(b64.length, 12), 18);
-        const hasHint = this.takenCount <= 3; // Show click hint only for the first 3 decryptions
+        const hasHint = this.takenCount <= 5; // 発見性向上のため復号ヒントを長め(最初の5回)に出す
 
         // Estimate size for collision checking
         const isMobile = window.innerWidth <= 768;
