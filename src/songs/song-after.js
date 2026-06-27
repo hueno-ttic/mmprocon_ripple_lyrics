@@ -98,6 +98,7 @@ export class SongAfter extends BaseSong {
 
         // 終演演出
         this.finaleP = 0;
+        this._petalsReleased = false;       // 終幕で床の紙を一斉に舞い上げたか(=湖へ飛ばす演出)
 
         // シェーダー/アニメ用の相対時刻基準 (エポック秒の float32 凍結回避)
         this._t0 = performance.now();
@@ -191,7 +192,10 @@ export class SongAfter extends BaseSong {
         this.spotLight.penumbra = 0.6;
         this.spotLight.decay = 1.5;
         this.spotLight.distance = 50;
-        this.spotLight.castShadow = !this.isMobile;
+        // 毎フレーム左右に動く光源で影を落とすとシャドウマップを毎フレーム再描画して重く、
+        // 中盤以降のフレーム落ち→音切れ(ジジジ)の主因になる。ミクの劇的な影は逆光リムライト
+        // (rimLight)が担うので、この常時スイープ光の影は切る。
+        this.spotLight.castShadow = false;
         this.scene.add(this.spotLight);
         this.scene.add(this.spotLight.target);
 
@@ -329,7 +333,7 @@ export class SongAfter extends BaseSong {
                 // このVRMは rotation.y=0 だと背中がカメラを向くため、π回して正面に。
                 vrm.scene.position.set(0, this.mikuBaseY, this.mikuBaseZ);
                 vrm.scene.rotation.y = Math.PI;
-                vrm.scene.scale.setScalar(2.6);
+                vrm.scene.scale.setScalar(3.9); // 中央のミクを1.5倍に(2.6→3.9)
                 vrm.scene.traverse((obj) => {
                     if (obj.isMesh) obj.castShadow = !this.isMobile;
                 });
@@ -753,12 +757,13 @@ export class SongAfter extends BaseSong {
 
     // ─── 紙吹雪: 照らし切った歌詞が破裂して生まれ、舞い降りて床に積もる ───
     // 歌詞の位置から一度パッと弾け飛び(初速の外向き+上向き)、その後ふわりと降る。
-    burstLyricToConfetti(origin) {
+    burstLyricToConfetti(origin, count) {
         sfx.play('after_ignite');
         // 歌詞が弾けるたび、閉じた緞帳の合わせ目から光が少しだけ漏れる
         this._curtainLeak = Math.min(1, this._curtainLeak + 0.55);
-        const count = this.isMobile ? 12 : 20;
-        for (let i = 0; i < count; i++) {
+        // 紙吹雪の枚数はその歌詞(フレーズ)の単語数に一致させる。取れない場合のみ既定値。
+        const n = Math.max(1, count || (this.isMobile ? 12 : 20));
+        for (let i = 0; i < n; i++) {
             const mat = this.petalMaterials[Math.random() > 0.5 ? 0 : 1];
             const mesh = new THREE.Mesh(this.petalGeo, mat);
 
@@ -908,8 +913,8 @@ export class SongAfter extends BaseSong {
         // 各チャンクに TextAlive の実歌唱タイミング(先頭文字の startTime)を割り当て、
         // その時刻に出現させる(固定刻みではなく歌唱に同期)。
         const timed = this.assignChunkTimes(phrase, chunks, fallbackTime);
-        for (const { text, startTime } of timed) {
-            this.spawnTextChunk(text, startTime);
+        for (const { text, startTime, wordCount } of timed) {
+            this.spawnTextChunk(text, startTime, wordCount);
         }
     }
 
@@ -923,14 +928,16 @@ export class SongAfter extends BaseSong {
         let guard = 0;
         while (c && guard++ < 20000) {
             const txt = c.text || '';
-            for (const ch of txt) timeline.push({ ch, t: c.startTime });
+            const w = c.parent || null;     // この文字が属する単語(IWord)。紙吹雪の枚数算出に使う
+            for (const ch of txt) timeline.push({ ch, t: c.startTime, w });
             if (c === phrase.lastChar) break;
             c = c.next;
         }
         // 文字データが取れない場合はフレーズ開始時刻に揃える(従来同等のフォールバック)
         if (!timeline.length) {
             const base = (phrase && typeof phrase.startTime === 'number') ? phrase.startTime : fallbackTime;
-            return chunks.map(text => ({ text, startTime: base }));
+            // 文字データが無い場合は文字数からおおよその単語数を見積もる
+            return chunks.map(text => ({ text, startTime: base, wordCount: Math.max(1, Math.round((text || '').length / 3)) }));
         }
 
         const result = [];
@@ -938,27 +945,31 @@ export class SongAfter extends BaseSong {
         for (const chunkText of chunks) {
             const target = (chunkText || '').replace(/\s/g, ''); // 空白を無視して照合
             let startTime = fallbackTime;
+            let wordCount = 1;
             if (target.length) {
                 // カーソル以降で chunk 先頭文字に一致する位置まで進む(約物・空白はスキップ)
                 let k = cursor;
                 while (k < timeline.length && timeline[k].ch !== target[0]) k++;
                 if (k < timeline.length) {
                     startTime = timeline[k].t;
-                    // chunk 全体ぶんカーソルを前進(タイムライン側の余剰文字はスキップ)
+                    // chunk 全体ぶんカーソルを前進しつつ、跨いだ単語(IWord)の種類数を数える
+                    const words = new Set();
                     let ti = 0, p = k;
                     while (p < timeline.length && ti < target.length) {
+                        if (timeline[p].w) words.add(timeline[p].w);
                         if (timeline[p].ch === target[ti]) ti++;
                         p++;
                     }
                     cursor = p;
+                    wordCount = Math.max(1, words.size);
                 }
             }
-            result.push({ text: chunkText, startTime });
+            result.push({ text: chunkText, startTime, wordCount });
         }
         return result;
     }
 
-    spawnTextChunk(text, spawnTime) {
+    spawnTextChunk(text, spawnTime, wordCount) {
         const { texture, widthFrac } = this.createTextTexture(text);
 
         const material = new THREE.MeshStandardMaterial({
@@ -990,12 +1001,19 @@ export class SongAfter extends BaseSong {
         const textHalfW = (textW / 2) * SCALE_MAX;
         const textHalfH = (planeH * 0.62 / 2) * SCALE_MAX * fitScale;
         const xLimit = Math.max(0.3, bnd.halfW - textHalfW - MARGIN);
-        const yLo = bnd.yBottom + textHalfH + MARGIN;
-        const yHi = bnd.yTop - textHalfH - MARGIN;
+        // ステージ床(y=0)より下に置くと、床の裏から湧き上がって見える(=歌詞がステージに被る)。
+        // テキスト下端＋浮遊アニメの沈み込み(最大0.25)＋余白ぶん、必ず床面より上から出す。
+        const FLOOR_CLEAR = textHalfH + 0.25 + 0.2;
+        // 歌詞は画面の下半分にのみ出現させる(上端は画面の縦中央まで)
+        const yMid = (bnd.yBottom + bnd.yTop) / 2;
+        const yLo = Math.max(bnd.yBottom + textHalfH + MARGIN, FLOOR_CLEAR);
+        const yHi = Math.max(yLo, Math.min(bnd.yTop - textHalfH - MARGIN, yMid - textHalfH));
         const x = (Math.random() * 2 - 1) * xLimit;
         const y = yLo + Math.random() * Math.max(0.2, yHi - yLo);
         mesh.position.set(x, y, z);
-        mesh.castShadow = !this.isMobile;
+        // 歌詞は影を落とさない。サビ等で歌詞が増えるほどシャドウマップ再描画が膨らみ、
+        // フレーム落ち→音切れ(ジジジ)を招く。薄い板で影の寄与も小さいため切る。
+        mesh.castShadow = false;
 
         mesh.userData = {
             birth: spawnTime,
@@ -1008,6 +1026,7 @@ export class SongAfter extends BaseSong {
             spinFactor: (Math.random() - 0.5) * 0.15,
             fitScale,          // はみ出し防止の基準スケール(毎フレームの拡縮はこれに乗算)
             widthFrac,         // テキストがプレーン幅に占める割合(検証/はみ出し判定用)
+            wordCount: Math.max(1, wordCount || 1), // この歌詞の単語数(=破裂時の紙吹雪の枚数)
             text: text
         };
 
@@ -1308,8 +1327,13 @@ export class SongAfter extends BaseSong {
         } else if (this.actPhase === 'intro') {
             targetClose = ease(this.introP);  // イントロ: 左右からゆっくり閉じる
         } else {
-            // アウトロ: 紙吹雪にした量に応じた幅まで、ゆっくり左右へ開いていく(下限あり)
-            targetClose = 1 - maxOpen * ease(outroP);
+            // アウトロ: 紙吹雪にした量に応じて先に開きつつ、曲の終わりへ向けては
+            // 灯した数に関わらず必ず全開へ向かう。閉じたまま終わらせず、幕の先の湖を見せきる。
+            const oe = ease(outroP);
+            const openFrac = Math.max(maxOpen * oe, oe * oe); // 灯した開き or 終盤保証の開き(大きい方)
+            targetClose = 1 - openFrac;
+            // 終幕(最後の数秒)は確実に全開(=閉じ0)へ
+            if (f > 0) targetClose = Math.min(targetClose, 1 - ease(f));
         }
         this.curtainCloseFrac += (targetClose - this.curtainCloseFrac) * Math.min(1, dt * 2.4);
         const cf = this.curtainCloseFrac;
@@ -1405,7 +1429,7 @@ export class SongAfter extends BaseSong {
                     ud.kindleFlash = 1.0;
                     ud.bursting = true;
                     ud.burstT = 0;
-                    this.burstLyricToConfetti(mesh.position.clone());
+                    this.burstLyricToConfetti(mesh.position.clone(), ud.wordCount);
                     this.spawnSeatLight(mesh.position.clone());
                 }
             }
@@ -1490,10 +1514,77 @@ export class SongAfter extends BaseSong {
             this._lyricFocusW = 0;
         }
 
-        // 3. 紙吹雪(破裂した歌詞由来): 舞い降りて床に積もり、曲が終わるまで残る
+        // 終幕の合図: 緞帳が開き始めたら、床に積もった紙が一斉に舞い上がり、
+        // 中央の開いた合わせ目へ吸い寄せられて、その先の湖へ飛び去っていく。
+        if (!this._petalsReleased && f > 0.12) {
+            this._petalsReleased = true;
+            const gapZ = -5; // 緞帳の合わせ目(渦の収束軸)
+            for (const p of this.petals) {
+                const u = p.userData;
+                if (u.fading || u.flying) continue;
+                u.flying = true;
+                u.isFloored = false;
+                // 中央軸(x=0, z=gapZ)まわりの極座標で渦を初期化する
+                const dx = p.position.x, dz = p.position.z - gapZ;
+                u.radius = Math.max(0.6, Math.hypot(dx, dz));
+                u.angle = Math.atan2(dx, dz);
+                u.swirlDir = Math.random() < 0.5 ? 1 : -1;
+                u.swirlSpeed = 0.05 + Math.random() * 0.035;  // 旋回の速さ(rad/frame)
+                u.baseZ = p.position.z;                        // 奥行きの基準(これが湖へ向かって伸びる)
+                u.vy = 0.015 + Math.random() * 0.02;           // 上昇初速
+                u.lift = 0.0012 + Math.random() * 0.0008;      // 上昇の加速
+                u.vyMax = 0.085 + Math.random() * 0.05;        // 上がりすぎない上限
+                u.vz = -0.01 - Math.random() * 0.015;          // 湖(奥)への初速
+                u.zAccel = 0.011 + Math.random() * 0.006;      // 終盤に伸びる加速(easeで効く)
+                u.flyDelay = Math.random() * 0.7;              // 打ち上げのばらつき(波打って舞い上がる)
+                u.bank = 0.6 + Math.random() * 0.5;            // 紙のバンク(傾き)の強さ
+                u.flyT = 0;
+            }
+        }
+
+        // 3. 紙吹雪(破裂した歌詞由来): 舞い降りて床に積もり、終幕で湖へ飛び去る
         for (let i = this.petals.length - 1; i >= 0; i--) {
             const mesh = this.petals[i];
             const ud = mesh.userData;
+
+            if (ud.flying) {
+                ud.flyT += dt;
+                const t = ud.flyT - ud.flyDelay;
+                if (t < 0) {
+                    // 打ち上げ前の予備動作: 床でかすかに震え、舞い上がる瞬間を待つ
+                    mesh.rotation.z += 0.03;
+                    mesh.position.y = 0.08 + Math.abs(Math.sin(rel * 11 + ud.flutterPhase)) * 0.06;
+                    continue;
+                }
+                // 渦を巻いて舞い上がり、中央の合わせ目へ収束しながら、その先の湖(奥)へ螺旋を伸ばす
+                ud.angle += ud.swirlDir * ud.swirlSpeed;
+                ud.radius *= 0.975;                              // 中央へぐっと締まっていく
+                ud.vy = Math.min(ud.vyMax, ud.vy + ud.lift);
+                ud.vz -= ud.zAccel * dt * 60;                    // 終盤ほど伸びて湖へ吸い込まれる
+                ud.baseZ += ud.vz;
+                mesh.position.x = Math.sin(ud.angle) * ud.radius;
+                mesh.position.y += ud.vy;
+                mesh.position.z = ud.baseZ + Math.cos(ud.angle) * ud.radius * 0.6;
+                // 紙が舞うように、進行方向へバンクしつつ回る
+                mesh.rotation.y = ud.angle;
+                mesh.rotation.z = Math.sin(ud.angle) * ud.bank;
+                mesh.rotation.x += ud.rotSpeedX * 1.2;
+                // 湖の奥へ遠ざかるほど霞んで消える
+                if (mesh.position.z < -16) {
+                    if (!ud.ownMaterial) {
+                        mesh.material = mesh.material.clone();
+                        mesh.material.transparent = true;
+                        ud.ownMaterial = true;
+                    }
+                    mesh.material.opacity = Math.max(0, (mesh.position.z + 56) / 40);
+                }
+                if (mesh.position.z < -56 || mesh.position.y > 46) {
+                    this.scene.remove(mesh);
+                    if (ud.ownMaterial) mesh.material.dispose();
+                    this.petals.splice(i, 1);
+                }
+                continue;
+            }
 
             if (!ud.isFloored) {
                 // 破裂の初速を重力で減衰させ、跳ね上がりからふわりと降下へ転じる
