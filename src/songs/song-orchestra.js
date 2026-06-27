@@ -422,11 +422,25 @@ export class SongOrchestra extends BaseSong {
     _buildIntroTitleSprites(title) {
         const chars = Array.from(title).filter(c => c.trim());
         if (!chars.length) return;
-        const S = window.innerWidth < 768 ? 0.7 : 0.92; // 文字のベーススケール
-        const gap = S * 1.18;                            // 文字間隔
-        const totalW = (chars.length - 1) * gap;
         const y0 = 2.2;                                  // ミクより上、夜空の中ほど
         const z0 = -10.0;
+        const GAP_RATIO = 1.18;                          // 文字間隔 / スケール
+
+        // この奥行きでの可視幅を算出し、画面からはみ出さない範囲で文字を最大化する。
+        // スマホ(縦長=狭アスペクト)では固定スケールだと文字が小さすぎて読めないため、
+        // 可視幅に合わせて動的に拡大する(横長デスクトップでは従来感を保つ上限でクランプ)。
+        const dist = this.camera.position.z - z0;        // カメラZ(10) - 文字Z(-10) = 20
+        const fovRad = (this.camera.fov * Math.PI) / 180;
+        const visibleHeight = 2.0 * dist * Math.tan(fovRad / 2.0);
+        const visibleWidth = visibleHeight * this.camera.aspect;
+        // 文字列の総幅 = S * advance（CJKはほぼ正方形なので代表アスペクト1.0で概算）
+        const advance = (chars.length - 1) * GAP_RATIO + 1.0;
+        const isMobile = window.innerWidth < 768;
+        // 可視幅の86%に収め、スマホで潰れない下限〜従来デスクトップ感の上限でクランプ
+        const fitS = (visibleWidth * 0.86) / advance;
+        const S = Math.max(isMobile ? 0.95 : 0.7, Math.min(isMobile ? 2.4 : 0.92, fitS));
+        const gap = S * GAP_RATIO;                        // 文字間隔
+        const totalW = (chars.length - 1) * gap;
         chars.forEach((ch, i) => {
             const { texture, aspect } = this.createTextTexture(ch, 'default');
             const mat = new THREE.SpriteMaterial({
