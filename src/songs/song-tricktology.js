@@ -66,7 +66,6 @@ export class SongTricktology extends BaseSong {
         this.mirrorVRM = null;    // 水面（lowerGroup）
         this.realMatCache = [];
         this.mirrorMatCache = [];
-        this.mirrorSilhouette = null;
         this.mikuZ = -5.0;
         this.mikuScale = this.isMobile ? 3.0 : 3.6;
 
@@ -388,25 +387,21 @@ export class SongTricktology extends BaseSong {
             console.log('[TRICKTOLOGY] Ground Rin loaded.');
         });
 
-        if (!this.isMobile) {
-            // 水面のリン（逆さま・薄暗い・呼吸位相ズレ）
-            loadOne((vrm) => {
-                if (!this.isActive) { this.disposeVRM(vrm); return; }
-                this.mirrorVRM = vrm;
-                vrm.scene.position.set(0, 0, this.mikuZ);
-                vrm.scene.rotation.y = 0;
-                vrm.scene.rotation.z = Math.PI;
-                vrm.scene.scale.setScalar(this.mikuScale);
-                this.setupRelaxedPose(vrm);
-                settleSpringBones(vrm);
-                this.cacheMaterials(vrm, this.mirrorMatCache);
-                this.lowerGroup.add(vrm.scene);
-                console.log('[TRICKTOLOGY] Water Rin loaded.');
-            });
-        } else {
-            this.mirrorSilhouette = this.createSilhouetteSprite();
-            this.lowerGroup.add(this.mirrorSilhouette);
-        }
+        // 水面のリン（逆さま・薄暗い・呼吸位相ズレ）。
+        // スマホでも本物の水鏡リンを映すため2体目のVRMを必ずロードする。
+        loadOne((vrm) => {
+            if (!this.isActive) { this.disposeVRM(vrm); return; }
+            this.mirrorVRM = vrm;
+            vrm.scene.position.set(0, 0, this.mikuZ);
+            vrm.scene.rotation.y = 0;
+            vrm.scene.rotation.z = Math.PI;
+            vrm.scene.scale.setScalar(this.mikuScale);
+            this.setupRelaxedPose(vrm);
+            settleSpringBones(vrm);
+            this.cacheMaterials(vrm, this.mirrorMatCache);
+            this.lowerGroup.add(vrm.scene);
+            console.log('[TRICKTOLOGY] Water Rin loaded.');
+        });
     }
 
     cacheMaterials(vrm, cache) {
@@ -438,34 +433,6 @@ export class SongTricktology extends BaseSong {
         if (ru) ru.rotation.z = -Math.PI / 2.8;
         if (ll) ll.rotation.y = Math.PI / 12;
         if (rl) rl.rotation.y = -Math.PI / 12;
-    }
-
-    createSilhouetteSprite() {
-        const canvas = document.createElement('canvas');
-        canvas.width = 128;
-        canvas.height = 256;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'rgba(10, 26, 44, 0.9)';
-        ctx.beginPath();
-        ctx.moveTo(52, 90); ctx.lineTo(76, 90); ctx.lineTo(86, 250); ctx.lineTo(42, 250);
-        ctx.closePath(); ctx.fill();
-        ctx.beginPath(); ctx.arc(64, 62, 28, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.ellipse(26, 120, 12, 70, 0.18, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.ellipse(102, 120, 12, 70, -0.18, 0, Math.PI * 2); ctx.fill();
-        const g = ctx.createLinearGradient(0, 0, 0, 256);
-        g.addColorStop(0, 'rgba(6,16,26,0.0)');
-        g.addColorStop(1, 'rgba(6,16,26,0.65)');
-        ctx.globalCompositeOperation = 'source-atop';
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, 128, 256);
-
-        const tex = new THREE.CanvasTexture(canvas);
-        const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.7, depthWrite: false });
-        const sprite = new THREE.Sprite(mat);
-        const h = this.mikuScale * 1.55;
-        sprite.scale.set(h * 0.5, -h, 1);
-        sprite.position.set(0, -h / 2, this.mikuZ);
-        return sprite;
     }
 
     // ───────────────────────── 歌詞テクスチャ ─────────────────────────
@@ -1309,10 +1276,6 @@ export class SongTricktology extends BaseSong {
         this.mirrorLight.intensity = 0.7 + 1.6 * Math.max(0, waterB - 0.45);
         if (this.realMatCache.length) this.applyWorldMaterial(this.realMatCache, 'ground', Math.max(0.05, groundB), collapseT, t);
         if (this.mirrorMatCache.length) this.applyWorldMaterial(this.mirrorMatCache, 'water', Math.max(0.05, waterB * 0.95), collapseT, t);
-        if (this.mirrorSilhouette) {
-            this.mirrorSilhouette.material.opacity = Math.min(1, 0.7 * Math.max(0, waterB));
-            this.mirrorSilhouette.position.x = Math.sin(t * 2.2) * 0.06 * (0.3 + this.waveEnergy);
-        }
 
         // ── VRM ──
         this.updateMikus(t, delta, collapseT);
@@ -1608,13 +1571,6 @@ export class SongTricktology extends BaseSong {
         }
         this.realMatCache = [];
         this.mirrorMatCache = [];
-
-        if (this.mirrorSilhouette) {
-            if (this.mirrorSilhouette.parent) this.mirrorSilhouette.parent.remove(this.mirrorSilhouette);
-            if (this.mirrorSilhouette.material.map) this.mirrorSilhouette.material.map.dispose();
-            this.mirrorSilhouette.material.dispose();
-            this.mirrorSilhouette = null;
-        }
 
         if (this.choiceOverlay && this.choiceOverlay.parentNode) {
             this.choiceOverlay.parentNode.removeChild(this.choiceOverlay);
