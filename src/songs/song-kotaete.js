@@ -44,7 +44,9 @@ export class SongKotaete extends BaseSong {
         this.mikuLoaded = false;
         this.mikuGlow = null;
         this.mikuPulse = 0;          // 歌唱/反応のパルス(0..1, 毎フレーム減衰)
-        this.mikuPos = new THREE.Vector3(0, WATER_Y, -34);
+        // 対岸だが「ミクだと分かる」近さに置く(遠すぎるとシルエットが潰れる)
+        this.mikuPos = new THREE.Vector3(0, WATER_Y, -19);
+        this.mikuScale = 3.5;
 
         // ---- 演出の生きているもの ----
         this.ripples = [];           // 水面に広がる波紋リング
@@ -68,6 +70,9 @@ export class SongKotaete extends BaseSong {
         this._lastPhraseStart = -1;
         this._lastWordStart = -1;
         this._lastFrameReal = performance.now();
+        // 連打で歌詞が乱発されないようにするクールダウン/重複ガード
+        this._lastTouchLyricAt = -Infinity;
+        this._lastLyricText = null;
 
         // ---- レイキャスト(水面ヒット) ----
         this._raycaster = new THREE.Raycaster();
@@ -121,20 +126,27 @@ export class SongKotaete extends BaseSong {
         this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
-        // 静かな夜なので光は控えめ。ミクは逆光気味のシルエットに保つ。
-        this.ambientLight = new THREE.AmbientLight(0x2a3358, 1.1);
+        // 静かな夜だが、ミクが「誰か」分かる程度には起こす。
+        this.ambientLight = new THREE.AmbientLight(0x33406e, 1.4);
         this.scene.add(this.ambientLight);
 
-        // 対岸の奥(月の方向)からの弱いリムライト。ミクの輪郭をうっすら起こす。
-        this.rimLight = new THREE.DirectionalLight(0x9fb4e0, 1.2);
-        this.rimLight.position.set(3, 9, -60);
+        // 月の方向からのリムライト(輪郭を立てる)
+        this.rimLight = new THREE.DirectionalLight(0xbcccF0, 2.0);
+        this.rimLight.position.set(3, 9, -45);
         this.scene.add(this.rimLight);
+
+        // カメラ側からの柔らかいフィル(シルエットを潰しすぎず顔/衣装をうっすら見せる)
+        this.fillLight = new THREE.DirectionalLight(0x9fb0d8, 0.9);
+        this.fillLight.position.set(0, 4, 14);
+        this.scene.add(this.fillLight);
     }
 
     buildLake() {
         this.lakeGroup = new THREE.Group();
         this.scene.add(this.lakeGroup);
         this.lakeItems = [];
+        // 中央の前景草は歌詞の視認性を下げるので抑制する
+        this.skipForegroundGrass = true;
         // ctx として this を渡す(isMobile / camera / scene / starField を参照する)
         buildNightLake(THREE, this, this.lakeGroup, this.lakeItems);
     }
@@ -190,7 +202,7 @@ export class SongKotaete extends BaseSong {
                 const vrm = gltf.userData.vrm;
                 this.currentVRM = vrm;
                 this.scene.add(vrm.scene);
-                vrm.scene.scale.setScalar(3.0);
+                vrm.scene.scale.setScalar(this.mikuScale);
                 vrm.scene.position.set(this.mikuPos.x, WATER_Y, this.mikuPos.z);
                 vrm.scene.rotation.y = 0; // カメラ(プレイヤー)の方を向いて歌う
                 this.setupStandPose(vrm);
@@ -207,8 +219,8 @@ export class SongKotaete extends BaseSong {
                     depthWrite: false,
                 });
                 this.mikuGlow = new THREE.Sprite(glowMat);
-                this.mikuGlow.scale.set(8, 8, 1);
-                this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 3.2, this.mikuPos.z - 0.5);
+                this.mikuGlow.scale.set(10, 10, 1);
+                this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 4.0, this.mikuPos.z - 0.5);
                 this.mikuGlow.renderOrder = 2;   // 水面より上に描く
                 this.scene.add(this.mikuGlow);
 
@@ -246,8 +258,8 @@ export class SongKotaete extends BaseSong {
         if (spine) spine.rotation.x = this.mikuPulse * 0.06;
 
         if (this.mikuGlow) {
-            this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 3.2, this.mikuPos.z - 0.5);
-            this.mikuGlow.material.opacity = 0.26 + this.mikuPulse * 0.4;
+            this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 4.0, this.mikuPos.z - 0.5);
+            this.mikuGlow.material.opacity = 0.32 + this.mikuPulse * 0.4;
             this.mikuGlow.material.color.copy(this.answerColor).lerp(this._white, 0.5);
         }
 
@@ -286,13 +298,20 @@ export class SongKotaete extends BaseSong {
         this.spawnMote(hit);
         this.reactMiku(0.7);
 
-        // 近くに漂う歌詞があれば共鳴(明るく・速く対岸へ)。無ければ今の歌詞を水面から立ち上げる。
+        // 近くに漂う歌詞があれば共鳴(明るく・速く対岸へ)。
+        // 無いときだけ今の歌詞を立ち上げるが、連打での乱発を防ぐため
+        // クールダウン(0.9秒)＋同一フレーズの再発射禁止でゲートする。
         const near = this.pickNearLyric(event.clientX, event.clientY);
         if (near) {
             this.resonateLyric(near);
         } else {
             const text = this.currentLyricText();
-            if (text) this.spawnLyric(text, hit, { dur: 4.2, resonated: true });
+            const tnow = performance.now();
+            if (text && text !== this._lastLyricText && tnow - this._lastTouchLyricAt > 900) {
+                this.spawnLyric(text, hit, { dur: 4.2, resonated: true });
+                this._lastTouchLyricAt = tnow;
+                this._lastLyricText = text;
+            }
         }
     }
 
@@ -553,6 +572,8 @@ export class SongKotaete extends BaseSong {
                 const sx = (Math.random() - 0.5) * 9;
                 const sz = this.camera.position.z - (9 + Math.random() * 7);
                 this.spawnLyric(ph.text, new THREE.Vector3(sx, WATER_Y + 0.7, sz), { dur: 8.0, resonated: false });
+                // この行は既に流れているので、タップでの重複発射を抑止する
+                this._lastLyricText = ph.text;
             }
         }
 
