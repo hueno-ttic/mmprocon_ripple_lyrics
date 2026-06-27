@@ -209,6 +209,7 @@ export class SongKotaete extends BaseSong {
                 this.mikuGlow = new THREE.Sprite(glowMat);
                 this.mikuGlow.scale.set(8, 8, 1);
                 this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 3.2, this.mikuPos.z - 0.5);
+                this.mikuGlow.renderOrder = 2;   // 水面より上に描く
                 this.scene.add(this.mikuGlow);
 
                 console.log('[KOTAETE] Miku VRM loaded (mizukagami).');
@@ -312,14 +313,16 @@ export class SongKotaete extends BaseSong {
         const mat = new THREE.MeshBasicMaterial({
             map: this.ringTexture,
             transparent: true,
-            opacity: 0.55,
+            opacity: 0.75,
             depthWrite: false,
+            depthTest: false,                  // 水面(renderOrder 1, ほぼ不透明)の上に必ず描く
             blending: THREE.AdditiveBlending,
             color: this.answerColor.clone().lerp(this._white, 0.55),
         });
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(point.x, WATER_Y + 0.03, point.z);
         mesh.scale.setScalar(1.6);
+        mesh.renderOrder = 3;                  // 水面より後(=上)に描画
         this.scene.add(mesh);
         this.ripples.push({ mesh, mat, geo, life: 0, dur: 1.9 });
     }
@@ -352,6 +355,7 @@ export class SongKotaete extends BaseSong {
         const h = 1.7;
         spr.scale.set(h * aspect, h, 1);
         spr.position.set(point.x, WATER_Y + 0.7, point.z);
+        spr.renderOrder = 4;                 // 水面より上に描く
         this.scene.add(spr);
 
         // 対岸のミクの少し手前・上を目標に流す(吸い込まれていくように)
@@ -420,6 +424,7 @@ export class SongKotaete extends BaseSong {
         const s = new THREE.Sprite(mat);
         s.position.set(from.x, WATER_Y + 0.6, from.z);
         s.scale.set(1.2, 1.2, 1);
+        s.renderOrder = 4;                   // 水面より上に描く
         this.scene.add(s);
         const target = new THREE.Vector3(this.mikuPos.x, WATER_Y + 2.6, this.mikuPos.z);
         this.lightMotes.push({ s, mat, from: s.position.clone(), target, life: 0, dur: 1.3 });
