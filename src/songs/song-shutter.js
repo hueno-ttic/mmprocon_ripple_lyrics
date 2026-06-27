@@ -6,6 +6,7 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
 import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
+import { ShutterPoseEditor, loadUserPoses, saveUserPoses } from './shutterPoseEditor.js';
 import { addRipple } from '../lake/lakeMemory.js';
 
 // 「湖／水の循環」要素のオン/オフを束ねる単一フラグ。
@@ -255,6 +256,11 @@ export class SongShutter extends BaseSong {
         this._poseHoldAmt = 0;       // ホールド度の平滑値(0..1。移動抑制に使用)
         this._poseBtnTimer = null;   // ボタンのハイライト解除タイマー
 
+        // --- ユーザー向けポーズ作成エディタ（自作ポーズで撮影） ---
+        this.userPoses = loadUserPoses();   // localStorage 永続のマイポーズ
+        this.poseEditing = false;           // 編集モード中フラグ(撮影/グルーヴを抑止)
+        this.poseEditor = null;             // ShutterPoseEditor 実体(init で生成)
+
         // --- 被写体VRM（「シャッターチャンス」はミク&リンのデュエット曲。2体を並べる） ---
         this.mikuVRM = null;         // 主役(ミク)。ライティング/破棄の後方互換参照
         this.subjects = [];          // 被写体ランタイム配列 { key, vrm, baseX, baseRotY, poseIndex, forward }
@@ -490,16 +496,10 @@ export class SongShutter extends BaseSong {
             slider.addEventListener('input', this.boundOnSliderInput);
         }
 
-        // 「かわいいポーズ」ボタンの登録。押すと被写体が数秒そのポーズをキメる。
-        // pointerdown/touchstart で伝播を止め、撮影（クリック）やカメラ首振りに巻き込まれないようにする。
-        if (this.viewfinder) {
-            this.viewfinder.querySelectorAll('.shutter-pose-btn').forEach((btn) => {
-                const id = btn.getAttribute('data-pose');
-                btn.addEventListener('pointerdown', (e) => e.stopPropagation());
-                btn.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
-                btn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); this.triggerCutePose(id); });
-            });
-        }
+        // ポーズ作成エディタを用意し、「かわいいポーズ」バー（プリセット＋マイポーズ＋作る）を構築。
+        // バーの中身は refreshPoseBar() に集約（保存/削除のたびに再生成・再バインドする）。
+        this.poseEditor = new ShutterPoseEditor(this);
+        this.refreshPoseBar();
 
         window.addEventListener('resize', this.boundOnResize);
         window.addEventListener('keydown', this.boundOnKeyDown);
@@ -882,9 +882,70 @@ export class SongShutter extends BaseSong {
         this._danceToastTimer = setTimeout(() => { if (el) el.style.opacity = '0'; }, 1400);
     }
 
+    // プリセット(SHUTTER_CUTE_POSES)＋ユーザー自作(userPoses)を結合した全ポーズ。
+    // ポーズバーの描画と triggerCutePose の検索はこれを単一の真実として参照する。
+    getAllCutePoses() {
+        return [...SHUTTER_CUTE_POSES, ...(this.userPoses || [])];
+    }
+
+    // ポーズバー（かわいいポーズ）の中身を再生成・再バインド。
+    // プリセット → マイポーズ(削除×付き) → 「＋作る」(エディタ起動) の順。
+    refreshPoseBar() {
+        const bar = this.viewfinder && this.viewfinder.querySelector('#shutter-pose-bar');
+        if (!bar) return;
+        const esc = (s) => String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        const btn = (p) => `
+            <button class="shutter-pose-btn${p.user ? ' is-user' : ''}" data-pose="${esc(p.id)}" title="${esc(p.label)}">
+                <span class="pose-emoji">${esc(p.emoji || '⭐')}</span>
+                <span class="pose-label">${esc(p.label)}</span>
+                ${p.user ? `<span class="pose-del" data-del="${esc(p.id)}" title="削除">×</span>` : ''}
+            </button>`;
+        bar.innerHTML = `<span class="pose-bar-label">POSE</span>` +
+            this.getAllCutePoses().map(btn).join('') +
+            `<button class="shutter-pose-btn shutter-pose-create" data-create="1" title="自分のポーズを作る">
+                <span class="pose-emoji">＋</span>
+                <span class="pose-label">作る</span>
+            </button>`;
+        // 撮影/カメラ首振りへ巻き込まれないよう伝播を止めて再バインド
+        bar.querySelectorAll('.shutter-pose-btn').forEach((b) => {
+            b.addEventListener('pointerdown', (e) => e.stopPropagation());
+            b.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        });
+        bar.querySelectorAll('.shutter-pose-btn[data-pose]').forEach((b) => {
+            b.addEventListener('click', (e) => {
+                e.stopPropagation(); e.preventDefault();
+                const del = e.target.closest('.pose-del');
+                if (del) { this.deleteUserPose(del.getAttribute('data-del')); return; }
+                this.triggerCutePose(b.getAttribute('data-pose'));
+            });
+        });
+        const createBtn = bar.querySelector('.shutter-pose-create');
+        if (createBtn) createBtn.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); this.openPoseEditor(); });
+    }
+
+    // エディタを開く（撮影モードのサブモードへ）。
+    openPoseEditor(baseId) {
+        if (this.poseEditor) this.poseEditor.open(baseId);
+    }
+
+    // エディタから渡された自作ポーズを永続化し、ポーズバーへ反映。
+    saveUserPose(entry) {
+        if (!entry || !entry.id || !entry.pose) return;
+        this.userPoses = [...(this.userPoses || []), entry];
+        saveUserPoses(this.userPoses);
+        this.refreshPoseBar();
+    }
+
+    // 自作ポーズを削除し、ポーズバーへ反映。
+    deleteUserPose(id) {
+        this.userPoses = (this.userPoses || []).filter((p) => p.id !== id);
+        saveUserPoses(this.userPoses);
+        this.refreshPoseBar();
+    }
+
     // 「かわいいポーズ」ボタン: 指定ポーズを一定時間ホールドする（ホールド中はグルーヴ抑制＆移動も抑制）。
     triggerCutePose(poseId) {
-        const cp = SHUTTER_CUTE_POSES.find((p) => p.id === poseId);
+        const cp = this.getAllCutePoses().find((p) => p.id === poseId);
         if (!cp) return;
         const holdMs = 3200;
         this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId, startedAt: performance.now() };
@@ -1770,6 +1831,19 @@ export class SongShutter extends BaseSong {
                 background: rgba(216, 90, 48, 0.8); border-color: #FFEE11;
                 box-shadow: 0 0 14px rgba(255, 238, 17, 0.6);
             }
+            /* マイポーズ（自作）と「＋作る」ボタン */
+            .shutter-pose-btn.is-user { position: relative; border-color: rgba(255, 238, 17, 0.55); }
+            .shutter-pose-btn .pose-del {
+                position: absolute; top: -6px; right: -6px; width: 16px; height: 16px;
+                display: flex; align-items: center; justify-content: center;
+                font-size: 12px; line-height: 1; color: #fff; background: rgba(180, 40, 30, 0.95);
+                border: 1px solid #ffd; border-radius: 50%; cursor: pointer;
+            }
+            .shutter-pose-btn.shutter-pose-create {
+                border-style: dashed; border-color: rgba(255, 238, 17, 0.7);
+                background: rgba(255, 238, 17, 0.08);
+            }
+            .shutter-pose-btn.shutter-pose-create .pose-emoji { color: #FFEE11; font-weight: 700; }
             @media (max-width: 767px) {
                 #shutter-contactsheet .cs-sheet { width: 92vw; padding: 16px 12px 12px; }
                 .cs-grid { grid-template-columns: repeat(3, 1fr); gap: 7px; max-height: 52vh; }
@@ -1891,16 +1965,8 @@ export class SongShutter extends BaseSong {
                 <span style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; user-select: none;">[-]</span>
             </div>
 
-            <!-- かわいいポーズ・ボタン（押すと被写体が数秒そのポーズをキメる） -->
-            <div id="shutter-pose-bar">
-                <span class="pose-bar-label">POSE</span>
-                ${SHUTTER_CUTE_POSES.map(p => `
-                    <button class="shutter-pose-btn" data-pose="${p.id}" title="${p.label}">
-                        <span class="pose-emoji">${p.emoji}</span>
-                        <span class="pose-label">${p.label}</span>
-                    </button>
-                `).join('')}
-            </div>
+            <!-- かわいいポーズ・バー（中身は refreshPoseBar() が生成: プリセット＋マイポーズ＋「作る」） -->
+            <div id="shutter-pose-bar"></div>
         `;
 
         this.songWrapper.appendChild(this.viewfinder);
@@ -2551,6 +2617,13 @@ export class SongShutter extends BaseSong {
             this._poseHoldAmt += ((posing ? 1 : 0) - this._poseHoldAmt) * Math.min(1, deltaTime * 5);
             animateList.forEach((subject) => {
                 const isShown = subject.key === this.shownKey;
+
+                // ポーズ編集中: エディタが被写体を中央へ据えて editPose をライブ反映する。
+                // グルーヴ・うろつき・サビ発光は止め、形を確認しやすくする。
+                if (this.poseEditing && this.poseEditor) {
+                    this.poseEditor.applyToSubject(subject, deltaTime);
+                    return;
+                }
 
                 // 腕の型: ポーズ・ホールド中は指定ポーズ最優先。通常はプリセットの armStyle を基調に
                 // （穏やか系はサビで cheer へ切替えて盛り上げる）
@@ -3236,6 +3309,10 @@ export class SongShutter extends BaseSong {
     }
 
     takePhoto() {
+        // ポーズ編集中は撮影入力をすべて無効化（編集の「このポーズで撮る」で閉じてから撮る）
+        if (this.poseEditing) {
+            return;
+        }
         if (!playerManager.player || !playerManager.player.isPlaying || !playerManager.player.timer) {
             return;
         }
@@ -4159,6 +4236,7 @@ export class SongShutter extends BaseSong {
         if (this._csMarkTimers) { this._csMarkTimers.forEach(clearTimeout); this._csMarkTimers = []; }
         clearTimeout(this._poseBtnTimer);
         this.poseOverride = null;
+        if (this.poseEditor) { this.poseEditor.destroy(); this.poseEditor = null; }
         if (this.filmStripEl && this.filmStripEl.parentNode) {
             this.filmStripEl.parentNode.removeChild(this.filmStripEl);
         }
