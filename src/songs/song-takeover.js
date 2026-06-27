@@ -281,7 +281,7 @@ export class SongTakeover extends BaseSong {
                     font-family:"Courier New",monospace;
                     font-weight:bold;
                     text-align:left;
-                    padding:12px 28px;
+                    padding:15px 34px;
                     background:#05000a; /* Solid black/purple background, no transparency */
                     border:1px solid rgba(255, 58, 58, 0.3);
                     letter-spacing:2px;
@@ -1175,8 +1175,9 @@ export class SongTakeover extends BaseSong {
         const fontSizeVal = isMobile ? baseFontSize * 0.75 : baseFontSize;
         const scrambledWidth = winLen * (fontSizeVal * 0.65 + (isMobile ? 2.5 : 3.5));
         const plainWidth = group.text.length * (fontSizeVal * (isMobile ? 0.9 : 1.1));
-        const widthPx = Math.max(scrambledWidth, plainWidth) + (isMobile ? 16 : 48);
-        let heightPx = fontSizeVal * 1.2 + (isMobile ? 8 : 20);
+        // ボックスを少し大きくした分、重なり判定の余白も合わせて広げて間隔を保つ
+        const widthPx = Math.max(scrambledWidth, plainWidth) + (isMobile ? 16 : 58);
+        let heightPx = fontSizeVal * 1.2 + (isMobile ? 8 : 30);
         if (hasHint) {
             heightPx += isMobile ? 18 : 25;
         }
@@ -1195,10 +1196,10 @@ export class SongTakeover extends BaseSong {
 
         // 出現領域: 通常は中央寄せ（端への出現を抑える）。サビは端まで広げ、
         // 端から中央端末へ流入してくる密度・混沌感を出す（#113 提案1・3）。
-        const regionLeft   = climax ? 8  : 17;
-        const regionWidth  = climax ? 84 : 66;
-        const regionTop    = climax ? 16 : 23;
-        const regionHeight = climax ? 60 : 48;
+        const regionLeft   = climax ? 8  : 14;
+        const regionWidth  = climax ? 84 : 72;
+        const regionTop    = climax ? 16 : 21;
+        const regionHeight = climax ? 60 : 54;
         const cellW = regionWidth / cols;
         const cellH = regionHeight / rows;
 
