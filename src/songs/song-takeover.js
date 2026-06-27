@@ -448,13 +448,16 @@ export class SongTakeover extends BaseSong {
                     position: absolute;
                     top: 0; left: 0;
                     width: 100%; height: 50%;   /* JSが (1 - greenCoverage) を反映 */
+                    /* 境界(下端=0%)を濃い赤にして、緑が引いた帯が即・赤に戻るようにする。
+                       上端へ向けては少しだけ薄める（敵領域は一様に赤い印象）。 */
                     background:
                         linear-gradient(to top,
-                            rgba(255, 40, 48, 0) 0%,
-                            rgba(180, 20, 40, 0.30) 55%,
-                            rgba(255, 58, 58, 0.46) 100%);
-                    border-bottom: 2px solid rgba(255, 58, 58, 0.85);
-                    box-shadow: 0 6px 26px rgba(255, 58, 58, 0.5);
+                            rgba(255, 48, 54, 0.50) 0%,
+                            rgba(190, 26, 44, 0.36) 55%,
+                            rgba(255, 58, 58, 0.42) 100%);
+                    border-bottom: 2px solid rgba(255, 64, 64, 0.92);
+                    /* グローは境界を越えないよう内向き(inset)。赤領域の中だけを光らせる。 */
+                    box-shadow: inset 0 -12px 24px rgba(255, 58, 58, 0.40);
                     mix-blend-mode: screen;
                     transition: height 0.22s linear;
                     pointer-events: none;
@@ -464,13 +467,14 @@ export class SongTakeover extends BaseSong {
                     position: absolute;
                     bottom: 0; left: 0;
                     width: 100%; height: 12%;   /* JSが greenCoverage を反映 */
+                    /* 境界(上端=0%)を濃い緑に。グローは内向きで境界をまたいで滲ませない。 */
                     background:
                         linear-gradient(to bottom,
-                            rgba(0, 255, 170, 0) 0%,
-                            rgba(0, 200, 140, 0.28) 50%,
-                            rgba(0, 255, 170, 0.52) 100%);
-                    border-top: 2px solid rgba(0, 255, 170, 0.9);
-                    box-shadow: 0 -6px 30px rgba(0, 255, 170, 0.55);
+                            rgba(0, 255, 170, 0.50) 0%,
+                            rgba(0, 210, 142, 0.32) 55%,
+                            rgba(0, 255, 170, 0.46) 100%);
+                    border-top: 2px solid rgba(0, 255, 170, 0.92);
+                    box-shadow: inset 0 12px 26px rgba(0, 255, 170, 0.40);
                     mix-blend-mode: screen;
                     transition: height 0.22s linear, filter 0.4s ease;
                     pointer-events: none;
@@ -1021,6 +1025,8 @@ export class SongTakeover extends BaseSong {
         el.addEventListener('click', async () => {
             if (target.state !== 'scrambled') return;
             if (this._completeFired) return; // 終局演出後は操作を受け付けない
+            // PAUSE中は復号を受け付けない（陣取りが止まっているので操作も無効）
+            if (!(playerManager.player && playerManager.player.isPlaying)) return;
             target.state = 'decrypting'; // guard against double-click
             clearInterval(target.scrambleTimer);
             try {
@@ -1423,9 +1429,13 @@ export class SongTakeover extends BaseSong {
             this.buildLyricCard();
         }
 
-        // 開幕の赤い WARNING（システム侵略アラート）。選曲→曲ロードのカーテンが
-        // 開く＝タイマー準備完了の瞬間に一度だけ起動する（幕裏で消えるのを防ぐ）。
-        if (!this._warningShown && playerManager.isTimerReady) {
+        // 再生中かどうか（PAUSE中は陣取りの減衰を止める／WARNINGの起点に使う）
+        const isPlaying = !!(playerManager.player && playerManager.player.isPlaying);
+
+        // 開幕の赤い WARNING（システム侵略アラート）。タイマー準備完了(isTimerReady)では
+        // フォント待ちのカーテンが開く前に消えることがあるため、実際に再生が始まった
+        // 瞬間（ユーザーがPlayを押す＝確実にシーンを見ている）に一度だけ起動する。
+        if (!this._warningShown && isPlaying) {
             this._warningShown = true;
             this._showWarning();
         }
@@ -1459,8 +1469,10 @@ export class SongTakeover extends BaseSong {
         }
 
         // ── 制圧率の時間減衰（無操作だと赤がじわじわ再侵食する綱引き） ──
-        // 終局演出が出るまで、かつ歌詞カード構築後のみ進行させる。
-        if (!this._completeFired && this.lyricCardBuilt) {
+        // 終局演出が出るまで・歌詞カード構築後・かつ再生中のみ進行させる。
+        // PAUSE中は減衰を止めて境界線も静止させる（_lastFrameAtもリセットし、
+        // 再開時に停止していた分の dt が一気に効いて飛ばないようにする）。
+        if (!this._completeFired && this.lyricCardBuilt && isPlaying) {
             const now = performance.now();
             const dt = this._lastFrameAt ? Math.min(0.1, (now - this._lastFrameAt) / 1000) : 0;
             this._lastFrameAt = now;
@@ -1473,6 +1485,9 @@ export class SongTakeover extends BaseSong {
                     this._updateGauge();
                 }
             }
+        } else {
+            // PAUSE/未構築/終局中は計測をリセット（再開時の dt 暴発を防ぐ）
+            this._lastFrameAt = 0;
         }
 
         // Background debris rotation ＋ 疾走感: 奥→手前へ流れ、近づいたら奥へ回帰
