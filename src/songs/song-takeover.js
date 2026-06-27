@@ -1025,6 +1025,8 @@ export class SongTakeover extends BaseSong {
         el.addEventListener('click', async () => {
             if (target.state !== 'scrambled') return;
             if (this._completeFired) return; // 終局演出後は操作を受け付けない
+            // PAUSE中は復号を受け付けない（陣取りが止まっているので操作も無効）
+            if (!(playerManager.player && playerManager.player.isPlaying)) return;
             target.state = 'decrypting'; // guard against double-click
             clearInterval(target.scrambleTimer);
             try {
