@@ -40,7 +40,10 @@ const CAM_Y_OFF = 2.6;        // ミクより少し上を見る
 const LOOK_Y_OFF = 2.4;
 
 // ── まだ行けるよモード（#119: 暴走は残す。破綻は消す。）──
-const LEAF_HARD_CAP = 64;       // 葉の総数上限(超過分は通過済みの下方から回収=重さ防止)
+// 葉の総数上限。連打で生やす足場はラベル無し(歌詞は雲側)なので大きく取れる。
+// 上限が大きいほど“塔”が高くなり、ミクのスキップ量が増えて超ジャンプがぶっ飛ぶ。
+const LEAF_CAP_PC = 512;
+const LEAF_CAP_MOBILE = 256;
 const CAM_LAG = 1.4;            // カメラ追従の鈍さ(小さいほど遅れて追う=暴走感)
 const CAM_MAX_LEAD = 7.0;       // ミクがカメラより上へ離れてよい上限(超えたら一気に追う=画面外消失防止)
 const SPAM_WINDOW = 320;        // 連打判定の時間窓(ms)
@@ -54,6 +57,7 @@ export class SongKotaete extends BaseSong {
     constructor(container, songId) {
         super(container, songId);
         this.isMobile = window.innerWidth < 768;
+        this._leafCap = this.isMobile ? LEAF_CAP_MOBILE : LEAF_CAP_PC;
 
         this.scene = null;
         this.camera = null;
@@ -78,6 +82,7 @@ export class SongKotaete extends BaseSong {
         this.climbState = 'idle';      // 'idle' | 'jumping'
         this.jump = null;              // {fromX,fromY,toX,toY,toLeaf,t}
         this._jumpCooldown = 0;
+        this._megaAt = -Infinity;      // 直近の“ぶっ飛び”大ジャンプ時刻(周期制御)
         this.mikuPulse = 0;
         this.faceDir = 0;              // -1左 / 0正面 / +1右(進行方向)
 
@@ -459,10 +464,14 @@ export class SongKotaete extends BaseSong {
             foliage.rotation.z = side * 0.14;
             group.add(foliage);
 
-            // 可読テキスト札(カメラ正対・暗い帯で同化を防ぐ)。葉の内側に寄せる。
-            label = this._makeTextLabel(text || '♪');
-            label.position.set(side * -0.15, 0.05, 0.4);
-            group.add(label);
+            // 歌詞は雲側で読ませるので、連打で量産する足場(label:false)はラベル無しにして
+            // 1枚あたりのテクスチャ生成コストを抑える(=上限を大きく取れる/破綻防止)。
+            // 歌詞葉(レート制限・少数)だけ可読テキスト札を乗せる。
+            if (opts.label !== false && text) {
+                label = this._makeTextLabel(text);
+                label.position.set(side * -0.15, 0.05, 0.4);
+                group.add(label);
+            }
         }
         this.scene.add(group);
 
@@ -536,7 +545,9 @@ export class SongKotaete extends BaseSong {
             const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
             this.climbX = THREE.MathUtils.lerp(j.fromX, j.toX, ease);
             this.climbY = THREE.MathUtils.lerp(j.fromY, j.toY, ease);
-            const arc = Math.sin(t * Math.PI) * (0.8 + Math.abs(j.toY - j.fromY) * 0.18);
+            // 弧の高さは大ジャンプほど高いが、上限を付けて飛びすぎ→戻らないのを防ぐ。
+            const amp = Math.min(14, 0.8 + Math.abs(j.toY - j.fromY) * 0.18);
+            const arc = Math.sin(t * Math.PI) * amp;
             this._jumpArc = arc;
             this.mikuPulse = Math.max(this.mikuPulse, 0.5);
             if (t >= 1) {
@@ -564,11 +575,23 @@ export class SongKotaete extends BaseSong {
             const above = this.leaves
                 .filter(l => !l.landed && !l.isGoal && l.y > this.climbY + 0.15)
                 .sort((a, b) => a.y - b.y);
-            if (above.length >= 4) {
-                const skip = Math.min(above.length - 1, 1 + Math.floor(above.length / 4));
+            const now = performance.now();
+            // 普段は活発に登る(数枚スキップ)→ 雲・歌詞が見える。
+            // 葉が積み上がったら一定間隔で“ぶっ飛び”の大ジャンプを解放(緊張→解放)。
+            if (above.length >= 6 && now - this._megaAt > 1800) {
+                this._megaAt = now;
+                const top = above[above.length - 1];
+                const bonus = Math.min(26, 6 + above.length * 0.3); // 積み上がるほど高く打ち上がる
+                const land = this.spawnLeaf('', {
+                    y: top.y + bonus, side: (Math.random() < 0.5 ? -1 : 1), label: false,
+                });
+                land.confirmed = true;
+                target = land; level = 4;
+                above.forEach(l => { l.landed = true; }); // 通過した塔は下へ流して回収
+            } else if (above.length >= 2) {
+                const skip = Math.min(3, above.length - 1); // 通常は控えめ(雲・歌詞を見せる)
                 target = above[skip];
-                level = Math.min(4, Math.floor(above.length / 4));
-                // スキップした下の葉は通過済み扱い(回収対象になり、見た目は下へ流れる)
+                level = Math.min(2, skip);
                 for (let k = 0; k < skip; k++) above[k].landed = true;
             }
         }
@@ -708,10 +731,11 @@ export class SongKotaete extends BaseSong {
             for (let i = 0; i < burst; i++) {
                 // 上限は“生成を止める”のではなく“通過済みの葉を下から回収して席を空ける”で守る
                 // (生成を止めると、登り切った後に新しい足場が生えず操作不能になるため)。
-                if (this.leaves.length >= LEAF_HARD_CAP) this._recycleLeaves(true);
+                if (this.leaves.length >= this._leafCap) this._recycleLeaves(true);
                 const side = (i === 0) ? (p.x >= 0 ? 1 : -1) : (Math.random() < 0.5 ? -1 : 1);
                 const yy = baseY + i * LEAF_SPACING * (0.7 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.4;
-                const leaf = this.spawnLeaf(this._currentLyricText() || '♪', { y: yy, side });
+                // 量産する足場はラベル無し(歌詞は雲側)。大量でも軽い。
+                const leaf = this.spawnLeaf('', { y: yy, side, label: false });
                 leaf.confirmed = true; this.builtCount++;
             }
             this.dismissFirstInteractable();
@@ -815,7 +839,7 @@ export class SongKotaete extends BaseSong {
     // ので「上限で生成が止まって操作不能」にはならない。
     // makeRoom=true のときは、上限ぴったりでも1枚は席を空ける(生成直前の呼び出し用)。
     _recycleLeaves(makeRoom = false) {
-        const over = this.leaves.length - LEAF_HARD_CAP;
+        const over = this.leaves.length - this._leafCap;
         const target = makeRoom ? Math.max(1, over + 1) : over;
         if (target <= 0) return;
         let removed = 0;
@@ -906,7 +930,7 @@ export class SongKotaete extends BaseSong {
 
     // 雲を1つ生やす。lyric があれば歌詞札を乗せる。side で左右の空きへ寄せる。
     _spawnCloud(opts = {}) {
-        if (this._clouds.length >= (this.isMobile ? 12 : 18)) return null;
+        if (this._clouds.length >= (this.isMobile ? 14 : 24)) return null;
         const side = opts.side || this._cloudSide;
         this._cloudSide = -side; // 交互
         const group = new THREE.Group();
@@ -914,7 +938,8 @@ export class SongKotaete extends BaseSong {
         const xMin = opts.lyric ? 3.4 : 3.0;
         const xMax = opts.lyric ? 5.4 : 7.2;
         const x = side * (xMin + Math.random() * (xMax - xMin));
-        const y = (opts.y != null) ? opts.y : (this.climbY + 3 + Math.random() * 11);
+        // ミクが速く昇っても置いていかれないよう、上方向に広めの帯へ出す
+        const y = (opts.y != null) ? opts.y : (this.climbY + 4 + Math.random() * 20);
         group.position.set(x, y, opts.lyric ? -1.5 : -3 - Math.random() * 3);
 
         const puff = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -983,9 +1008,9 @@ export class SongKotaete extends BaseSong {
     }
 
     _updateClouds(dt) {
-        // 高度が上がるほど雲が増える。ミクが登っている間だけ供給。
+        // 高度が上がるほど雲が増える。ミクが速く昇っても空が埋まるよう供給を早める。
         const now = performance.now();
-        const rate = this.climbY > 6 ? 750 : 1100;
+        const rate = this.climbY > 6 ? 420 : 800;
         if (!this.finishing && now - this._lastCloudAt > rate) {
             this._lastCloudAt = now;
             this._spawnCloud({});
@@ -1010,8 +1035,8 @@ export class SongKotaete extends BaseSong {
                 const dx = Math.abs(c.group.position.x - mikuX);
                 if (dy < 1.7 && dx < c.halfW + 1.6) { this._scatterCloud(c); continue; }
             }
-            // 画面下方へ流れ去った雲は回収
-            if (c.group.position.y < this.camera.position.y - 13) { this._disposeCloud(c); }
+            // 画面下方へ流れ去った雲は回収(速い上昇でも少し長く残す)
+            if (c.group.position.y < this.camera.position.y - 20) { this._disposeCloud(c); }
         }
 
         // 霧散パーティクル
