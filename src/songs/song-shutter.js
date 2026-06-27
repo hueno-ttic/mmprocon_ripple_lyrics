@@ -1857,9 +1857,9 @@ export class SongShutter extends BaseSong {
                 background: rgba(255, 238, 17, 0.08);
             }
             .shutter-pose-btn.shutter-pose-create .pose-emoji { color: #FFEE11; font-weight: 700; }
-            @media (max-width: 767px) {
-                #shutter-contactsheet .cs-sheet { width: 92vw; padding: 16px 12px 12px; }
-                .cs-grid { grid-template-columns: repeat(3, 1fr); gap: 7px; max-height: 52vh; }
+            @container (max-width: 767px) {
+                #shutter-contactsheet .cs-sheet { width: 92cqw; padding: 16px 12px 12px; }
+                .cs-grid { grid-template-columns: repeat(3, 1fr); gap: 7px; max-height: 52cqh; }
                 .cs-title { letter-spacing: 4px; }
                 #shutter-pose-bar { bottom: 58px; gap: 4px; padding: 5px 7px; }
                 .shutter-pose-btn { min-width: 42px; padding: 4px 5px; }

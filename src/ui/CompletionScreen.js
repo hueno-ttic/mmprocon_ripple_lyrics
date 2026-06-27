@@ -77,7 +77,7 @@ export class CompletionScreen {
         const title = document.createElement('h1');
         title.textContent = 'Ripple Lyrics';
         title.style.cssText = `
-            color: #fff; font-size: clamp(20px, 5vw, 34px);
+            color: #fff; font-size: clamp(14px, 2.83cqw, 34px);
             font-weight: 300; letter-spacing: 0.35em;
             margin: 0 0 10px; text-align: center;
             animation: cs-fadeup 0.7s ease both;
@@ -89,7 +89,7 @@ export class CompletionScreen {
         const subtitle = document.createElement('p');
         subtitle.textContent = '晴れた空の一滴は、湖になった ── 6つの問いすべてに向き合いました';
         subtitle.style.cssText = `
-            color: rgba(255,255,255,0.55); font-size: clamp(11px, 2.2vw, 13px);
+            color: rgba(255,255,255,0.55); font-size: clamp(9px, 1.08cqw, 13px);
             letter-spacing: 0.3em; margin: 0 0 36px; text-align: center;
             animation: cs-fadeup 0.7s 0.15s ease both;
             font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
@@ -99,9 +99,9 @@ export class CompletionScreen {
         // Song list
         const list = document.createElement('div');
         list.style.cssText = `
-            display: flex; flex-direction: column; gap: 10px;
-            margin-bottom: 40px; padding: 0 16px;
-            max-width: 340px; width: 100%;
+            display: flex; flex-direction: column; gap: 6px;
+            margin-bottom: 24px; padding: 0 16px;
+            max-width: min(260px, 80cqw); width: 100%;
         `;
 
         SONGS.forEach((song, i) => {
@@ -123,7 +123,7 @@ export class CompletionScreen {
             const name = document.createElement('span');
             name.textContent = song.title;
             name.style.cssText = `
-                color: rgba(255,255,255,0.82); font-size: clamp(11px, 2.8vw, 13px);
+                color: rgba(255,255,255,0.82); font-size: clamp(9px, 1.08cqw, 13px);
                 letter-spacing: 0.12em;
                 text-shadow: 0 0 8px ${song.color};
                 font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
@@ -139,10 +139,10 @@ export class CompletionScreen {
         const btn = document.createElement('button');
         btn.textContent = 'Ripple Lyricsへ';
         btn.style.cssText = `
-            padding: 11px 30px;
+            padding: 8px 22px;
             border: 1px solid rgba(255,255,255,0.35);
             background: transparent; color: rgba(255,255,255,0.75);
-            font-size: 12px; letter-spacing: 0.25em; cursor: pointer;
+            font-size: min(1cqw, 11px); letter-spacing: 0.25em; cursor: pointer;
             border-radius: 2px; transition: all 0.25s ease;
             animation: cs-fadeup 0.7s 1.2s ease both; opacity: 0;
             font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
@@ -169,10 +169,10 @@ export class CompletionScreen {
         shareBtn.style.cssText = `
             display: inline-block;
             margin-top: 16px;
-            padding: 9px 22px;
+            padding: 7px 18px;
             border: 1px solid rgba(29,161,242,0.6);
             background: rgba(29,161,242,0.12); color: rgba(29,161,242,0.9);
-            font-size: 11px; letter-spacing: 0.2em; cursor: pointer;
+            font-size: min(0.92cqw, 10px); letter-spacing: 0.2em; cursor: pointer;
             border-radius: 2px; text-decoration: none;
             transition: all 0.25s ease;
             animation: cs-fadeup 0.7s 1.35s ease both; opacity: 0;
@@ -191,7 +191,7 @@ export class CompletionScreen {
         const keyHint = document.createElement('p');
         keyHint.textContent = 'Enter / Esc でも閉じられます';
         keyHint.style.cssText = `
-            color: rgba(255,255,255,0.25); font-size: 11px;
+            color: rgba(255,255,255,0.25); font-size: min(0.92cqw, 10px);
             letter-spacing: 0.15em; margin-top: 14px;
             animation: cs-fadeup 0.7s 1.5s ease both; opacity: 0;
             font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;

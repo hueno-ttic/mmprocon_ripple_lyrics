@@ -196,7 +196,7 @@
     /* パネルがセーフエリアぶん上がるので、サムネイルも同量上げて重なりを保つ */
     bottom: calc(184px + env(safe-area-inset-bottom, 0px));            /* パネル上端(164px)より上に配置し被りを解消 */
     transform: translateX(-50%);
-    width: min(264px, 56vw);  /* 大きく表示 */
+    width: min(264px, 56cqw);  /* 大きく表示 */
     aspect-ratio: 1 / 1;
     border-radius: 16px;
     overflow: hidden;
@@ -235,8 +235,8 @@
         filter: blur(0) brightness(1);
     }
 }
-@media (max-width: 480px) {
-    .world-thumb-card { bottom: calc(196px + env(safe-area-inset-bottom, 0px)); width: min(200px, 52vw); }
+@container (max-width: 1024px), (max-height: 700px) {
+    .world-thumb-card { bottom: calc(85px + env(safe-area-inset-bottom, 0px)); width: min(96px, 24cqh); }
 }
 
 /* ── Song selection panel (bottom operation bar) ─────────── */
@@ -247,15 +247,15 @@
     touch-action: manipulation;
     /* スマホのブラウザ下部ツールバー/ホームインジケータに被って
        「この曲をはじめる」が押せなくなるのを防ぐためセーフエリアぶん底上げ */
-    bottom: calc(26px + env(safe-area-inset-bottom, 0px));
+    bottom: calc(clamp(8px, 2.17cqw, 26px) + env(safe-area-inset-bottom, 0px));
     left: 50%;
     transform: translateX(-50%);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 12px;
-    padding: 16px 24px 18px;
-    border-radius: 16px;
+    gap: clamp(4px, 1cqw, 12px);
+    padding: clamp(6px, 1.33cqw, 16px) clamp(12px, 2cqw, 24px) clamp(8px, 1.5cqw, 18px);
+    border-radius: clamp(10px, 1.33cqw, 16px);
     border: 1px solid color-mix(in srgb, var(--selection-color, #7F77DD) 40%, rgba(255,255,255,0.15));
     background: rgba(6, 10, 22, 0.62);
     backdrop-filter: blur(16px) saturate(130%);
@@ -264,8 +264,8 @@
                 0 0 24px color-mix(in srgb, var(--selection-color, #7F77DD) 18%, transparent);
     z-index: 100;
     pointer-events: auto;
-    min-width: min(320px, 86vw);
-    max-width: 92vw;
+    min-width: min(clamp(200px, 26.67cqw, 320px), 86cqw);
+    max-width: 92cqw;
     box-sizing: border-box;
     transition: border-color 0.4s ease, box-shadow 0.4s ease;
 }
@@ -273,20 +273,20 @@
 .world-selection-nav {
     display: flex;
     align-items: center;
-    gap: 18px;
+    gap: clamp(8px, 1.5cqw, 18px);
     width: 100%;
     justify-content: space-between;
 }
 
 .world-nav-btn {
-    width: 44px;
-    height: 44px;
+    width: clamp(28px, 3.67cqw, 44px);
+    height: clamp(28px, 3.67cqw, 44px);
     flex-shrink: 0;
     border-radius: 50%;
     border: 1px solid rgba(255, 255, 255, 0.3);
     background: rgba(255, 255, 255, 0.07);
     color: rgba(255, 255, 255, 0.85);
-    font-size: 15px;
+    font-size: clamp(10px, 1.25cqw, 15px);
     cursor: pointer;
     transition: background 0.18s, border-color 0.18s, transform 0.1s;
     display: flex;
@@ -313,7 +313,7 @@
 
 .world-selection-title {
     color: #fff;
-    font-size: 17px;
+    font-size: clamp(11px, 1.42cqw, 17px);
     font-weight: 700;
     letter-spacing: 0.08em;
     white-space: nowrap;
@@ -324,7 +324,7 @@
 
 .world-selection-artist {
     color: rgba(255, 255, 255, 0.6);
-    font-size: 12px;
+    font-size: clamp(8.5px, 1cqw, 12px);
     letter-spacing: 0.06em;
     margin-top: 2px;
     white-space: nowrap;
@@ -334,12 +334,12 @@
 
 .world-selection-start {
     width: 100%;
-    padding: 15px 28px;
-    border-radius: 10px;
+    padding: clamp(6px, 1.25cqw, 15px) clamp(14px, 2.33cqw, 28px);
+    border-radius: clamp(6px, 0.83cqw, 10px);
     border: 1px solid color-mix(in srgb, var(--selection-color, #7F77DD) 65%, transparent);
     background: color-mix(in srgb, var(--selection-color, #7F77DD) 42%, rgba(0,0,0,0.2));
     color: #fff;
-    font-size: 15.5px;
+    font-size: clamp(10px, 1.29cqw, 15.5px);
     font-weight: 700;
     letter-spacing: 0.15em;
     cursor: pointer;
@@ -357,17 +357,10 @@
     transform: scale(0.97);
 }
 
-@media (max-width: 480px) {
+@container (max-height: 500px) {
+    /* 縦が極めて狭いスマホ横持ち環境のみ、ボトム位置を限界まで下げてサムネイル被りを防止 */
     .world-selection-panel {
-        bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-        padding: 12px 16px 14px;
-    }
-    .world-selection-title {
-        font-size: 15px;
-    }
-    .world-nav-btn {
-        width: 44px;
-        height: 44px;
+        bottom: calc(4px + env(safe-area-inset-bottom, 0px));
     }
 }
 
@@ -521,10 +514,10 @@
 }
 
 /* Responsiveness for Hint Overlay & Song Labels on mobile */
-@media (max-width: 768px) {
+@container (max-width: 1024px), (max-height: 700px) {
     .song-hint-overlay {
-        font-size: 12px;
-        padding: 10px 18px;
+        font-size: 11px;
+        padding: 8px 14px;
         bottom: 95px;
         max-width: 90%;
         white-space: normal;
@@ -532,11 +525,15 @@
     }
 
     .song-title {
-        font-size: 18px;
+        font-size: 14px;
     }
 
     .song-artist {
-        font-size: 12px;
+        font-size: 10px;
+    }
+
+    .song-label--front .song-title {
+        font-size: 17px;
     }
 }
 
@@ -598,7 +595,7 @@
 }
 
 .song-tutorial-question {
-    font-size: clamp(17px, 3vw, 22px);
+    font-size: clamp(17px, 3cqw, 22px);
     font-weight: 300;
     line-height: 1.8;
     letter-spacing: 1px;
@@ -663,42 +660,43 @@
     box-shadow: 0 0 18px color-mix(in srgb, var(--tutorial-color, #7F77DD) 35%, transparent);
 }
 
-@media (max-width: 768px) {
+@container (max-width: 768px) {
     /* スマホは横向き強制でステージ高が低い(≒420px前後)。問い＋手順＋ボタンが
        縦に収まりスタートボタンが切れないよう、縦方向の余白・文字を全体に詰める。 */
-    .song-tutorial-content {
-        padding: 16px 18px;
+    .is-mobile .song-tutorial-content {
+        padding: 14px 16px;
+        width: min(340px, 84cqw);
     }
 
-    .song-tutorial-label {
-        margin-bottom: 8px;
+    .is-mobile .song-tutorial-label {
+        margin-bottom: 6px;
     }
 
-    .song-tutorial-question {
-        font-size: 15px;
-        line-height: 1.5;
-        margin: 0 0 12px 0;
-        padding: 10px 14px;
-    }
-
-    .song-tutorial-divider {
-        margin: 0 auto 12px;
-    }
-
-    .song-tutorial-steps {
-        gap: 8px;
-        margin-bottom: 14px;
-    }
-
-    .song-tutorial-step {
+    .is-mobile .song-tutorial-question {
         font-size: 12px;
-        line-height: 1.45;
+        line-height: 1.4;
+        margin: 0 0 10px 0;
+        padding: 8px 12px;
     }
 
-    .song-tutorial-btn {
-        min-height: 42px;
-        padding: 9px 30px;
-        font-size: 14px;
+    .is-mobile .song-tutorial-divider {
+        margin: 0 auto 10px;
+    }
+
+    .is-mobile .song-tutorial-steps {
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+
+    .is-mobile .song-tutorial-step {
+        font-size: 10px;
+        line-height: 1.4;
+    }
+
+    .is-mobile .song-tutorial-btn {
+        min-height: 36px;
+        padding: 7px 24px;
+        font-size: 12px;
         letter-spacing: 2px;
     }
 }
@@ -772,7 +770,7 @@
     font-weight: 400;
 }
 
-@media (max-width: 600px) {
+@container (max-width: 600px) {
     .kotaete-choice-container {
         flex-direction: column;
         gap: 16px;
@@ -867,17 +865,41 @@
     transition: transform 0.85s cubic-bezier(0.2, 0.7, 0.2, 1), opacity 0.85s ease-out;
 }
 
-@media (max-width: 768px) {
-    .to-tile {
+@container (max-width: 768px) {
+    .is-mobile .to-tile {
         font-size: 10px;
         padding: 2px 4px;
     }
-    .to-bg-container {
+    .is-mobile .to-bg-container {
         gap: 4px 6px;
         padding: 8px;
         top: 13%;
         left: 5%;
         width: 90%;
         height: 65%;
+    }
+}
+
+/* ── Mobile Landscape Layout Optimization (WorldUI) ── */
+@container (max-width: 1024px), (max-height: 700px) {
+    .lake-progress-counter {
+        top: calc(10px + env(safe-area-inset-top, 0px));
+        right: calc(12px + env(safe-area-inset-right, 0px));
+        font-size: min(0.92cqw, 10px);
+    }
+    .world-phase-indicator {
+        top: calc(10px + env(safe-area-inset-top, 0px));
+        left: calc(12px + env(safe-area-inset-left, 0px));
+    }
+    .world-phase-name {
+        font-size: min(1.0cqw, 11px);
+    }
+    .world-phase-hint {
+        font-size: min(0.83cqw, 8.5px);
+    }
+    .world-ending {
+        top: 12px !important;
+        font-size: clamp(9px, 1.25cqw, 12px) !important;
+        letter-spacing: 0.1em !important;
     }
 }

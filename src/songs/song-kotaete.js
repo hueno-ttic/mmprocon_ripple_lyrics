@@ -2894,7 +2894,7 @@ export class SongKotaete extends BaseSong {
                 color: rgba(255, 255, 255, 0.6);
                 font-family: 'Noto Serif JP', serif;
             }
-            @media (max-width: 600px) {
+            @container (max-width: 600px) {
                 .kotaete-gauge { left: 8px; }
                 .kotaete-gauge-track { height: 110px; }
             }
@@ -3148,12 +3148,12 @@ export class SongKotaete extends BaseSong {
                 transition: opacity 0.8s ease;
             }
             .kotaete-ask-note.visible { opacity: 1; }
-            @media (max-width: 767px) {
+            @container (max-width: 767px) {
                 .kotaete-palette { right: 8px; padding: 10px 6px; }
                 .kotaete-palette-slot { width: 15px; height: 22px; }
                 .kotaete-palette-swatch { width: 22px; height: 22px; }
                 .kotaete-lake-count { bottom: 70px; }
-                .kotaete-ask { bottom: 10vh; padding: 18px 18px; }
+                .kotaete-ask { bottom: 10cqh; padding: 18px 18px; }
             }
         `;
         document.head.appendChild(this.customStyleElement);

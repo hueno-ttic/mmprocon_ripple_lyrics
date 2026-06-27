@@ -26,10 +26,10 @@ export class ErrorScreen {
         this.icon.textContent = '⚠';
 
         this.titleEl = document.createElement('div');
-        this.titleEl.style.cssText = 'font-size:clamp(18px,4vw,24px);font-weight:400;letter-spacing:0.12em;';
+        this.titleEl.style.cssText = 'font-size:clamp(14px,2cqw,24px);font-weight:400;letter-spacing:0.12em;';
 
         this.msgEl = document.createElement('div');
-        this.msgEl.style.cssText = 'font-size:clamp(12px,2.6vw,15px);font-weight:300;letter-spacing:0.06em;opacity:0.75;line-height:1.8;max-width:30em;';
+        this.msgEl.style.cssText = 'font-size:clamp(10px,1.25cqw,15px);font-weight:300;letter-spacing:0.06em;opacity:0.75;line-height:1.8;max-width:30em;';
 
         this.actions = document.createElement('div');
         this.actions.style.cssText = 'display:flex;gap:14px;flex-wrap:wrap;justify-content:center;margin-top:6px;';

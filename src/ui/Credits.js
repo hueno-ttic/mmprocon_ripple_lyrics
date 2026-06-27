@@ -186,9 +186,23 @@ export class Credits {
                 margin: 22px 0 0; font-size: 11px; line-height: 1.8;
                 color: rgba(255,255,255,0.42); letter-spacing: 0.04em;
             }
-            @media (max-width: 600px) {
-                .credits-panel { padding: 28px 20px 24px; }
-                .credits-heading { font-size: 22px; }
+            @container (max-width: 600px) {
+                .is-mobile .credits-panel {
+                    padding: 22px 18px 18px;
+                    max-height: 90vh;
+                }
+                .is-mobile .credits-heading { font-size: 18px; }
+                .is-mobile .credits-subheading { font-size: 10px; margin-bottom: 16px; }
+                .is-mobile .credits-section { margin-bottom: 16px; }
+                .is-mobile .credits-section-title { font-size: 11px; margin-bottom: 8px; }
+                .is-mobile .credits-song { padding: 6px 0; }
+                .is-mobile .credits-song-title { font-size: 12px; }
+                .is-mobile .credits-song-meta { font-size: 10px; }
+                .is-mobile .credits-label { font-size: 8px; }
+                .is-mobile .credits-dev-team { font-size: 12px; }
+                .is-mobile .credits-dev-row { font-size: 11px; padding-left: 8px; }
+                .is-mobile .credits-note { font-size: 9px; line-height: 1.6; margin-top: 14px; }
+                .is-mobile .credits-close { width: 28px; height: 28px; font-size: 16px; top: 10px; right: 12px; }
             }
         `;
         document.head.appendChild(style);

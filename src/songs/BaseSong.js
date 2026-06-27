@@ -258,12 +258,12 @@ export class BaseSong {
                 0%, 100% { transform: scale(1); opacity: 0.9; }
                 50% { transform: scale(1.25); opacity: 1; }
             }
-            @media (max-width: 600px) {
+            @container (max-width: 600px) {
                 .song-start-hint {
                     top: 14%;
                     font-size: 13px;
                     padding: 10px 18px;
-                    max-width: 90vw;
+                    max-width: 90cqw;
                 }
             }
             @media (prefers-reduced-motion: reduce) {
@@ -462,7 +462,7 @@ export class BaseSong {
                 0%, 100% { transform: translateY(0); }
                 50%      { transform: translateY(3px); }
             }
-            @media (max-width: 600px) {
+            @container (max-width: 600px) {
                 .song-first-guide-ring { width: 54px; height: 54px; }
                 .song-first-guide-label { font-size: 12px; padding: 4px 12px; }
             }

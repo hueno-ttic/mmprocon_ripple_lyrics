@@ -254,7 +254,7 @@ export class SongTakeover extends BaseSong {
                     font-size: var(--to-font-size, 14px);
                     border-radius: 6px;
                 }
-                @media (max-width: 768px) {
+                @container (max-width: 768px) {
                     .to-phrase {
                         font-size: calc(var(--to-font-size, 14px) * 0.9) !important;
                         padding: 10px 20px; /* Easy-to-tap large padding on mobile */
@@ -403,7 +403,7 @@ export class SongTakeover extends BaseSong {
                     border-radius: 50%;
                     box-shadow: 0 0 8px #ff3a3a;
                 }
-                @media (max-width: 768px) {
+                @container (max-width: 768px) {
                     .to-monitor-header {
                         padding: 6px 12px;
                         font-size: 9px;
@@ -495,7 +495,7 @@ export class SongTakeover extends BaseSong {
                     display: block;
                     animation: toComboPop 0.3s ease-out;
                 }
-                @media (max-width: 768px) {
+                @container (max-width: 768px) {
                     .to-combo { font-size: 14px; top: 36px; letter-spacing: 3px; }
                 }
                 /* コンボ中の解読エフェクト強化 */
@@ -532,7 +532,7 @@ export class SongTakeover extends BaseSong {
                     line-height: 2.1;
                     text-align: left;
                 }
-                @media (max-width: 768px) {
+                @container (max-width: 768px) {
                     .to-reboot-lines { font-size: 11px; letter-spacing: 1px; padding: 0 14px; }
                 }
                 @keyframes toCursorBlink {
