@@ -74,7 +74,8 @@ export class WorldUI {
 
         this._injectAffordanceStyles();
         this._initPhase(this.currentPhaseIndex);
-        this._createLabels();
+        // 背景(湖面)に浮かぶ曲名ラベルは廃止。選曲は中央の選択パネルに一本化したので
+        // _createLabels() は呼ばない(this.labels は空のまま=投影/更新処理は自然に no-op)。
         this._createSelectionPanel();
         this._updateProgressCounter();
         this._setSelected(0);
@@ -252,9 +253,10 @@ export class WorldUI {
         this.currentPhase.enter(null);
         this._applyPhaseGrading(this.currentPhase);
         this.currentPhase.createSongMarkers(this.songs);
+        // 選曲は中央パネル(左右矢印＋決定ボタン)だけで完結させる方針のため、
+        // 湖面に浮かぶ曲オーブは描画しない(位置計算/ピッキングの仕組みは残す)。
+        this._hideSongMarkers();
         this.currentPhaseIndex = phaseIndex;
-        // Markers are freshly created — re-apply the selection highlight
-        this.currentPhase.onHover(this.selectedIndex);
     }
 
     // Apply the phase's tone-mapping exposure + bloom grading to the shared
@@ -270,78 +272,20 @@ export class WorldUI {
         }
     }
 
+    // 背景(湖面)に浮かぶ曲名ラベルは廃止。選曲は中央パネル(左右矢印＋決定ボタン)に
+    // 一本化したため、ここでは既存ラベルの撤去だけを行い新規生成はしない。
+    // 呼び出し側(初期化/曲数変化時)の構造を変えずに「ラベルなし」を実現する。
     _createLabels() {
         this.labels.forEach(l => {
             if (l.element.parentNode) l.element.parentNode.removeChild(l.element);
         });
         this.labels = [];
+    }
 
-        this.songs.forEach((song, i) => {
-            const isCompleted = appState.isSongComplete(song.id);
-            const completeMark = isCompleted
-                ? `<span class="complete-mark" style="color:#D4AF37;margin-left:5px;filter:drop-shadow(0 0 4px #D4AF37)">✓</span>`
-                : '';
-
-            const label = document.createElement('div');
-            label.className = 'song-label';
-            label.innerHTML = `
-                <div class="song-title" style="text-shadow: 0 0 4px rgba(0,0,0,0.9), 0 1px 3px rgba(0,0,0,0.95), 0 0 14px ${song.color}99;">
-                    ${song.title}${completeMark}
-                </div>
-                <div class="song-artist">${song.artist}</div>
-            `;
-            this.labelsContainer.appendChild(label);
-
-            const labelData = {
-                element: label,
-                titleEl: label.querySelector('.song-title'),
-                _hovered: false,
-                _styleKey: '',
-            };
-            this.labels.push(labelData);
-
-            label.style.pointerEvents = 'auto';
-            label.style.cursor = 'pointer';
-            // 押せる事をスクリーンリーダ/キーボードにも明示(Tabで巡回・Enter/Spaceで選択)
-            label.setAttribute('role', 'button');
-            label.setAttribute('tabindex', '0');
-            label.setAttribute('aria-label', `${song.title} ${song.artist} を選ぶ`);
-
-            const onEnter = () => {
-                label.classList.add('song-label--hovered');
-                labelData._hovered = true;
-                if (this.currentPhase && i !== this.selectedIndex) this.currentPhase.onHover(i);
-                this.hoveredIndex = i;
-            };
-            const onLeave = () => {
-                label.classList.remove('song-label--hovered');
-                labelData._hovered = false;
-                if (this.currentPhase && i !== this.selectedIndex) this.currentPhase.onUnhover(i);
-                this.hoveredIndex = -1;
-            };
-            label.addEventListener('mouseenter', onEnter);
-            label.addEventListener('mouseleave', onLeave);
-            // フォーカス時もホバーと同じ手がかり(3Dマーカー強調)を与える
-            label.addEventListener('focus', onEnter);
-            label.addEventListener('blur', onLeave);
-            label.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' || e.key === ' ' || e.code === 'Space') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (i === this.selectedIndex) this.selectSong(song, i);
-                    else this._setSelected(i);
-                }
-            });
-
-            label.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (i === this.selectedIndex) {
-                    this.selectSong(song, i);
-                } else {
-                    this._setSelected(i);
-                }
-            });
-        });
+    // 湖面に浮かぶ曲オーブ(リング/グロー/球)を非表示にする。位置計算やピッキングの
+    // 仕組みは残したまま見た目だけ隠す。マーカー再生成のたびに呼ぶ。
+    _hideSongMarkers() {
+        (this.currentPhase?.songMarkers || []).forEach(m => { m.visible = false; });
     }
 
     // Central selection state: highlights the marker, focuses the label,
@@ -400,27 +344,8 @@ export class WorldUI {
             this.selectSong(this.songs[this.selectedIndex], this.selectedIndex);
         });
 
-        // タッチ環境向け: 「どこを押せば良いか」の最初の手がかりを一度だけ提示。
-        // ホバーで気付けない端末でも、湖上の光が押せる対象だと分かるようにする。
-        // 既に一度見た人には出さない(冪等)。
-        const coarse = window.matchMedia
-            && window.matchMedia('(hover: none), (pointer: coarse)').matches;
-        if (coarse && !localStorage.getItem('worldTapHintShown')) {
-            this.tapHint = document.createElement('div');
-            this.tapHint.className = 'world-tap-hint';
-            this.tapHint.innerHTML = `<span class="world-tap-hint-dot"></span><span>湖の光をタップして曲を選ぶ</span>`;
-            this.container.appendChild(this.tapHint);
-            this._dismissTapHint = () => {
-                if (!this.tapHint) return;
-                localStorage.setItem('worldTapHintShown', '1');
-                this.tapHint.classList.add('world-tap-hint--hide');
-                const el = this.tapHint;
-                this.tapHint = null;
-                setTimeout(() => el.parentNode?.removeChild(el), 600);
-            };
-            // 最初のタップ操作、または12秒で静かに引っ込める
-            this._tapHintTimer = setTimeout(() => this._dismissTapHint?.(), 12000);
-        }
+        // 旧: 湖面オーブをタップする手がかりヒント。オーブ廃止＋選択を中央パネルに
+        // 一本化したため不要になった(矢印と決定ボタンで操作が自明)。
 
         // Lock the panel width to the longest title (incl. the ✓ mark)
         // so it doesn't resize every time the selection changes
@@ -616,7 +541,7 @@ export class WorldUI {
         } else if (listChanged && this.currentPhase) {
             // フェーズは据え置きだが曲数が変わった場合はマーカーだけ作り直す。
             this.currentPhase.createSongMarkers(this.songs);
-            this.currentPhase.onHover(this.selectedIndex);
+            this._hideSongMarkers();
         }
 
         this._refreshLabels();
@@ -679,6 +604,8 @@ export class WorldUI {
     }
 
     _refreshLabels() {
+        // 背景の曲名ラベルは廃止済み(this.labels は空)。残っている場合のみ更新する。
+        if (!this.labels.length) return;
         this.songs.forEach((song, i) => {
             const isCompleted = appState.isSongComplete(song.id);
             const titleEl = this.labels[i].element.querySelector('.song-title');
@@ -798,6 +725,10 @@ export class WorldUI {
     }
 
     _pickMarker(clientX, clientY) {
+        // 曲オーブを廃止し選択を中央パネルに一本化したため、シーン上のタップ選択は無効。
+        // (見えない湖面をタップして選曲が変わる紛らわしい挙動を防ぐ)
+        return -1;
+        // eslint-disable-next-line no-unreachable
         if (!this.currentPhase) return -1;
         const widthHalf = window.innerWidth / 2;
         const heightHalf = window.innerHeight / 2;
