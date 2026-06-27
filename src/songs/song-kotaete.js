@@ -8,6 +8,8 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { addRipple, getRipples } from '../lake/lakeMemory.js';
 import { buildBrightLake, buildNightLake } from '../lake/kotaeteLakes.js';
+// 【実験的機能・削除可】絵文字リアクション(Zoom風)。外したい時はこの行と下記2フックを消す。
+import { EmojiReactions } from './kotaete/emojiReactions.js';
 
 /**
  * こたえて (imie / 初音ミク) — 「問いの回廊」
@@ -198,6 +200,10 @@ export class SongKotaete extends BaseSong {
         this.createCloudTexture();
         this.loadMiku();
         this.createPaletteUI();
+
+        // 【実験的機能・削除可】絵文字リアクション
+        this.emojiReactions = new EmojiReactions(this.songWrapper);
+        this.emojiReactions.mount();
 
         // 過去に湖へ流した「問い」を読み込む(古い順)。回廊にエコーとして再来させる。
         this.pastRipples = getRipples({ songId: 'kotaete', type: 'question' });
@@ -3164,6 +3170,9 @@ export class SongKotaete extends BaseSong {
     }
 
     destroy() {
+        // 【実験的機能・削除可】絵文字リアクション
+        if (this.emojiReactions) { this.emojiReactions.destroy(); this.emojiReactions = null; }
+
         if (this._tutorialDismissTimer) clearTimeout(this._tutorialDismissTimer);
         this._choiceTimers.forEach(t => clearTimeout(t));
         this._domTimers.forEach(t => clearTimeout(t));
