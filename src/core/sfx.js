@@ -10,7 +10,6 @@
  * WebAudio で事前デコードしておき、低遅延・多重再生に対応。
  *
  * 共通UIの対応:
- *   ripple     : タップのさざ波(タイトル/湖など 曲再生中以外のタップ)
  *   hover      : ボタンのクリック音(押下時。マウスオーバーでは鳴らさない)
  *   confirm    : 曲の決定(songConfirm=押下の瞬間。loadSongだとフェード分遅れる)
  *   transition : 湖へ戻る遷移(backToLake)
@@ -19,7 +18,6 @@
  * 曲ごとの固有SEは別途(各曲レーンで)追加予定。欠損ファイルは無音で許容する。
  */
 import { eventBus } from './eventBus.js';
-import { appState } from './appState.js';
 
 const BASE = (import.meta.env && import.meta.env.BASE_URL) || '/';
 const FILES = {
@@ -149,14 +147,9 @@ const sfx = new Sfx();
 // 初回ジェスチャで解錠(capture で最優先に起こす)
 window.addEventListener('pointerdown', () => sfx.unlock(), { capture: true });
 
-// タップのさざ波: 曲再生中は各曲の固有SEに譲るため鳴らさない。
-// ボタンは confirm/hover が担当するので除外する。
-window.addEventListener('pointerdown', (e) => {
-    if (appState.currentSongId) return;
-    const t = e.target;
-    if (t && t.closest && t.closest('button')) return;
-    sfx.play('ripple', 0.9);
-}, { capture: true });
+// UIのSEは「実際にタップ前提のコントロール(<button>)」を押したときだけ鳴らす。
+// タイトル/湖の水面・装飾・選曲マーカーなど、背景の素通りタップでは一切鳴らさない。
+// (以前は曲再生中以外の全タップで ripple を鳴らしていたが、誤発火が多いため廃止)
 
 // ボタンのクリック音。マウスオーバーでは鳴らさず、押下(pointerdown)時にだけ鳴らす。
 // (短間隔のスロットルで連打時の鳴り過ぎを防ぐ)
