@@ -448,13 +448,16 @@ export class SongTakeover extends BaseSong {
                     position: absolute;
                     top: 0; left: 0;
                     width: 100%; height: 50%;   /* JSが (1 - greenCoverage) を反映 */
+                    /* 境界(下端=0%)を濃い赤にして、緑が引いた帯が即・赤に戻るようにする。
+                       上端へ向けては少しだけ薄める（敵領域は一様に赤い印象）。 */
                     background:
                         linear-gradient(to top,
-                            rgba(255, 40, 48, 0) 0%,
-                            rgba(180, 20, 40, 0.30) 55%,
-                            rgba(255, 58, 58, 0.46) 100%);
-                    border-bottom: 2px solid rgba(255, 58, 58, 0.85);
-                    box-shadow: 0 6px 26px rgba(255, 58, 58, 0.5);
+                            rgba(255, 48, 54, 0.50) 0%,
+                            rgba(190, 26, 44, 0.36) 55%,
+                            rgba(255, 58, 58, 0.42) 100%);
+                    border-bottom: 2px solid rgba(255, 64, 64, 0.92);
+                    /* グローは境界を越えないよう内向き(inset)。赤領域の中だけを光らせる。 */
+                    box-shadow: inset 0 -12px 24px rgba(255, 58, 58, 0.40);
                     mix-blend-mode: screen;
                     transition: height 0.22s linear;
                     pointer-events: none;
@@ -464,13 +467,14 @@ export class SongTakeover extends BaseSong {
                     position: absolute;
                     bottom: 0; left: 0;
                     width: 100%; height: 12%;   /* JSが greenCoverage を反映 */
+                    /* 境界(上端=0%)を濃い緑に。グローは内向きで境界をまたいで滲ませない。 */
                     background:
                         linear-gradient(to bottom,
-                            rgba(0, 255, 170, 0) 0%,
-                            rgba(0, 200, 140, 0.28) 50%,
-                            rgba(0, 255, 170, 0.52) 100%);
-                    border-top: 2px solid rgba(0, 255, 170, 0.9);
-                    box-shadow: 0 -6px 30px rgba(0, 255, 170, 0.55);
+                            rgba(0, 255, 170, 0.50) 0%,
+                            rgba(0, 210, 142, 0.32) 55%,
+                            rgba(0, 255, 170, 0.46) 100%);
+                    border-top: 2px solid rgba(0, 255, 170, 0.92);
+                    box-shadow: inset 0 12px 26px rgba(0, 255, 170, 0.40);
                     mix-blend-mode: screen;
                     transition: height 0.22s linear, filter 0.4s ease;
                     pointer-events: none;
