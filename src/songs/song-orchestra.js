@@ -1325,6 +1325,11 @@ export class SongOrchestra extends BaseSong {
         this._chorusOpen += (chorusOpenTarget - this._chorusOpen) * (this.isClimax ? 0.06 : 0.03);
         const open = this._chorusOpen;
 
+        // サビでだけミクがこちら(カメラ)側を振り向く。サビ以外は背を向けたまま。
+        // baseMikuRotY=0 が背面、Math.PI が正面(カメラ向き)。突入/離脱とも緩やかに回頭。
+        const targetMikuRotY = this.isClimax ? Math.PI : 0;
+        this.baseMikuRotY += (targetMikuRotY - this.baseMikuRotY) * 0.05;
+
         if (this.isClimax) {
             // カメラを軽く引きつつ、わずかに上(夜空)を仰がせて空が一段開く感覚を出す
             this.camera.position.z += (16 - this.camera.position.z) * 0.012;
@@ -1943,8 +1948,8 @@ export class SongOrchestra extends BaseSong {
                     // Update Miku's base position to the last tapped lyric's position
                     // so she floats there instead of flying back to the center
                     this.baseMikuX = projectedTarget.x;
-                    this.baseMikuY = projectedTarget.y + (-1.2 * responsiveScale);
-                    this.baseMikuZ = projectedTarget.z + (-1.0 * responsiveScale);
+                    this.baseMikuY = projectedTarget.y; // 歌詞の真ん中に合わせる(縦オフセットなし)
+                    this.baseMikuZ = projectedTarget.z + (-1.0 * responsiveScale); // 奥行きだけ少し背後へ(文字を塞がない)
                     this.tapAnimation = null;
 
                     // Save last tapped position to return back to after flight mode
@@ -1962,8 +1967,8 @@ export class SongOrchestra extends BaseSong {
                 // Adjust offsets dynamically based on responsive scale
                 const targetMikuPos = new THREE.Vector3(
                     projectedTarget.x,
-                    projectedTarget.y + (-1.2 * responsiveScale),
-                    projectedTarget.z + (-1.0 * responsiveScale)
+                    projectedTarget.y, // 歌詞の真ん中へ(縦オフセットなし)
+                    projectedTarget.z + (-1.0 * responsiveScale) // 奥行きだけ少し背後へ
                 );
                 
                 const elapsed = this.tapAnimation.elapsed;
