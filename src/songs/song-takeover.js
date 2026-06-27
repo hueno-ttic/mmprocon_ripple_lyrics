@@ -67,6 +67,11 @@ export class SongTakeover extends BaseSong {
         this._bfx = null;                // 境界エフェクト用キャンバス一式
         this._bfxPhase = 0;              // 波・粒子アニメの位相
         this._boundarySurge = 0;         // コンボ時の境界押し上げ（1→0で減衰）
+
+        // ── 解読体験のテンポ改善（#113）──
+        // 暗号歌詞を中央端末まわりへ寄せ、直前解読位置の近傍に出して
+        // カーソル移動量を抑える。サビは端から中央へ流入させ密度を上げる。
+        this._lastDecodePos = null;      // {xPct, yPct} 直前に解読した位置
         // チューニング（実機で踊らせて調整しやすいよう定数化）
         this._coverageGainBase = 0.075;     // 1解読あたりの制圧獲得
         this._coverageGainClimax = 0.055;   // サビは的が多いので一手の重みを下げる
@@ -276,7 +281,12 @@ export class SongTakeover extends BaseSong {
                     font-family:"Courier New",monospace;
                     font-weight:bold;
                     text-align:left;
-                    padding:12px 28px;
+                    /* 内容を縦中央寄せ。ヒント行の有無で箱の見え方が変わらないようにする */
+                    display:flex;
+                    flex-direction:column;
+                    justify-content:center;
+                    align-items:flex-start;
+                    padding:15px 34px;
                     background:#05000a; /* Solid black/purple background, no transparency */
                     border:1px solid rgba(255, 58, 58, 0.3);
                     letter-spacing:2px;
@@ -293,11 +303,15 @@ export class SongTakeover extends BaseSong {
                         font-size: calc(var(--to-font-size, 14px) * 0.9) !important;
                         padding: 10px 20px; /* Easy-to-tap large padding on mobile */
                     }
+                    .to-phrase.scrambled { min-height: 50px; }
                 }
                 /* 暗号化された歌詞 = 赤(敵に支配されたロック状態) */
                 .to-phrase.scrambled {
                     color:#ff3a3a;
                     cursor:pointer;
+                    /* ヒント行の有無で高さが変わらないよう、最初の「良いサイズ」で統一する。
+                       box-sizing:border-box のため min-height はパディング込みの総高さ。 */
+                    min-height:64px;
                     border-color: rgba(255, 58, 58, 0.6);
                     text-shadow: 0 0 8px rgba(255, 58, 58, 0.6);
                     box-shadow: 0 0 12px rgba(255, 58, 58, 0.2), inset 0 0 8px rgba(255, 58, 58, 0.1);
@@ -313,6 +327,19 @@ export class SongTakeover extends BaseSong {
                 .to-phrase.scrambled:active {
                     transform: scale(0.95);
                     box-shadow: 0 0 10px rgba(255, 58, 58, 0.5);
+                }
+                /* 見た目より広いクリック判定（押したのに外れるストレスを軽減／#113 提案5）。
+                   透明な ::before が要素の当たり判定を外側へ広げる。 */
+                .to-phrase.scrambled::before {
+                    content: "";
+                    position: absolute;
+                    inset: -16px;
+                    border-radius: 12px;
+                }
+                /* サビ中の流入アニメ（端→中央へ滑り込む） */
+                .to-phrase.flow-in {
+                    transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.2, 1),
+                                opacity 0.5s ease;
                 }
                 /* 解読された歌詞 = 緑(奪還) */
                 .to-phrase.decoded {
@@ -850,6 +877,7 @@ export class SongTakeover extends BaseSong {
             particles: [],   // 境界に湧くノイズ粒子
             pulses: [],      // 解読時にせり上がるシアンの光柱
             falls: [],       // サビ中に赤側から落ちる逆流ノイズ
+            ripples: [],     // 解読位置から広がるシアンの波紋（コンボ/サビ）
             w: 0, h: 0,
             dpr: Math.min(2, window.devicePixelRatio || 1),
         };
@@ -872,6 +900,13 @@ export class SongTakeover extends BaseSong {
         if (!this._bfx) return;
         this._bfx.pulses.push({ x, age: 0, life: 0.55 });
         if (this._bfx.pulses.length > 24) this._bfx.pulses.shift();
+    }
+
+    // コンボ/サビ中の解読: 解読位置からシアンの波紋が広がり「押し返す」手応えを出す
+    _spawnDecodeRipple(x, y) {
+        if (!this._bfx) return;
+        this._bfx.ripples.push({ x, y, age: 0, life: 0.7 });
+        if (this._bfx.ripples.length > 16) this._bfx.ripples.shift();
     }
 
     // 毎フレーム: 境界線の波打ち・粒子・パルス・サビ逆流を描く
@@ -994,6 +1029,23 @@ export class SongTakeover extends BaseSong {
             ctx.fillRect(pu.x - 2, yTop, 4, y0 - yTop);
             ctx.fillStyle = 'rgba(190,255,235,1)'; // 先頭の輝点
             ctx.fillRect(pu.x - 2.5, yTop - 2, 5, 4);
+        }
+        ctx.restore();
+
+        // 5) 解読波紋（コンボ/サビ中、解読位置からシアンのリングが広がる）
+        ctx.save();
+        for (let i = b.ripples.length - 1; i >= 0; i--) {
+            const rp = b.ripples[i];
+            rp.age += dt;
+            if (rp.age >= rp.life) { b.ripples.splice(i, 1); continue; }
+            const k = rp.age / rp.life;             // 0→1
+            const radius = 8 + k * (this.isClimax ? 130 : 95);
+            ctx.globalAlpha = (1 - k) * 0.8;
+            ctx.lineWidth = 2.5 * (1 - k) + 0.5;
+            ctx.strokeStyle = 'rgba(0,255,170,0.9)';
+            ctx.beginPath();
+            ctx.arc(rp.x, rp.y, radius, 0, Math.PI * 2);
+            ctx.stroke();
         }
         ctx.restore();
         ctx.globalAlpha = 1;
@@ -1132,11 +1184,11 @@ export class SongTakeover extends BaseSong {
         const fontSizeVal = isMobile ? baseFontSize * 0.75 : baseFontSize;
         const scrambledWidth = winLen * (fontSizeVal * 0.65 + (isMobile ? 2.5 : 3.5));
         const plainWidth = group.text.length * (fontSizeVal * (isMobile ? 0.9 : 1.1));
-        const widthPx = Math.max(scrambledWidth, plainWidth) + (isMobile ? 16 : 48);
-        let heightPx = fontSizeVal * 1.2 + (isMobile ? 8 : 20);
-        if (hasHint) {
-            heightPx += isMobile ? 18 : 25;
-        }
+        // ボックスを少し大きくした分、重なり判定の余白も合わせて広げて間隔を保つ。
+        // 高さは CSS の min-height(PC64px/SP50px)で下限が決まり、ヒント行はその中に
+        // 収まって箱の高さを変えないため、hasHint 分の加算はしない。
+        const widthPx = Math.max(scrambledWidth, plainWidth) + (isMobile ? 16 : 58);
+        const heightPx = Math.max(isMobile ? 50 : 64, fontSizeVal * 2.6) + (isMobile ? 16 : 18);
 
         const W = Math.max(1, window.innerWidth);
         const H = Math.max(1, window.innerHeight);
@@ -1148,38 +1200,61 @@ export class SongTakeover extends BaseSong {
         const rows = isLandscape ? 4 : 5;
         const cols = isLandscape ? 5 : 3;
         const totalCells = rows * cols;
-        const cellW = 84 / cols;
-        const cellH = 58 / rows;
+        const climax = this.isClimax;
 
-        // Shuffled grid placement with jitter for random distribution
+        // 出現領域: 通常は中央寄せ（端への出現を抑える）。サビは端まで広げ、
+        // 端から中央端末へ流入してくる密度・混沌感を出す（#113 提案1・3）。
+        const regionLeft   = climax ? 8  : 16;
+        const regionWidth  = climax ? 84 : 68;
+        const regionTop    = climax ? 16 : 22;
+        const regionHeight = climax ? 60 : 51;
+        const cellW = regionWidth / cols;
+        const cellH = regionHeight / rows;
+
+        // セル候補を作り、重なりを避けたうえで「中央寄り・端を回避・直前解読位置から
+        // 近すぎず遠すぎない」をスコアで評価して選ぶ。完全固定にならないよう乱数も混ぜる。
+        const cx0 = 50, cy0 = 46;                 // 中央端末のおおよその中心(%)
+        const last = this._lastDecodePos;
+        const idealHop = climax ? 26 : 20;        // 直前位置からの心地よい移動距離(%)
         const cellIndices = Array.from({ length: totalCells }, (_, i) => i);
-        for (let i = cellIndices.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [cellIndices[i], cellIndices[j]] = [cellIndices[j], cellIndices[i]];
-        }
 
         let leftPct, topPct, cellIndex;
-        let attempts = 0;
-        let placed = false;
-        while (!placed && attempts < totalCells) {
-            cellIndex = cellIndices[attempts];
-            const row = Math.floor(cellIndex / cols);
-            const col = (cols - 1) - (cellIndex % cols); // Reversed column order
-            
-            // Random offset jitter within 55% of cell dimensions to break horizontal alignment
-            const jitterX = (Math.random() - 0.5) * cellW * 0.55;
-            const jitterY = (Math.random() - 0.5) * cellH * 0.55;
+        let best = null;
+        for (const ci of cellIndices) {
+            const row = Math.floor(ci / cols);
+            const col = (cols - 1) - (ci % cols); // Reversed column order
+            const jitterX = (Math.random() - 0.5) * cellW * 0.5;
+            const jitterY = (Math.random() - 0.5) * cellH * 0.5;
+            const cl = Math.max(6, Math.min(regionLeft + col * cellW + jitterX, Math.max(6, 94 - widthPct)));
+            const ct = Math.max(16, Math.min(regionTop + row * cellH + jitterY, Math.max(16, 81 - heightPct)));
 
-            const cellLeft = 8 + col * cellW + jitterX;
-            const cellTop = 17 + row * cellH + jitterY;
-            leftPct = Math.max(6, Math.min(cellLeft, Math.max(6, 94 - widthPct)));
-            topPct = Math.max(16, Math.min(cellTop, Math.max(16, 81 - heightPct)));
+            // 既存ターゲットと重なる候補は除外
+            const overlaps = this.phraseTargets.some(t =>
+                Math.abs(t.leftPct - cl) < widthPct && Math.abs(t.topPct - ct) < heightPct);
+            if (overlaps) continue;
 
-            placed = !this.phraseTargets.some(t => {
-                return Math.abs(t.leftPct - leftPct) < widthPct && 
-                       Math.abs(t.topPct - topPct) < heightPct;
-            });
-            attempts++;
+            const mx = cl + widthPct / 2, my = ct + heightPct / 2;
+            // 中央に近いほど高得点（y方向を少し重く＝端末まわりに寄せる）
+            let score = -Math.hypot(mx - cx0, (my - cy0) * 1.3) * 0.045;
+            // 画面端（クリック余白の少ない位置）を回避
+            const edge = Math.min(cl - 6, 94 - (cl + widthPct), ct - 16, 81 - (ct + heightPct));
+            if (edge < 8) score -= (8 - edge) * 0.12;
+            // 直前解読位置からの距離は idealHop 付近を優遇（近すぎ・遠すぎを減点）
+            if (last) {
+                const d = Math.hypot(mx - last.xPct, my - last.yPct);
+                score -= Math.abs(d - idealHop) * 0.05;
+            }
+            score += Math.random() * 0.5; // 適度なランダム性を残す
+            if (!best || score > best.score) best = { score, leftPct: cl, topPct: ct, cellIndex: ci };
+        }
+
+        if (best) {
+            ({ leftPct, topPct, cellIndex } = best);
+        } else {
+            // 全候補が重なった場合のフォールバック（中央寄りにランダム配置）
+            leftPct = Math.max(6, Math.min(cx0 - widthPct / 2 + (Math.random() - 0.5) * 24, 94 - widthPct));
+            topPct  = Math.max(16, Math.min(cy0 - heightPct / 2 + (Math.random() - 0.5) * 20, 81 - heightPct));
+            cellIndex = 0;
         }
 
         const el = document.createElement('div');
@@ -1187,6 +1262,16 @@ export class SongTakeover extends BaseSong {
         el.style.top      = `${topPct}%`;
         el.style.left     = `${leftPct}%`;
         el.style.setProperty('--to-font-size', `${baseFontSize}px`);
+
+        // サビ中は、最寄りの画面端の側から中央端末へ流れ込むように出現させる
+        // （明示的なレーンは出さず、流入の動きだけで「流れに乗る」感覚を作る／#113 提案3）。
+        const flowIn = climax;
+        if (flowIn) {
+            el.classList.add('flow-in');
+            const fromDir = leftPct < 50 ? -1 : 1;
+            el.style.transform = `translate(${fromDir * 64}px, ${(Math.random() - 0.5) * 36}px)`;
+            el.style.opacity = '0';
+        }
 
         // Show a sliding window of the real Base64 ciphertext
         const textNode = document.createTextNode(b64.slice(0, winLen));
@@ -1244,6 +1329,18 @@ export class SongTakeover extends BaseSong {
 
         this.songWrapper.appendChild(el);
         this.phraseTargets.push(target);
+
+        // 流入アニメ: 次フレームで定位置へ滑り込ませ、着地後はホバーの即応性を戻す
+        if (flowIn) {
+            el.addEventListener('transitionend', () => el.classList.remove('flow-in'), { once: true });
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                if (target.state === 'scrambled' && el.parentNode) {
+                    el.style.transform = 'translate(0, 0)';
+                    el.style.opacity = '';
+                }
+            }));
+        }
+
         return target;
     }
 
@@ -1276,7 +1373,15 @@ export class SongTakeover extends BaseSong {
         if (fxEl) {
             const wrapRect = this.songWrapper.getBoundingClientRect();
             const r = fxEl.getBoundingClientRect();
-            this._spawnBoundaryPulse(r.left + r.width / 2 - wrapRect.left);
+            const cxPx = r.left + r.width / 2 - wrapRect.left;
+            const cyPx = r.top + r.height / 2 - wrapRect.top;
+            this._spawnBoundaryPulse(cxPx);
+            // 次のスポーンを直前解読位置の近傍へ寄せるため、位置(%)を記録（#113 提案2）
+            const ww = wrapRect.width || window.innerWidth;
+            const wh = wrapRect.height || window.innerHeight;
+            this._lastDecodePos = { xPct: (cxPx / ww) * 100, yPct: (cyPx / wh) * 100 };
+            // コンボ中/サビ中は、解読位置からシアンの波紋が広がる（押し返す手応え／#113 提案4）
+            if (comboBoost || this.isClimax) this._spawnDecodeRipple(cxPx, cyPx);
         }
         if (comboBoost) this._boundarySurge = 1;
 
