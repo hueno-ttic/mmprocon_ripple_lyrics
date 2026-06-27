@@ -20,6 +20,9 @@
 // ため、エディタは「補正前(オーサリング規約)」の値をそのまま編集・保存する。
 // ─────────────────────────────────────────────────────────────
 
+import { playerManager } from '../core/player.js';
+import { appState } from '../core/appState.js';
+
 export const USER_POSE_STORAGE_KEY = 'shutter_user_poses';
 
 const R = (min, max) => ({ min, max });
@@ -137,6 +140,7 @@ export class ShutterPoseEditor {
     // 落ち着いたら凍結して一切触らない(lerp綱引きによるプルプル振動を根絶)。
     this._poseDirty = true;   // 適用が必要か(編集・土台変更・リセット・起動で立てる)
     this._settleClock = 0;    // 変化後の経過秒(一定で凍結)
+    this._wasPlaying = false;  // 起動時に再生中だったか(閉じる時に再開するため)
   }
 
   get isEditing() { return this.editing; }
@@ -159,6 +163,16 @@ export class ShutterPoseEditor {
 
     song.poseEditing = true;
     this.editing = true;
+
+    // 編集中は楽曲をPauseして被写体をじっくり作れるようにする。
+    // 再生ループ(requestAnimationFrame)は止まらないのでライブプレビューは継続する。
+    this._wasPlaying = !!appState.isPlaying;
+    if (this._wasPlaying) { try { playerManager.pause(); } catch (e) { /* noop */ } }
+
+    // 「湖面へ戻る」ボタン・シークバー(プレイヤーUI)をエディタの裏へ隠して誤操作を防ぐ。
+    // body クラスでCSS的に display:none。閉じる時にクラスを外せば元の表示へ戻る。
+    document.body.classList.add('spe-editing');
+
     this._injectStyle();
     this._buildPanel();
     // 編集中はポーズバー(かわいいポーズ)を隠す
@@ -184,6 +198,13 @@ export class ShutterPoseEditor {
     this.panel = null;
     const bar = song.viewfinder && song.viewfinder.querySelector('#shutter-pose-bar');
     if (bar) bar.style.display = '';
+
+    // プレイヤーUI(戻る・シークバー)を再表示＝再び押せる状態へ戻す
+    document.body.classList.remove('spe-editing');
+
+    // 起動時に再生中だったら再開する(「このポーズで撮る」後の撮影には再生が必要)
+    if (this._wasPlaying) { try { playerManager.play(); } catch (e) { /* noop */ } }
+    this._wasPlaying = false;
   }
 
   destroy() {
@@ -421,6 +442,9 @@ export class ShutterPoseEditor {
     const theme = this.song.themeColor || '#D85A30';
     const el = document.createElement('style');
     el.innerHTML = `
+      /* 編集中はプレイヤーUI(湖面へ戻る・再生/シークバー)をエディタの裏へ隠して誤操作を防ぐ */
+      body.spe-editing #back-to-lake,
+      body.spe-editing #player-controls { display: none !important; }
       .spe-panel {
         position: absolute; top: 0; right: 0; height: 100%; width: min(42%, 340px);
         z-index: 55; box-sizing: border-box; pointer-events: auto;
