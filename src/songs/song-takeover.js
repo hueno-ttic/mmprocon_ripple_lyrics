@@ -61,6 +61,12 @@ export class SongTakeover extends BaseSong {
         this._lastFrameAt = 0;           // 制圧率の時間減衰用 dt 計測（performance.now）
         this._lastSummaryAt = 0;         // 成果サマリー更新の間引き用
         this._outcome = null;            // 'clear' | 'failed'（終局演出の分岐）
+        this._clearKind = null;          // 'complete'(全解読) | 'majority'(制圧多数)
+
+        // ── 制圧境界の演出（波打つ境界線・ノイズ粒子・解読パルス・サビ逆流） ──
+        this._bfx = null;                // 境界エフェクト用キャンバス一式
+        this._bfxPhase = 0;              // 波・粒子アニメの位相
+        this._boundarySurge = 0;         // コンボ時の境界押し上げ（1→0で減衰）
         // チューニング（実機で踊らせて調整しやすいよう定数化）
         this._coverageGainBase = 0.075;     // 1解読あたりの制圧獲得
         this._coverageGainClimax = 0.055;   // サビは的が多いので一手の重みを下げる
@@ -448,16 +454,14 @@ export class SongTakeover extends BaseSong {
                     position: absolute;
                     top: 0; left: 0;
                     width: 100%; height: 50%;   /* JSが (1 - greenCoverage) を反映 */
-                    /* 境界(下端=0%)を濃い赤にして、緑が引いた帯が即・赤に戻るようにする。
-                       上端へ向けては少しだけ薄める（敵領域は一様に赤い印象）。 */
+                    /* 境界(下端=0%)はクッキリした線を to-boundary-canvas が描くので、
+                       ここでは端を透明へフェードさせて二重線にならないようにする。 */
                     background:
                         linear-gradient(to top,
-                            rgba(255, 48, 54, 0.50) 0%,
-                            rgba(190, 26, 44, 0.36) 55%,
+                            rgba(255, 48, 54, 0.0) 0%,
+                            rgba(255, 48, 54, 0.42) 14%,
+                            rgba(190, 26, 44, 0.34) 60%,
                             rgba(255, 58, 58, 0.42) 100%);
-                    border-bottom: 2px solid rgba(255, 64, 64, 0.92);
-                    /* グローは境界を越えないよう内向き(inset)。赤領域の中だけを光らせる。 */
-                    box-shadow: inset 0 -12px 24px rgba(255, 58, 58, 0.40);
                     mix-blend-mode: screen;
                     transition: height 0.22s linear;
                     pointer-events: none;
@@ -467,18 +471,26 @@ export class SongTakeover extends BaseSong {
                     position: absolute;
                     bottom: 0; left: 0;
                     width: 100%; height: 12%;   /* JSが greenCoverage を反映 */
-                    /* 境界(上端=0%)を濃い緑に。グローは内向きで境界をまたいで滲ませない。 */
+                    /* 境界(上端=0%)は透明へフェード。クッキリ線はキャンバス側が担う。 */
                     background:
                         linear-gradient(to bottom,
-                            rgba(0, 255, 170, 0.50) 0%,
-                            rgba(0, 210, 142, 0.32) 55%,
+                            rgba(0, 255, 170, 0.0) 0%,
+                            rgba(0, 255, 170, 0.46) 14%,
+                            rgba(0, 210, 142, 0.30) 60%,
                             rgba(0, 255, 170, 0.46) 100%);
-                    border-top: 2px solid rgba(0, 255, 170, 0.92);
-                    box-shadow: inset 0 12px 26px rgba(0, 255, 170, 0.40);
                     mix-blend-mode: screen;
                     transition: height 0.22s linear, filter 0.4s ease;
                     pointer-events: none;
                     z-index: 6;
+                }
+                /* 赤×緑の境界を描くキャンバス（波打ち・ノイズ粒子・解読パルス・サビ逆流） */
+                .to-boundary-canvas {
+                    position: absolute;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    mix-blend-mode: screen;
+                    pointer-events: none;
+                    z-index: 7;
                 }
                 @keyframes toTerritoryPulse {
                     0%   { filter: brightness(2.4) saturate(1.5); }
@@ -751,6 +763,10 @@ export class SongTakeover extends BaseSong {
         this.territoryEl.className = 'to-territory-overlay';
         this.songWrapper.appendChild(this.territoryEl);
 
+        // 赤/緑のせめぎ合う境界の演出を担うキャンバス（波打ち・ノイズ粒子・パルス）。
+        // DOMフィルの端は柔らかくし、クッキリした境界線はここが描く。
+        this.initBoundaryFx();
+
         // コンボ表示
         this.comboEl = document.createElement('div');
         this.comboEl.className = 'to-combo';
@@ -818,6 +834,169 @@ export class SongTakeover extends BaseSong {
             void this.territoryEl.offsetWidth; // reflow でアニメ再トリガー
             this.territoryEl.classList.add('pulse');
         }
+    }
+
+    // ── 制圧境界の演出 ───────────────────────────────────────────────
+    // 赤(敵)と緑(奪還)の境界を 2D キャンバスで描く。境界は直線ではなく波打ち、
+    // 沿ってノイズ粒子が湧き、解読でシアンのパルスが上へ走り、コンボで一気に
+    // 押し上がり、サビ中は赤側から逆流ノイズが落ちてくる。
+    initBoundaryFx() {
+        const canvas = document.createElement('canvas');
+        canvas.className = 'to-boundary-canvas';
+        this.songWrapper.appendChild(canvas);
+        this._bfx = {
+            canvas,
+            ctx: canvas.getContext('2d'),
+            particles: [],   // 境界に湧くノイズ粒子
+            pulses: [],      // 解読時にせり上がるシアンの光柱
+            falls: [],       // サビ中に赤側から落ちる逆流ノイズ
+            w: 0, h: 0,
+            dpr: Math.min(2, window.devicePixelRatio || 1),
+        };
+    }
+
+    _resizeBoundaryCanvas() {
+        const b = this._bfx;
+        if (!b) return;
+        const w = this.songWrapper.clientWidth || window.innerWidth;
+        const h = this.songWrapper.clientHeight || window.innerHeight;
+        if (b.w === w && b.h === h) return;
+        b.w = w; b.h = h;
+        b.canvas.width = Math.floor(w * b.dpr);
+        b.canvas.height = Math.floor(h * b.dpr);
+        b.ctx.setTransform(b.dpr, 0, 0, b.dpr, 0, 0);
+    }
+
+    // 解読成功時: 境界からシアンの光柱がせり上がる
+    _spawnBoundaryPulse(x) {
+        if (!this._bfx) return;
+        this._bfx.pulses.push({ x, age: 0, life: 0.55 });
+        if (this._bfx.pulses.length > 24) this._bfx.pulses.shift();
+    }
+
+    // 毎フレーム: 境界線の波打ち・粒子・パルス・サビ逆流を描く
+    _updateBoundaryFx() {
+        const b = this._bfx;
+        if (!b || !this.territoryEl) return;
+        this._resizeBoundaryCanvas();
+        const ctx = b.ctx;
+        const W = b.w, H = b.h;
+        ctx.clearRect(0, 0, W, H);
+        // 終局演出中は境界エフェクトを畳む（赤一色/シアン奪還の演出に委ねる）
+        if (this._completeFired) return;
+
+        const now = performance.now();
+        const dt = this._bfxLastAt ? Math.min(0.05, (now - this._bfxLastAt) / 1000) : 0.016;
+        this._bfxLastAt = now;
+
+        this._bfxPhase += dt;
+        if (this._boundarySurge > 0) {
+            this._boundarySurge = Math.max(0, this._boundarySurge - dt * 2.2);
+        }
+
+        // 緑領域の実描画高さ(CSSトランジション込み)から境界 y を求め、DOMと完全同期。
+        const greenH = this.territoryEl.clientHeight;
+        const surgePush = this._boundarySurge * 26; // コンボで最大26px押し上げ
+        const baseY = H - greenH - surgePush;
+
+        const amp = (this.isClimax ? 11 : 7) + this._boundarySurge * 12;
+        const ph = this._bfxPhase;
+        const waveY = (x) => baseY
+            + Math.sin(x * 0.018 + ph * 1.7) * amp
+            + Math.sin(x * 0.045 - ph * 2.6) * amp * 0.5;
+
+        // 1) 波打つ境界線（シアン本線 + 赤の薄い縁）
+        ctx.save();
+        const step = Math.max(6, Math.floor(W / 160));
+        ctx.beginPath();
+        for (let x = 0; x <= W + step; x += step) {
+            const y = waveY(x);
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(0,255,170,0.9)';
+        ctx.shadowColor = 'rgba(0,255,170,0.9)';
+        ctx.shadowBlur = 14 + this._boundarySurge * 22;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255,70,70,0.35)';
+        ctx.stroke();
+        ctx.restore();
+
+        // 2) 境界に湧くノイズ粒子
+        const spawnN = this.isMobile ? 1 : 2;
+        for (let i = 0; i < spawnN; i++) {
+            const x = Math.random() * W;
+            b.particles.push({
+                x, y: waveY(x) + (Math.random() - 0.5) * 6,
+                vx: (Math.random() - 0.5) * 18,
+                vy: (Math.random() - 0.5) * 24 - 8,
+                life: 0.55 + Math.random() * 0.5, age: 0,
+                cyan: Math.random() < 0.7,
+            });
+        }
+        const cap = this.isMobile ? 50 : 90;
+        if (b.particles.length > cap) b.particles.splice(0, b.particles.length - cap);
+
+        // 3) サビ中: 赤側(境界より上)からノイズが落ちてくる
+        if (this.isClimax) {
+            const fN = this.isMobile ? 1 : 2;
+            for (let i = 0; i < fN; i++) {
+                const x = Math.random() * W;
+                b.falls.push({ x, y: Math.random() * Math.max(0, baseY - 20),
+                               vy: 70 + Math.random() * 90, life: 1.6, age: 0 });
+            }
+            if (b.falls.length > 80) b.falls.splice(0, b.falls.length - 80);
+        }
+
+        // 粒子の更新・描画
+        ctx.save();
+        for (let i = b.particles.length - 1; i >= 0; i--) {
+            const p = b.particles[i];
+            p.age += dt;
+            if (p.age >= p.life) { b.particles.splice(i, 1); continue; }
+            p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 34 * dt; // ふわっと上がって落ちる
+            const k = 1 - p.age / p.life;
+            ctx.globalAlpha = k;
+            ctx.fillStyle = p.cyan ? 'rgba(0,255,170,1)' : 'rgba(255,90,90,1)';
+            const s = 1 + k * 2;
+            ctx.fillRect(p.x, p.y, s, s);
+        }
+        // サビ逆流ノイズ（赤・境界に当たって消える）
+        for (let i = b.falls.length - 1; i >= 0; i--) {
+            const f = b.falls[i];
+            f.age += dt; f.y += f.vy * dt;
+            if (f.age >= f.life || f.y >= waveY(f.x)) { b.falls.splice(i, 1); continue; }
+            const k = 1 - f.age / f.life;
+            ctx.globalAlpha = 0.5 * k;
+            ctx.fillStyle = 'rgba(255,58,58,1)';
+            ctx.fillRect(f.x, f.y, 2, 4);
+        }
+        ctx.restore();
+
+        // 4) 解読パルス（シアンの光柱が境界から上へ走る）
+        ctx.save();
+        for (let i = b.pulses.length - 1; i >= 0; i--) {
+            const pu = b.pulses[i];
+            pu.age += dt;
+            if (pu.age >= pu.life) { b.pulses.splice(i, 1); continue; }
+            const k = pu.age / pu.life;            // 0→1
+            const y0 = waveY(pu.x);
+            const rise = k * (this.isClimax ? 150 : 110);
+            const yTop = y0 - rise;
+            const alpha = (1 - k) * 0.9;
+            const grad = ctx.createLinearGradient(0, yTop, 0, y0);
+            grad.addColorStop(0, 'rgba(0,255,170,0)');
+            grad.addColorStop(1, 'rgba(0,255,170,0.85)');
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = grad;
+            ctx.fillRect(pu.x - 2, yTop, 4, y0 - yTop);
+            ctx.fillStyle = 'rgba(190,255,235,1)'; // 先頭の輝点
+            ctx.fillRect(pu.x - 2.5, yTop - 2, 5, 4);
+        }
+        ctx.restore();
+        ctx.globalAlpha = 1;
     }
 
     // ── 陣取り反映: 制圧率に応じて赤/緑の領域・端末枠・背景・デブリを染める ──
@@ -1091,6 +1270,16 @@ export class SongTakeover extends BaseSong {
         // タップ成功 → 緑(奪還)領域を広げる。これが無操作減衰への対抗手段。
         this._gainTerritory(comboBoost);
 
+        // 境界エフェクト: 解読位置からシアンの光柱が境界をせり上がる。
+        // コンボ時はさらに境界を一気に押し上げる。
+        const fxEl = this.bgTiles[target.groupIndex] || target.el;
+        if (fxEl) {
+            const wrapRect = this.songWrapper.getBoundingClientRect();
+            const r = fxEl.getBoundingClientRect();
+            this._spawnBoundaryPulse(r.left + r.width / 2 - wrapRect.left);
+        }
+        if (comboBoost) this._boundarySurge = 1;
+
         const tile = this.bgTiles[target.groupIndex];
         if (!tile) {
             // Fallback if background tile wasn't pre-built
@@ -1301,13 +1490,25 @@ export class SongTakeover extends BaseSong {
         const linesWrap = document.createElement('div');
         linesWrap.className = 'to-reboot-lines';
 
-        const bootLines = [
-            '> SYSTEM HALT :: ALL SECTORS DECRYPTED',
-            '> PURGING PALETTE #FF3A3A ... OK',
-            '> RESTORING SIGNAL #00FFAA .. OK',
-            '> OWNERSHIP RECLAIMED',
-            'TAKEOVER COMPLETE'
-        ];
+        // クリアログは「全解読」と「制圧多数(50%以上だが未全解読)」で文言を変える。
+        // 全解読 = 出題された歌詞ブロックをすべて復号できた状態。
+        const fullyDecoded = this.totalCount > 0 && this.takenCount >= this.totalCount;
+        this._clearKind = fullyDecoded ? 'complete' : 'majority';
+        const bootLines = fullyDecoded
+            ? [
+                '> SYSTEM HALT :: ALL SECTORS DECRYPTED',
+                '> PURGING PALETTE #FF3A3A ... OK',
+                '> RESTORING SIGNAL #00FFAA .. OK',
+                '> OWNERSHIP RECLAIMED',
+                'TAKEOVER COMPLETE'
+            ]
+            : [
+                '> CONTROL MAJORITY REACHED',
+                '> PURGING PALETTE #FF3A3A . PARTIAL',
+                '> RESTORING SIGNAL #00FFAA .. OK',
+                '> OWNERSHIP RECLAIMED',
+                'TAKEOVER RECLAIMED'
+            ];
         const lineEls = bootLines.map((text, i) => {
             const line = document.createElement('div');
             line.className = 'to-reboot-line' + (i === bootLines.length - 1 ? ' final' : '');
@@ -1383,7 +1584,8 @@ export class SongTakeover extends BaseSong {
                 this.monitorEl.style.opacity = '0';
             }
             if (this.scoreEl) {
-                this.scoreEl.textContent = 'TAKEOVER: RECLAIMED';
+                this.scoreEl.textContent = this._clearKind === 'complete'
+                    ? 'TAKEOVER: COMPLETE' : 'TAKEOVER: RECLAIMED';
                 this.scoreEl.style.color = '#00ffaa';
                 this.scoreEl.style.textShadow = '0 0 24px #00ffaa, 0 0 48px #00ffaa';
             }
@@ -1401,9 +1603,12 @@ export class SongTakeover extends BaseSong {
             if (this.rebootEl === overlay) this.rebootEl = null;
         }, totalMs + 1600);
 
-        // 最終成果を登録
+        // 最終成果を登録（全解読は COMPLETE、制圧多数は RECLAIMED）
         this.setResultSummary({
-            lines: [`制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER CLEAR'],
+            lines: [
+                `制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`,
+                this._clearKind === 'complete' ? 'TAKEOVER COMPLETE' : 'TAKEOVER RECLAIMED'
+            ],
             accentColor: '#00FFAA',
             swatch: '#00FFAA'
         });
@@ -1637,6 +1842,9 @@ export class SongTakeover extends BaseSong {
             this._lastFrameAt = 0;
         }
 
+        // 制圧境界の演出（波打ち・ノイズ粒子・解読パルス・サビ逆流）を毎フレーム描画
+        this._updateBoundaryFx();
+
         // Background debris rotation ＋ 疾走感: 奥→手前へ流れ、近づいたら奥へ回帰
         const driftMul = this.isClimax ? 1.8 : 1;
         this.debris.forEach(m => {
@@ -1773,6 +1981,12 @@ export class SongTakeover extends BaseSong {
         if (this.comboEl && this.comboEl.parentNode) {
             this.comboEl.parentNode.removeChild(this.comboEl);
             this.comboEl = null;
+        }
+        if (this._bfx) {
+            if (this._bfx.canvas && this._bfx.canvas.parentNode) {
+                this._bfx.canvas.parentNode.removeChild(this._bfx.canvas);
+            }
+            this._bfx = null;
         }
         this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3', 'to-complete', 'to-reclaim');
         this._mikuReclaim = false;
