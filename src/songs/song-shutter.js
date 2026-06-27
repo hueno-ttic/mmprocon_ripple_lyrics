@@ -132,6 +132,20 @@ const SHUTTER_CUTE_POSES = [
     { id: 'wave', label: 'てふり', emoji: '👋', pose: { leftUpperArm: { x: 0, y: 0, z: 0.45 }, rightUpperArm: { x: -0.3, y: -0.12, z: -1.62 }, leftLowerArm: { x: 0, y: 0.2, z: -0.5 }, rightLowerArm: { x: 0, y: -0.2, z: 0.7 }, head: { x: 0.02, y: 0.06, z: -0.24 }, neck: { x: 0.04, y: 0.03, z: -0.14 }, chest: { x: 0, y: 0, z: 0.05 } } },
 ];
 
+// キメポーズを切り替える際にいったん戻す先は「ボタン非押下時のアイドル姿勢」。
+// 各プリセットは定義するボーン集合が異なるため、前ポーズで動かしたボーンが
+// 新ポーズに無いと残留して姿勢が崩れる。そこで全ボーンを網羅した中立ひな型へ
+// 現在のアイドルジェスチャ(腕/頭/胴)を重ねた姿勢へ一度戻してから新ポーズへ入る。
+// これによりリセット先は T ポーズではなく「ポーズを押していないときの立ち姿」になる。
+const SHUTTER_BONES_ZERO = {
+    spine: { x: 0, y: 0, z: 0 }, chest: { x: 0, y: 0, z: 0 }, upperChest: { x: 0, y: 0, z: 0 },
+    neck: { x: 0, y: 0, z: 0 }, head: { x: 0, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 },
+    leftShoulder: { x: 0, y: 0, z: 0 }, leftUpperArm: { x: 0, y: 0, z: 0 }, leftLowerArm: { x: 0, y: 0, z: 0 }, leftHand: { x: 0, y: 0, z: 0 },
+    rightShoulder: { x: 0, y: 0, z: 0 }, rightUpperArm: { x: 0, y: 0, z: 0 }, rightLowerArm: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 },
+    leftUpperLeg: { x: 0, y: 0, z: 0 }, leftLowerLeg: { x: 0, y: 0, z: 0 }, leftFoot: { x: 0, y: 0, z: 0 },
+    rightUpperLeg: { x: 0, y: 0, z: 0 }, rightLowerLeg: { x: 0, y: 0, z: 0 }, rightFoot: { x: 0, y: 0, z: 0 },
+};
+
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
 const SHUTTER_VOCAL_MAP = {
     0: 'duet',  // 「いつだってシャッターチャンス」 (合唱)
@@ -945,8 +959,21 @@ export class SongShutter extends BaseSong {
     triggerCutePose(poseId) {
         const cp = this.getAllCutePoses().find((p) => p.id === poseId);
         if (!cp) return;
+        const now = performance.now();
         const holdMs = 3200;
-        this.poseOverride = { pose: cp.pose, until: performance.now() + holdMs, id: poseId, startedAt: performance.now() };
+        const resetMs = 240;
+        // 直前のキメポーズがまだホールド中に別ポーズを押した場合は、いったん基本姿勢へ
+        // 戻す「リセット相」を挟む。プリセットごとに定義ボーンが異なるため、前ポーズの
+        // 未定義ボーンが残って姿勢が崩れるのを防ぐ(デフォルトに戻ってから新ポーズへ)。
+        const switching = !!(this.poseOverride && now < this.poseOverride.until);
+        const resetUntil = switching ? now + resetMs : 0;
+        this.poseOverride = {
+            pose: cp.pose,
+            id: poseId,
+            resetUntil,                                       // この時刻までは基本姿勢へ戻す相
+            startedAt: now,                                   // 実ポーズ入りの起点(リセット相終了時に更新)
+            until: (switching ? resetUntil : now) + holdMs,   // ホールド長はリセット分を足して保つ
+        };
         // 表情も笑顔に寄せて可愛さを強調
         const shown = this.subjects.find((s) => s.key === this.shownKey);
         if (shown) shown.smileTimer = holdMs;
@@ -978,6 +1005,14 @@ export class SongShutter extends BaseSong {
     // 触らないため、それらを動かすキメポーズ(お願い/きゅるん/バンザイ等)の解除後に値が残って
     // 待機姿勢が破綻する。idleブランチで groove の前にこれらを中立へイージングして根絶する。
     // groove が扱う軸(肩z・脚x/z 等)はこの後 groove が上書きするので 0 へ寄せても安全。
+    // ボタン非押下時(アイドル)の腕の型ジェスチャ。armStyle とサビ状態で決まる。
+    // 待機ブランチとキメポーズ切替時のリセット先で共有し、ロジックを一致させる。
+    idleGesture() {
+        const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
+        const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
+        return ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+    }
+
     relaxIdleBones(subject, t) {
         for (const name of RELAX_IDLE_BONES) {
             const bone = this.getMMDBone(subject, name);
@@ -2641,20 +2676,33 @@ export class SongShutter extends BaseSong {
                 // 腕の型: ポーズ・ホールド中は指定ポーズ最優先。通常はプリセットの armStyle を基調に
                 // （穏やか系はサビで cheer へ切替えて盛り上げる）
                 if (posing) {
-                    // キメポーズは「入りだけ補間＋クランプ」、決まったら凍結＝固定する。
-                    // 毎フレーム補間とクランプを続けると、肘がクランプ楕円の境界にある時に
-                    // 押し戻し⇔補間の引っ張り合いで上腕がプルプル振動する。一定時間で凍結し根絶。
-                    const elapsed = performance.now() - (this.poseOverride.startedAt || 0);
-                    if (elapsed < 420) {
-                        // 入り: 素早く寄せつつ貫通をクランプで補正（この区間だけ動く）
-                        this.lerpSubjectPose(subject, this.poseOverride.pose, 0.34);
-                        this.clampArmsWorld(subject);
+                    const ov = this.poseOverride;
+                    if (ov.resetUntil && performance.now() < ov.resetUntil) {
+                        // リセット相: ボタン非押下時のアイドル姿勢へ戻し、前ポーズの残留ボーンを解消する。
+                        // 全ボーン網羅のひな型に現在のアイドルジェスチャ(腕/頭/胴)を重ねた姿勢へ寄せ、
+                        // gesture/groove 管理外のボーン(肩・手首・首・足首・脚)は relaxIdleBones で中立へ。
+                        // → リセット先は T ポーズではなく「ポーズを押していないときの立ち姿」。
+                        // 注: ここで clampArmsWorld は呼ばない。リセット先(腕を下ろした立ち姿)は
+                        //     体貫通しないので不要なうえ、毎フレームの lerp 引き寄せ⇔クランプ押し戻しの
+                        //     綱引きで腕がプルプル振動する原因になる(待機分岐もクランプせず滑らか)。
+                        this.lerpSubjectPose(subject, { ...SHUTTER_BONES_ZERO, ...this.idleGesture() }, 0.35);
+                        this.relaxIdleBones(subject, 0.35);
+                    } else {
+                        // リセット相を抜けたら、ここから実ポーズの「入り」を開始する。
+                        if (ov.resetUntil) { ov.resetUntil = 0; ov.startedAt = performance.now(); }
+                        // キメポーズは「入りだけ補間＋クランプ」、決まったら凍結＝固定する。
+                        // 毎フレーム補間とクランプを続けると、肘がクランプ楕円の境界にある時に
+                        // 押し戻し⇔補間の引っ張り合いで上腕がプルプル振動する。一定時間で凍結し根絶。
+                        const elapsed = performance.now() - (ov.startedAt || 0);
+                        if (elapsed < 420) {
+                            // 入り: 素早く寄せつつ貫通をクランプで補正（この区間だけ動く）
+                            this.lerpSubjectPose(subject, ov.pose, 0.34);
+                            this.clampArmsWorld(subject);
+                        }
+                        // elapsed>=420ms: 何もしない＝最後の補正済みポーズで固定（振動なし）
                     }
-                    // elapsed>=420ms: 何もしない＝最後の補正済みポーズで固定（振動なし）
                 } else {
-                    const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
-                    const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
-                    const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
+                    const gesture = this.idleGesture();
                     // 腕の型へ補間 → 待機が扱わないボーンを中立へ戻す → その上にビートグルーヴ
                     this.lerpSubjectPose(subject, gesture, 0.08);
                     // キメポーズ(お願い等)が動かした「gesture/groove 管理外」のボーン
