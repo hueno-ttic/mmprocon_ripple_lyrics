@@ -18,8 +18,13 @@ import './core/bgm.js'; // 選曲画面のフェーズ別BGM(eventBus購読で�
 // 遷移はカーテン(ScreenFade)で覆われているため、このロード待ちは隠れる。
 // issue #30 改修版トリツクロジー。true にすると改修前のリズムゲーム版へ即座に戻せる。
 const TRICKTOLOGY_LEGACY = false;
+// こたえては現在ひまわり登攀版(song-kotaete.js)。true にすると水鏡版へいつでも戻せる
+// (song-kotaete.mizukagami.js)。どちらも class SongKotaete を export する。
+const KOTAETE_MIZUKAGAMI = false;
 const SONG_LOADERS = {
-    kotaete: () => import('./songs/song-kotaete.js').then(m => m.SongKotaete),
+    kotaete: () => (KOTAETE_MIZUKAGAMI
+        ? import('./songs/song-kotaete.mizukagami.js')
+        : import('./songs/song-kotaete.js')).then(m => m.SongKotaete),
     after: () => import('./songs/song-after.js').then(m => m.SongAfter),
     shutter: () => import('./songs/song-shutter.js').then(m => m.SongShutter),
     orchestra: () => import('./songs/song-orchestra.js').then(m => m.SongOrchestra),
