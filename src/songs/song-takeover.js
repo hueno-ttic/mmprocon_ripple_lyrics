@@ -1427,9 +1427,13 @@ export class SongTakeover extends BaseSong {
             this.buildLyricCard();
         }
 
-        // 開幕の赤い WARNING（システム侵略アラート）。選曲→曲ロードのカーテンが
-        // 開く＝タイマー準備完了の瞬間に一度だけ起動する（幕裏で消えるのを防ぐ）。
-        if (!this._warningShown && playerManager.isTimerReady) {
+        // 再生中かどうか（PAUSE中は陣取りの減衰を止める／WARNINGの起点に使う）
+        const isPlaying = !!(playerManager.player && playerManager.player.isPlaying);
+
+        // 開幕の赤い WARNING（システム侵略アラート）。タイマー準備完了(isTimerReady)では
+        // フォント待ちのカーテンが開く前に消えることがあるため、実際に再生が始まった
+        // 瞬間（ユーザーがPlayを押す＝確実にシーンを見ている）に一度だけ起動する。
+        if (!this._warningShown && isPlaying) {
             this._warningShown = true;
             this._showWarning();
         }
@@ -1463,8 +1467,10 @@ export class SongTakeover extends BaseSong {
         }
 
         // ── 制圧率の時間減衰（無操作だと赤がじわじわ再侵食する綱引き） ──
-        // 終局演出が出るまで、かつ歌詞カード構築後のみ進行させる。
-        if (!this._completeFired && this.lyricCardBuilt) {
+        // 終局演出が出るまで・歌詞カード構築後・かつ再生中のみ進行させる。
+        // PAUSE中は減衰を止めて境界線も静止させる（_lastFrameAtもリセットし、
+        // 再開時に停止していた分の dt が一気に効いて飛ばないようにする）。
+        if (!this._completeFired && this.lyricCardBuilt && isPlaying) {
             const now = performance.now();
             const dt = this._lastFrameAt ? Math.min(0.1, (now - this._lastFrameAt) / 1000) : 0;
             this._lastFrameAt = now;
@@ -1477,6 +1483,9 @@ export class SongTakeover extends BaseSong {
                     this._updateGauge();
                 }
             }
+        } else {
+            // PAUSE/未構築/終局中は計測をリセット（再開時の dt 暴発を防ぐ）
+            this._lastFrameAt = 0;
         }
 
         // Background debris rotation ＋ 疾走感: 奥→手前へ流れ、近づいたら奥へ回帰
