@@ -20,6 +20,7 @@ import './core/bgm.js'; // 選曲画面のフェーズ別BGM(eventBus購読で�
 const TRICKTOLOGY_LEGACY = false;
 const SONG_LOADERS = {
     kotaete: () => import('./songs/song-kotaete.js').then(m => m.SongKotaete),
+    'kotaete-himawari': () => import('./songs/song-kotaete-himawari.js').then(m => m.SongKotaeteHimawari),
     after: () => import('./songs/song-after.js').then(m => m.SongAfter),
     shutter: () => import('./songs/song-shutter.js').then(m => m.SongShutter),
     orchestra: () => import('./songs/song-orchestra.js').then(m => m.SongOrchestra),

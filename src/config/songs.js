@@ -28,6 +28,34 @@ export const SONGS = [
     }
   },
   {
+    id: 'kotaete-himawari',
+    title: 'こたえて（ひまわり登攀）',
+    artist: 'imie',
+    vocal: '初音ミク',
+    songUrl: 'https://piapro.jp/t/6W2N/20251215164617',
+    lyricUrl: 'https://piapro.jp/t/9o24',
+    video: {
+      beatId: 4827293,
+      chordId: 2963754,
+      repetitiveSegmentId: 3086261,
+      lyricId: 126519,
+      lyricDiffId: 28645
+    },
+    themeQuestion: 'あなたが僕ならばどんな答えを出すでしょうか',
+    color: '#FFC83D',
+    thumbnail: 'assets/thumbnails/kotaete.jpg',
+    startHint: '歌詞の葉っぱにふれて、ミクの登る道をつくろう',
+    tutorial: {
+      steps: [
+        { icon: '🌱', text: '曲が進むとひまわりの茎が上へ伸びていきます' },
+        { icon: '🍃', text: '歌詞が歌われるたび、その言葉の「葉っぱ」が足場として生えます' },
+        { icon: '👆', text: '葉っぱにふれると確定して光り、空きにふれると新しい足場が生えます' },
+        { icon: '☀️', text: '太陽をドラッグすると光の向き・成長速度が変わります' },
+        { icon: '🌻', text: 'ミクは自動で登ります。落ちません。必ず満開のひまわりに到達します' },
+      ]
+    }
+  },
+  {
     id: 'after',
     title: 'アフター・ザ・カーテン',
     artist: 'Rulmry',
