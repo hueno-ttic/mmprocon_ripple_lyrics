@@ -109,6 +109,13 @@ export class SongKotaete extends BaseSong {
         this._finaleEl = null;         // 締め字幕
         this._overflowFired = false;   // オチの空フラッシュ発火済み
 
+        // ---- 雲(高度に応じて横の空きに湧く / 歌詞を乗せる / 衝突で霧散) ----
+        this._clouds = [];
+        this._cloudPuffs = [];         // 衝突の霧散パーティクル
+        this._lastCloudAt = -Infinity; // 雲の生成レート(実時間ms)
+        this._lyricCloudAt = -Infinity;// 歌詞雲のレート
+        this._cloudSide = 1;           // 左右交互
+
         // ---- レイキャスト ----
         this._raycaster = new THREE.Raycaster();
         this._ndc = new THREE.Vector2();
@@ -790,7 +797,7 @@ export class SongKotaete extends BaseSong {
         this._ensureModeStyles();
         const el = document.createElement('div');
         el.className = 'mada-hud';
-        el.innerHTML = `<span class="alt">0</span><span class="unit"> こたえ</span>`;
+        el.innerHTML = `<span class="alt">0</span><span class="unit"> m</span>`;
         this.songWrapper.appendChild(el);
         this._hudEl = el;
         this._hudAltSpan = el.querySelector('.alt');
@@ -798,9 +805,9 @@ export class SongKotaete extends BaseSong {
 
     _updateHud() {
         if (!this._hudEl) this._ensureHud();
-        // 高度は到達した最大Y。バカっぽく1m=10こたえ換算で水増しして爆発感を出す
+        // 昇った高度。バカっぽく1単位=10m換算で水増しして爆発感を出す(真顔の異常さ)
         const val = Math.max(0, Math.round((this._altitude - GROUND_Y) * 10));
-        if (this._hudAltSpan) this._hudAltSpan.textContent = String(val);
+        if (this._hudAltSpan) this._hudAltSpan.textContent = val.toLocaleString();
     }
 
     // 破綻ガード: 葉が増えたら、ミクが通過済み(landed かつ足元より下)の葉を下から回収。
@@ -854,6 +861,171 @@ export class SongKotaete extends BaseSong {
         this.songWrapper.appendChild(el);
         this._finaleEl = el;
         requestAnimationFrame(() => el.classList.add('show'));
+    }
+
+    // =====================================================================
+    // 雲(#119): 高度に応じて横の空きに湧き、歌詞を乗せて読ませる。
+    //   ミクがぶっ飛んで通り過ぎると衝突して霧散する(物理ギャグ)。
+    // =====================================================================
+    _cloudTexture() {
+        if (this._cloudTex) return this._cloudTex;
+        const W = 256, H = 160;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        // やわらかい白い塊を複数重ねて雲のシルエットに
+        const blobs = [[128, 95, 60], [80, 100, 44], [176, 100, 44], [108, 70, 40], [150, 72, 40]];
+        for (const [bx, by, br] of blobs) {
+            const g = x.createRadialGradient(bx, by, 2, bx, by, br);
+            g.addColorStop(0, 'rgba(255,255,255,0.95)');
+            g.addColorStop(0.6, 'rgba(255,255,255,0.7)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            x.fillStyle = g;
+            x.beginPath(); x.arc(bx, by, br, 0, Math.PI * 2); x.fill();
+        }
+        this._cloudTex = new THREE.CanvasTexture(c);
+        return this._cloudTex;
+    }
+
+    // 雲に乗せる歌詞ラベル(濃い文字＋白フチ＝雲に書いてあるように読める)
+    _makeCloudLabel(text) {
+        const W = 380, H = 120;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        let fs = 56; x.textAlign = 'center'; x.textBaseline = 'middle';
+        do { x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`; fs -= 4; }
+        while (fs > 18 && x.measureText(text).width > W - 36);
+        x.lineWidth = 11; x.strokeStyle = 'rgba(255,255,255,0.96)'; x.strokeText(text, W / 2, H / 2);
+        x.lineWidth = 4; x.strokeStyle = 'rgba(150,190,230,0.5)'; x.strokeText(text, W / 2, H / 2);
+        x.fillStyle = '#2b4a6b'; x.fillText(text, W / 2, H / 2);
+        const tex = new THREE.CanvasTexture(c);
+        const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }));
+        spr.scale.set(2.0, 0.63, 1);
+        spr.userData.tex = tex;
+        return spr;
+    }
+
+    // 雲を1つ生やす。lyric があれば歌詞札を乗せる。side で左右の空きへ寄せる。
+    _spawnCloud(opts = {}) {
+        if (this._clouds.length >= (this.isMobile ? 12 : 18)) return null;
+        const side = opts.side || this._cloudSide;
+        this._cloudSide = -side; // 交互
+        const group = new THREE.Group();
+        // 横の空き(葉は±1.5)。歌詞雲は読みやすい中距離、装飾雲は外側まで。
+        const xMin = opts.lyric ? 3.4 : 3.0;
+        const xMax = opts.lyric ? 5.4 : 7.2;
+        const x = side * (xMin + Math.random() * (xMax - xMin));
+        const y = (opts.y != null) ? opts.y : (this.climbY + 3 + Math.random() * 11);
+        group.position.set(x, y, opts.lyric ? -1.5 : -3 - Math.random() * 3);
+
+        const puff = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: this._cloudTexture(), transparent: true, opacity: 0, depthWrite: false, depthTest: true,
+        }));
+        const w = 3.0 + Math.random() * 2.4;
+        puff.scale.set(w, w * 0.62, 1);
+        group.add(puff);
+
+        let label = null;
+        if (opts.lyric) {
+            label = this._makeCloudLabel(opts.lyric); // 雲に“書いてある”見た目(濃い文字+白フチ)
+            label.position.set(0, 0, 0.2);
+            group.add(label);
+        }
+        this.scene.add(group);
+        const cloud = {
+            group, puff, label,
+            x, y, vx: (Math.random() * 0.3 + 0.1) * (Math.random() < 0.5 ? -1 : 1),
+            halfW: w * 0.5, born: 0, appear: 0, lyric: !!opts.lyric, dead: false,
+        };
+        this._clouds.push(cloud);
+        return cloud;
+    }
+
+    _spawnLyricCloud(text) {
+        const now = performance.now();
+        if (now - this._lyricCloudAt < 1400) return;
+        this._lyricCloudAt = now;
+        this._spawnCloud({ lyric: text });
+    }
+
+    // 衝突: 雲を白い粒へ霧散させて消す
+    _scatterCloud(cloud) {
+        if (cloud.dead) return;
+        cloud.dead = true;
+        const n = this.isMobile ? 5 : 8;
+        const tex = this._cloudTexture();
+        for (let i = 0; i < n; i++) {
+            const m = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: tex, transparent: true, opacity: 0.9, depthWrite: false,
+            }));
+            const s = 0.6 + Math.random() * 0.9;
+            m.scale.set(s, s, 1);
+            m.position.set(cloud.group.position.x, cloud.group.position.y, cloud.group.position.z);
+            this.scene.add(m);
+            this._cloudPuffs.push({
+                spr: m, life: 0.6 + Math.random() * 0.3, age: 0,
+                vx: (Math.random() - 0.5) * 8, vy: (Math.random() - 0.5) * 5 + 1,
+            });
+        }
+        this._disposeCloud(cloud);
+    }
+
+    _disposeCloud(cloud) {
+        this.scene.remove(cloud.group);
+        cloud.group.traverse(o => {
+            if (o.material) {
+                // ラベル札の固有テクスチャのみ破棄(共有の雲テクスチャ _cloudTex は残す)
+                if (o.material.map && o.material.map !== this._cloudTex) o.material.map.dispose();
+                o.material.dispose && o.material.dispose();
+            }
+        });
+        const i = this._clouds.indexOf(cloud);
+        if (i >= 0) this._clouds.splice(i, 1);
+    }
+
+    _updateClouds(dt) {
+        // 高度が上がるほど雲が増える。ミクが登っている間だけ供給。
+        const now = performance.now();
+        const rate = this.climbY > 6 ? 750 : 1100;
+        if (!this.finishing && now - this._lastCloudAt > rate) {
+            this._lastCloudAt = now;
+            this._spawnCloud({});
+        }
+
+        const mikuY = this.climbY + (this._jumpArc || 0);
+        const mikuX = this.climbX;
+        const jumping = this.climbState === 'jumping';
+        for (let i = this._clouds.length - 1; i >= 0; i--) {
+            const c = this._clouds[i];
+            c.born += dt;
+            c.appear = Math.min(1, c.appear + dt * 1.5);
+            c.group.position.x += c.vx * dt;
+            c.group.position.y += Math.sin(c.born * 0.6) * 0.12 * dt; // ゆるい上下
+            const baseOp = c.lyric ? 0.92 : 0.7;
+            c.puff.material.opacity = baseOp * c.appear;
+            if (c.label) c.label.material.opacity = c.appear;
+
+            // ミクがぶっ飛んで通り過ぎると衝突 → 霧散(登坂中のみ＝“突っ込んだ”感)
+            if (jumping) {
+                const dy = Math.abs(c.group.position.y - mikuY);
+                const dx = Math.abs(c.group.position.x - mikuX);
+                if (dy < 1.7 && dx < c.halfW + 1.6) { this._scatterCloud(c); continue; }
+            }
+            // 画面下方へ流れ去った雲は回収
+            if (c.group.position.y < this.camera.position.y - 13) { this._disposeCloud(c); }
+        }
+
+        // 霧散パーティクル
+        for (let i = this._cloudPuffs.length - 1; i >= 0; i--) {
+            const p = this._cloudPuffs[i];
+            p.age += dt;
+            const k = p.age / p.life;
+            if (k >= 1) { this.scene.remove(p.spr); p.spr.material.dispose(); this._cloudPuffs.splice(i, 1); continue; }
+            p.spr.position.x += p.vx * dt;
+            p.spr.position.y += p.vy * dt;
+            p.vy -= 4 * dt;
+            p.spr.material.opacity = 0.9 * (1 - k);
+            p.spr.scale.multiplyScalar(1 + dt * 1.2);
+        }
     }
 
     // =====================================================================
@@ -981,6 +1153,7 @@ export class SongKotaete extends BaseSong {
         this.updateBloom(dt);
         this.updateCamera(dt);
         this.updateSun(dt);
+        this._updateClouds(dt);
 
         // 到達高度の更新 + HUD(バカっぽい爆発カウンタ) + 破綻ガード(葉の回収)
         this._altitude = Math.max(this._altitude, this.climbY);
@@ -997,7 +1170,10 @@ export class SongKotaete extends BaseSong {
         const w = p.video.findWord(pos);
         if (w && w.startTime !== this._lastWordStart) {
             this._lastWordStart = w.startTime;
-            if (w.text) this._spawnLyricLeaf(w.text);
+            if (w.text) {
+                this._spawnLyricLeaf(w.text);
+                this._spawnLyricCloud(w.text); // 横の空きに歌詞を雲として読ませる(歌詞アプリの芯)
+            }
         }
     }
 
@@ -1080,6 +1256,13 @@ export class SongKotaete extends BaseSong {
             if (el && el.parentNode) el.parentNode.removeChild(el);
         });
         this._hudEl = this._finaleEl = null;
+
+        // 雲・霧散パーティクルの破棄(共有テクスチャ _cloudTex は最後に1回)
+        this._clouds.slice().forEach(c => this._disposeCloud(c));
+        this._clouds = [];
+        this._cloudPuffs.forEach(p => { this.scene.remove(p.spr); p.spr.material.dispose(); });
+        this._cloudPuffs = [];
+        this._cloudTex && this._cloudTex.dispose();
 
         // 葉/花: 共有ジオメトリ(_leafGeo/_petalGeo)は最後に1回だけ破棄するので、
         // ここでは材質と固有ジオメトリ(葉柄/種/中心)のみ破棄する。
