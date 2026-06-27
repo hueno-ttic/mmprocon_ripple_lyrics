@@ -51,7 +51,11 @@ const SPAM_BURST_MAX = 3;       // 連打加速時に1クリックで足す葉�
 
 const LEAF_GREEN = '#3f8f4a';
 const LEAF_GREEN_D = '#2c6b37';
-const SUN_GOLD = new THREE.Color('#FFD54A');
+
+// フィナーレの満開ひまわり: 画面を覆う「巨大な大輪」にするための全体倍率。
+// goalLeaf.group のポップ(0→1)の内側で bloomRoot をこの倍率に保ち、
+// 咲き切ると画面いっぱいの大輪になる(外周花弁が視野をわずかに超える程度=フレーム占有)。
+const BLOOM_SCALE = 2.0;
 
 export class SongKotaete extends BaseSong {
     constructor(container, songId) {
@@ -86,12 +90,11 @@ export class SongKotaete extends BaseSong {
         this.mikuPulse = 0;
         this.faceDir = 0;              // -1左 / 0正面 / +1右(進行方向)
 
-        // ---- 太陽 / 環境 ----
-        this.sun = null;
-        this.sunX = 2.5;               // 太陽の横位置(光の向き)
-        this.sunHeight = 7.0;          // 太陽の高さ(空での位置)
+        // ---- 光源 / 環境(見える太陽スプライトは廃止、方向光のみ) ----
+        this.sunX = 2.5;               // 光の横位置(方向光の向き)
+        this.sunHeight = 7.0;          // 光の高さ(成長レートに影響)
         this.growthRate = 1.0;
-        this.sideBias = 0;             // -1..+1 太陽の側へ葉が寄る
+        this.sideBias = 0;             // -1..+1 光の側へ葉が寄る
 
         // ---- ゴール ----
         this.goalLeaf = null;
@@ -143,7 +146,6 @@ export class SongKotaete extends BaseSong {
         this.buildSky();
         this.buildGround();
         this.buildStem();
-        this.buildSun();
         this.loadMiku();
 
         window.addEventListener('resize', this.boundOnResize);
@@ -364,38 +366,24 @@ export class SongKotaete extends BaseSong {
         sh.bezierCurveTo(L * 0.82, -Wd * 0.7, L * 0.2, -Wd, 0, 0);
         const geo = new THREE.ShapeGeometry(sh, 18);
         const pos = geo.attributes.position;
+        // 縦に軽くカップ + 先端を少し反らせて(リアルな花弁の起伏)
         for (let i = 0; i < pos.count; i++) {
-            const py = pos.getY(i);
-            pos.setZ(i, (py / Wd) * (py / Wd) * 0.07); // 縦に軽くカップ
+            const px = pos.getX(i), py = pos.getY(i);
+            const along = px / L; // 0基部..1先端
+            pos.setZ(i, (py / Wd) * (py / Wd) * 0.08 - along * along * 0.05);
         }
         pos.needsUpdate = true; geo.computeVertexNormals();
+        // 頂点カラーで二色グラデ(基部=琥珀 → 先端=明るい黄)。本物のひまわりの花弁らしさ。
+        const base = new THREE.Color('#E59A1C'), tip = new THREE.Color('#FFE14C');
+        const col = new Float32Array(pos.count * 3), tmp = new THREE.Color();
+        for (let i = 0; i < pos.count; i++) {
+            const along = THREE.MathUtils.clamp(pos.getX(i) / L, 0, 1);
+            tmp.copy(base).lerp(tip, along);
+            col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+        }
+        geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
         this._petalGeo = geo;
         return geo;
-    }
-
-    // 太陽(ドラッグ可能)。光線つき。
-    buildSun() {
-        const c = document.createElement('canvas'); c.width = c.height = 256;
-        const x = c.getContext('2d');
-        const g = x.createRadialGradient(128, 128, 10, 128, 128, 120);
-        g.addColorStop(0, 'rgba(255,248,200,1)');
-        g.addColorStop(0.55, 'rgba(255,196,40,1)');
-        g.addColorStop(0.8, 'rgba(255,170,30,0.85)');
-        g.addColorStop(1, 'rgba(255,170,30,0)');
-        x.fillStyle = g; x.beginPath(); x.arc(128, 128, 120, 0, Math.PI * 2); x.fill();
-        this._sunTex = new THREE.CanvasTexture(c);
-        // 青空の上では加算合成だと白飛びするので通常合成で金色を保つ
-        const mat = new THREE.SpriteMaterial({ map: this._sunTex, transparent: true, depthTest: false });
-        this.sun = new THREE.Sprite(mat);
-        this.sun.scale.set(5, 5, 1);
-        this.sun.renderOrder = 5;
-        this.scene.add(this.sun);
-        this._positionSun();
-    }
-
-    _positionSun() {
-        // 太陽は常に空(カメラの上方)に位置し、横は sunX に追従
-        this.sun.position.set(this.sunX, this.camera.position.y + (this.sunHeight - 4), -8);
     }
 
     // =====================================================================
@@ -489,15 +477,16 @@ export class SongKotaete extends BaseSong {
         return item;
     }
 
-    // 歌詞ワード発火で葉を生やす。総数を抑え(間隔)、ミクが遅れすぎたら止める(バックログ上限)。
+    // 歌詞ワード発火で足場の葉を生やす。総数を抑え(間隔)、ミクが遅れすぎたら止める(バックログ上限)。
     // → 曲終わりにミクが必ずてっぺんへ追いつける範囲に保つ。
-    _spawnLyricLeaf(text) {
+    // 歌詞テキストは雲側(_spawnLyricCloud)で単語ごとに読ませるので、葉はラベル無しの純3D足場。
+    _spawnLyricLeaf() {
         const now = performance.now();
         if (now - this._lastLeafAt < LEAF_SPAWN_INTERVAL) return null;
         const highestY = this.leaves.length ? this.leaves[this.leaves.length - 1].y : this.climbY;
         if (highestY - this.climbY > MAX_BACKLOG_LEAVES * LEAF_SPACING) return null; // 遅れすぎ→生やさない
         this._lastLeafAt = now;
-        return this.spawnLeaf(text);
+        return this.spawnLeaf('', { label: false });
     }
 
     updateLeaves(dt) {
@@ -672,27 +661,11 @@ export class SongKotaete extends BaseSong {
         this.camera.lookAt(0, this.climbY + LOOK_Y_OFF, 0);
     }
 
+    // 見える太陽スプライトは廃止。陰影づけの方向光だけを空の高い位置から当て続ける。
     updateSun(dt) {
-        // 終盤: 太陽は「飛んでいく先」。巨大化＆ミクの到達点へ降りてきて、
-        // 暴走の果てに“太陽へ着く”絵を作る(真顔のイカロス)。
-        if (this._sunFinale && this.sun) {
-            this._sunSwell = Math.min(1, (this._sunSwell || 0) + dt * 0.7);
-            const s = 5 + this._sunSwell * 18;
-            this.sun.scale.set(s, s, 1);
-            const ty = (this.goalLeaf ? this.goalLeaf.y : this.climbY) + 2.2;
-            this.sun.position.y += (ty - this.sun.position.y) * Math.min(1, dt * 2);
-            this.sun.position.x += (0 - this.sun.position.x) * Math.min(1, dt * 2);
-            this.sun.position.z = -6;
-            if (this.sunLight) this.sunLight.intensity = 2.0 + this._sunSwell * 2.2;
-            this.sun.material.rotation = (this.sun.material.rotation || 0) + dt * 0.2;
-            return;
-        }
-        // 通常: 太陽は常に空(カメラ上方)にいる=これから登っていく終着点
         const want = THREE.MathUtils.clamp(this.sunX / 5, -1, 1);
         this.sideBias += (want - this.sideBias) * Math.min(1, dt * 2);
-        this._positionSun();
         if (this.sunLight) this.sunLight.position.set(this.sunX, this.camera.position.y + 10, 6);
-        if (this.sun) this.sun.material.rotation = (this.sun.material.rotation || 0) + dt * 0.1;
     }
 
     // =====================================================================
@@ -778,7 +751,11 @@ export class SongKotaete extends BaseSong {
                 color:#FFD54A; text-shadow:0 0 16px rgba(255,213,74,.7),0 2px 8px rgba(0,0,0,.5); }
             .mada-intro .s { margin-top:10px; font-size:clamp(12px,3.2vw,16px); line-height:1.7; font-weight:600; }
             .mada-hud {
-                position:absolute; right:14px; top:64px; z-index:55; pointer-events:none;
+                /* 右上の「← 湖面へ戻る」ボタンの真下へ。ノッチ/セーフエリアぶん下げて重なりを回避。 */
+                position:absolute;
+                right:calc(14px + env(safe-area-inset-right, 0px));
+                top:calc(104px + env(safe-area-inset-top, 0px));
+                z-index:55; pointer-events:none;
                 font-family:"Courier New",monospace; font-weight:bold; text-align:right;
                 color:#2c6b37; text-shadow:0 1px 4px rgba(255,255,255,.6);
             }
@@ -930,7 +907,13 @@ export class SongKotaete extends BaseSong {
 
     // 雲を1つ生やす。lyric があれば歌詞札を乗せる。side で左右の空きへ寄せる。
     _spawnCloud(opts = {}) {
-        if (this._clouds.length >= (this.isMobile ? 14 : 24)) return null;
+        const cap = this.isMobile ? 14 : 24;
+        if (this._clouds.length >= cap) {
+            // 歌詞雲は単語ごとに必ず出したい。満杯なら最古の装飾雲(歌詞でない)を退避して席を空ける。
+            if (!opts.lyric) return null;
+            const victim = this._clouds.find(c => !c.lyric) || this._clouds[0];
+            if (victim) this._disposeCloud(victim);
+        }
         const side = opts.side || this._cloudSide;
         this._cloudSide = -side; // 交互
         const group = new THREE.Group();
@@ -966,9 +949,9 @@ export class SongKotaete extends BaseSong {
     }
 
     _spawnLyricCloud(text) {
-        const now = performance.now();
-        if (now - this._lyricCloudAt < 1400) return;
-        this._lyricCloudAt = now;
+        // 歌詞は単語ごとに必ず雲へ。連続発火は _trackLyrics 側で startTime 単位に間引かれているので
+        // ここではレート制限せず、各単語ぶんの雲を出す(満杯時は装飾雲を退避=_spawnCloud)。
+        this._lyricCloudAt = performance.now();
         this._spawnCloud({ lyric: text });
     }
 
@@ -1060,7 +1043,6 @@ export class SongKotaete extends BaseSong {
         if (this.goalPending || this.goalReached) return;
         this.goalPending = true;
         this.finishing = true; // 一気に締めへ
-        this._sunFinale = true; // 太陽が終着点として降りてきて巨大化(飛んでいく先)
         // 塔がどれだけ高くても確実に締まるよう、既存の葉は通過済みにして、
         // ミクを満開ひまわりへ“最後の超ジャンプ”で一気に到達させる。
         const highest = this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y;
@@ -1074,53 +1056,76 @@ export class SongKotaete extends BaseSong {
     }
 
     _buildBloom(parent, y) {
-        // --- 中心(花托): 手前へ膨らむ茶色のドーム ---
-        const centerMat = new THREE.MeshStandardMaterial({ color: 0x5a3417, roughness: 0.95 });
-        const center = new THREE.Mesh(new THREE.SphereGeometry(0.74, 30, 22), centerMat);
-        center.scale.set(1, 1, 0.46);
-        center.position.set(0, 0, 0.14);
-        parent.add(center);
-        this._bloomCenterMat = centerMat;
+        // 巨大な大輪にするため、ポップ(0→1)の内側に bloomRoot を置いて常時 BLOOM_SCALE 倍に保つ。
+        // 咲き切ると pop≒1 × BLOOM_SCALE で画面いっぱいの満開ひまわりになる。
+        const root = new THREE.Group();
+        root.scale.setScalar(BLOOM_SCALE);
+        parent.add(root);
+        this._bloomRoot = root;
 
-        // --- 種(phyllotaxis 螺旋に並ぶ): InstancedMesh で大量配置 ---
-        const seedCount = this.isMobile ? 120 : 220;
-        const seedGeo = new THREE.CylinderGeometry(0.016, 0.03, 0.06, 5);
+        // --- 中心(花盤): 手前へ膨らむ茶色のドーム + 外周のディスク・フローレット環 ---
+        const centerMat = new THREE.MeshStandardMaterial({ color: 0x4f2e14, roughness: 0.96 });
+        const center = new THREE.Mesh(new THREE.SphereGeometry(0.86, 36, 26), centerMat);
+        center.scale.set(1, 1, 0.42);
+        center.position.set(0, 0, 0.12);
+        root.add(center);
+        this._bloomCenterMat = centerMat;
+        // 花盤と花弁の境目の黄褐色リング(本物のひまわりの“縁取り”)
+        const rimMat = new THREE.MeshStandardMaterial({ color: 0x8a5a1c, roughness: 0.8 });
+        const rim = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.1, 12, 48), rimMat);
+        rim.position.set(0, 0, 0.16);
+        root.add(rim);
+        this._bloomRimMat = rimMat;
+
+        // --- 種(phyllotaxis 螺旋に並ぶ): InstancedMesh で大量配置。大輪ぶん数も半径も増やす ---
+        const seedCount = this.isMobile ? 240 : 460;
+        const seedGeo = new THREE.CylinderGeometry(0.016, 0.032, 0.07, 5);
         seedGeo.rotateX(Math.PI / 2); // +zへ向ける
-        const seedMat = new THREE.MeshStandardMaterial({ color: 0x271a0c, roughness: 0.85 });
+        const seedMat = new THREE.MeshStandardMaterial({ color: 0x21150a, roughness: 0.88 });
         const seeds = new THREE.InstancedMesh(seedGeo, seedMat, seedCount);
         const golden = Math.PI * (3 - Math.sqrt(5));
         const mtx = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+        const seedR = 0.8;
         for (let i = 0; i < seedCount; i++) {
-            const r = 0.66 * Math.sqrt(i / seedCount);
+            const r = seedR * Math.sqrt(i / seedCount);
             const a = i * golden;
-            p.set(Math.cos(a) * r, Math.sin(a) * r, 0.14 + Math.sqrt(Math.max(0, 0.55 - r * r)) * 0.42);
-            const s = 0.7 + (i / seedCount) * 0.8;
+            p.set(Math.cos(a) * r, Math.sin(a) * r, 0.12 + Math.sqrt(Math.max(0, 0.72 - r * r)) * 0.4);
+            const s = 0.7 + (i / seedCount) * 0.85;
             sc.set(s, s, s);
             mtx.compose(p, q, sc);
             seeds.setMatrixAt(i, mtx);
         }
         seeds.instanceMatrix.needsUpdate = true;
-        parent.add(seeds);
+        root.add(seeds);
         this._bloomSeeds = seeds;
 
-        // --- 花びら: 2重リングの尖った花弁(カップ状)。閉→開アニメ ---
+        // --- 花びら: 3重リングの尖った花弁(頂点カラーで二色グラデ)。閉→開アニメ ---
         this.bloomPetals = [];
         const petalGeo = this._petalGeometry();
         const petalMat = new THREE.MeshStandardMaterial({
-            color: SUN_GOLD, roughness: 0.55, side: THREE.DoubleSide,
-            emissive: 0x4a3500, emissiveIntensity: 0.18,
+            vertexColors: true, roughness: 0.5, side: THREE.DoubleSide,
+            emissive: 0x4a3500, emissiveIntensity: 0.16,
         });
         this._bloomPetalMat = petalMat;
-        const rings = [{ n: 14, r: 0.72, len: 0.95 }, { n: 16, r: 0.92, len: 1.18 }];
+        // 内側=短く立ち気味、外側=長く寝かせて大輪のシルエットを作る
+        const rings = [
+            { n: 18, r: 0.92, len: 1.05, tilt: 0.34 },
+            { n: 22, r: 1.18, len: 1.35, tilt: 0.2 },
+            { n: 26, r: 1.46, len: 1.6, tilt: 0.08 },
+        ];
         rings.forEach((ring, ri) => {
             for (let i = 0; i < ring.n; i++) {
-                const ang = (i / ring.n) * Math.PI * 2 + (ri ? Math.PI / ring.n : 0);
+                const ang = (i / ring.n) * Math.PI * 2 + (ri % 2 ? Math.PI / ring.n : 0);
+                // 花弁ごとに小さなホルダーを噛ませ、放射軸まわりに少し起こして“皿”の立体感を出す
+                const holder = new THREE.Group();
+                holder.position.set(Math.cos(ang) * ring.r, Math.sin(ang) * ring.r, 0.04 - ri * 0.02);
+                holder.rotation.z = ang;          // 外向き
+                holder.rotation.y = ring.tilt;    // 先端を手前へ起こす(皿状)
                 const petal = new THREE.Mesh(petalGeo, petalMat);
-                petal.position.set(Math.cos(ang) * ring.r, Math.sin(ang) * ring.r, 0.02 - ri * 0.03);
-                petal.rotation.z = ang;            // 外向き
                 petal.scale.setScalar(ring.len * 0.01); // 閉じた状態
-                parent.add(petal);
-                this.bloomPetals.push({ petal, base: ring.len, ang });
+                holder.add(petal);
+                root.add(holder);
+                this.bloomPetals.push({ petal, holder, base: ring.len, ang, tilt: ring.tilt });
             }
         });
         this.bloom = { y, open: 0 };
@@ -1148,8 +1153,8 @@ export class SongKotaete extends BaseSong {
         const s = this._easeOutBack(this.bloom.open);
         for (const bp of this.bloomPetals) {
             bp.petal.scale.setScalar(Math.max(0.01, bp.base * s));
-            // 開きながら少しだけ起き上がる(unfurl)
-            bp.petal.position.z = (0.02) + (1 - this.bloom.open) * 0.18;
+            // 開きながら花弁が反り返る(unfurl): 閉時は強く起き上がり、開くと所定の皿角へ寝る
+            if (bp.holder) bp.holder.rotation.y = bp.tilt + (1 - this.bloom.open) * 0.95;
         }
     }
 
@@ -1196,8 +1201,8 @@ export class SongKotaete extends BaseSong {
         if (w && w.startTime !== this._lastWordStart) {
             this._lastWordStart = w.startTime;
             if (w.text) {
-                this._spawnLyricLeaf(w.text);
-                this._spawnLyricCloud(w.text); // 横の空きに歌詞を雲として読ませる(歌詞アプリの芯)
+                this._spawnLyricLeaf();         // 足場(ラベル無し)を間隔制御で生やす
+                this._spawnLyricCloud(w.text);  // 歌詞は単語ごとに必ず雲へ(歌詞アプリの芯)
             }
         }
     }
@@ -1309,8 +1314,6 @@ export class SongKotaete extends BaseSong {
         this._stemTex && this._stemTex.dispose();
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
-        if (this.sun) { this.scene.remove(this.sun); this.sun.material.dispose(); }
-        this._sunTex && this._sunTex.dispose();
         [this.stem, this.ground, this.sky].forEach(m => {
             if (!m) return; this.scene.remove(m);
             if (m.geometry) m.geometry.dispose();
