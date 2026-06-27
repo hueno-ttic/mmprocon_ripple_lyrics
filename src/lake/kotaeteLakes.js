@@ -300,14 +300,17 @@ export function buildNightLake(_THREE, ctx, group, items) {
     } });
 
     // ---- 手前の草むら -----------------------------------------------------
-    const grassData = [];
-    const gN = isMobile ? 70 : 130;
-    for (let i = 0; i < gN; i++) {
-        const x = -34 + Math.random() * 68, z = -4 - Math.random() * 12;
-        const h = 0.9 + Math.random() * 2.0, w = h * (1.0 + Math.random() * 0.6);
-        grassData.push({ x, y: WY, z, w, h, c: Math.random() < 0.5 ? [0.05, 0.15, 0.07] : [0.04, 0.11, 0.06] });
+    // ctx.skipForegroundGrass=true のときは抑制(中央の草が前景に立つと歌詞の視認性が落ちるため)
+    if (!ctx.skipForegroundGrass) {
+        const grassData = [];
+        const gN = isMobile ? 70 : 130;
+        for (let i = 0; i < gN; i++) {
+            const x = -34 + Math.random() * 68, z = -4 - Math.random() * 12;
+            const h = 0.9 + Math.random() * 2.0, w = h * (1.0 + Math.random() * 0.6);
+            grassData.push({ x, y: WY, z, w, h, c: Math.random() < 0.5 ? [0.05, 0.15, 0.07] : [0.04, 0.11, 0.06] });
+        }
+        addBillboards(group, items, grass, grassData, { sway: 0.4, rim: [0.03, 0.10, 0.06], fog: FOG });
     }
-    addBillboards(group, items, grass, grassData, { sway: 0.4, rim: [0.03, 0.10, 0.06], fog: FOG });
 
     // ---- 星 & 蛍 ----------------------------------------------------------
     addPoints(group, items, sprite, starData(isMobile), { color: [0.82, 0.9, 1.0], twinkle: 1.4, base: 130, cap: 5 });
