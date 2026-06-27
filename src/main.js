@@ -51,6 +51,47 @@ window.addEventListener('unhandledrejection', (event) => {
     }
 });
 
+// 再デプロイで内容ハッシュが変わると、古い index.html/main.js が参照する曲チャンク
+// (例: song-takeover-xxxx.js)はサーバーから消えており、その曲を選んだ瞬間に
+// 動的 import() が 404 になる(= "Failed to fetch dynamically imported module")。
+// 一度フルリロードすれば新しい index.html→新ハッシュを取り直して必ず復旧するので、
+// stale chunk を検知したら自動リロードする。曲チャンクは曲選択時(load より遥か後)に
+// 遅延ロードされるため、ガードは時刻ベースにする。直近に一度リロードしたばかりなら
+// 再発を「別要因」とみなして再リロードせず諦める(=無限ループ防止)。
+const RELOAD_GUARD_KEY = 'mm_chunk_reloaded_at';
+const RELOAD_GUARD_WINDOW_MS = 30 * 1000;
+
+function isStaleChunkError(err) {
+    const msg = (err && (err.message || err.toString())) || '';
+    return msg.includes('Failed to fetch dynamically imported module')
+        || msg.includes('error loading dynamically imported module')
+        || msg.includes('Importing a module script failed'); // Safari の同等メッセージ
+}
+
+function reloadOnceForStaleChunk() {
+    try {
+        const last = Number(sessionStorage.getItem(RELOAD_GUARD_KEY) || 0);
+        if (last && (Date.now() - last) < RELOAD_GUARD_WINDOW_MS) {
+            // ついさっきリロードしたのにまだ失敗する = 別要因。ループを避けて諦める。
+            console.error('[Ripple Lyrics] チャンク再取得後も失敗。自動リロードを中止します。');
+            return false;
+        }
+        sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
+    } catch (_) { /* sessionStorage 不可環境でもリロードは試みる */ }
+    console.warn('[Ripple Lyrics] 古い曲チャンクを検出。最新版を取り直すため再読み込みします。');
+    location.reload();
+    return true;
+}
+
+// Vite が dynamic import を変換した際の標準プリロード失敗イベント。
+// 曲選択前にプリロードが走って失敗するケースもここで拾う。
+window.addEventListener('vite:preloadError', (event) => {
+    if (isStaleChunkError(event.payload)) {
+        event.preventDefault(); // Vite 既定の throw を抑止して自前でリロード
+        reloadOnceForStaleChunk();
+    }
+});
+
 // スマホ向けレターボックス/ピラーボックスの座標系シムを最優先で仕込む
 // (シーンのカメラ aspect やポインタ計算より前に有効化する必要がある)
 initStage();
@@ -377,6 +418,9 @@ class Application {
                 SongClass = await loader();
             } catch (err) {
                 console.error(`[Ripple Lyrics] 曲チャンクのロードに失敗: ${songConfig.id}`, err);
+                // 再デプロイでハッシュが切れた古いチャンクなら、一度リロードすれば復旧する。
+                // (BaseSong フォールバックで無言に壊すより、最新版で正しく遊ばせる)
+                if (isStaleChunkError(err) && reloadOnceForStaleChunk()) return;
                 SongClass = BaseSong;
             }
         }
