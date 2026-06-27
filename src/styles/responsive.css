@@ -1,67 +1,67 @@
 /* Responsive styles for mobile devices */
-@media (max-width: 768px) {
+@container (max-width: 768px) {
     /* タッチ端末ではキーボードショートカット表記(Space/ESC)は無意味なので隠し、
        ボタン幅を詰めてヘッダー/フッターの要素衝突を防ぐ */
-    .kbd-hint {
+    .is-mobile .kbd-hint {
         display: none;
     }
 
     /* 左右40pxのパディングは狭幅でタイトルと戻るボタンを衝突させるため縮める */
-    header, footer {
+    .is-mobile header, .is-mobile footer {
         padding: 18px 16px;
     }
 
-    #song-title {
+    .is-mobile #song-title {
         font-size: 18px;
         white-space: nowrap;
     }
 
-    #song-info {
+    .is-mobile #song-info {
         min-width: 0;
         flex-shrink: 1;
         overflow: hidden;
     }
 
-    #back-to-lake {
+    .is-mobile #back-to-lake {
         flex-shrink: 0;
         padding: 10px 14px;
     }
 
     /* フッターの再生コントロールが横に収まるよう間隔と時間表示を圧縮 */
-    #player-controls {
+    .is-mobile #player-controls {
         gap: 12px;
     }
 
-    #play-pause-btn {
+    .is-mobile #play-pause-btn {
         flex-shrink: 0;
         padding: 10px 16px;
     }
 
-    #time-label {
+    .is-mobile #time-label {
         min-width: 0 !important;
         margin-left: 8px !important;
         font-size: 11px !important;
     }
 
-    #song-artist {
+    .is-mobile #song-artist {
         font-size: 12px;
     }
 
-    .song-label {
+    .is-mobile .song-label {
         max-width: calc(44vw - 8px);
     }
 
     /* モバイルでは選択中の曲名のみを背景に残すので、唯一の見出しが
        省略されないよう幅を広げ、最長タイトルでも収まる字面で強調する */
-    .song-label--front {
+    .is-mobile .song-label--front {
         max-width: 90vw;
     }
 
-    .song-label--front .song-title {
+    .is-mobile .song-label--front .song-title {
         font-size: 21px;
     }
 
-    .song-title {
+    .is-mobile .song-title {
         font-size: 18px;
         letter-spacing: 1px;
         white-space: nowrap;
@@ -70,7 +70,7 @@
         max-width: 100%;
     }
 
-    .song-artist {
+    .is-mobile .song-artist {
         font-size: 10px;
     }
 }

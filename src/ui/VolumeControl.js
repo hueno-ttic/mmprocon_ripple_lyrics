@@ -158,25 +158,26 @@ export class VolumeControl {
                 border-radius: 50%;
                 background: #fff;
             }
-            @media (max-width: 600px) {
-                /* モバイルでは中央右の本文・選曲ラベルに被るため、占有面積を小さくし
-                   通常時は半透明にして背後の内容を読めるようにする(操作中は不透明に戻す) */
+            @container (max-width: 1024px), (max-height: 700px) {
+                /* モバイルや縦が狭い環境では、音量UIが邪魔にならないよう極限まで小さくし、
+                   通常時は半透明にしてコンテンツを読めるようにする(操作時のみ不透明) */
                 .app-volume-control {
                     right: calc(6px + env(safe-area-inset-right, 0px));
-                    padding: 8px 4px;
-                    gap: 6px;
-                    border-radius: 16px;
-                    opacity: 0.5;
+                    padding: 6px 4px;
+                    gap: 4px;
+                    border-radius: 12px;
+                    opacity: 0.35;
                     transition: opacity 0.25s ease;
                 }
                 .app-volume-control:active,
+                .app-volume-control:hover,
                 .app-volume-control:focus-within {
                     opacity: 1;
                 }
-                .app-volume-mute { width: 24px; height: 24px; font-size: 14px; }
-                .app-volume-slider { width: 4px; height: 78px; }
-                .app-volume-slider::-webkit-slider-thumb { width: 13px; height: 13px; }
-                .app-volume-slider::-moz-range-thumb { width: 13px; height: 13px; }
+                .app-volume-mute { width: 20px; height: 20px; font-size: 11px; }
+                .app-volume-slider { width: 3px; height: 58px; }
+                .app-volume-slider::-webkit-slider-thumb { width: 9px; height: 9px; }
+                .app-volume-slider::-moz-range-thumb { width: 9px; height: 9px; }
             }
         `;
         document.head.appendChild(style);

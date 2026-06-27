@@ -29,6 +29,7 @@ body, html {
     height: 100vh;
     height: 100dvh;
     position: relative;
+    container-type: size;
 }
 
 #ui-container {

@@ -178,6 +178,7 @@ function apply() {
     const app = document.getElementById('app');
     if (app) {
         if (active) {
+            app.classList.add('is-mobile');
             // #app は常に「論理ステージ寸法(横長)」で配置する。
             app.style.position = 'absolute';
             app.style.width = `${SW}px`;
@@ -196,6 +197,7 @@ function apply() {
                 app.style.transform = '';
             }
         } else {
+            app.classList.remove('is-mobile');
             app.style.position = '';
             app.style.left = '';
             app.style.top = '';

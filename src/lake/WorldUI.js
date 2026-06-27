@@ -15,7 +15,7 @@ export class WorldUI {
         this.container = container;
         // 選曲ハブは滞在時間が最も長い画面なので、各曲シーンと同じ基準で
         // モバイル時は重い表現(MSAA・影・bloom)を落として持続フレームレートを優先する。
-        this.isMobile = window.innerWidth < 768;
+        this.isMobile = quality.isMobile;
         this.scene = new THREE.Scene();
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
@@ -493,7 +493,16 @@ export class WorldUI {
     // 全曲(6/6)制覇したときの控えめな達成テキスト。湖面UIに一度だけ表示する。
     // 既に出していれば何もしない(冪等)。過剰演出はせず、静かな完成の合図のみ。
     _maybeShowEnding() {
-        if (!appState.areAllSongsComplete()) return;
+        if (!appState.areAllSongsComplete()) {
+            if (this._endingTimeout) clearTimeout(this._endingTimeout);
+            if (this._endingRemoveTimeout) clearTimeout(this._endingRemoveTimeout);
+            if (this.ending?.parentNode) {
+                this.ending.parentNode.removeChild(this.ending);
+                this.ending = null;
+            }
+            this._endingShown = false;
+            return;
+        }
         if (this._endingShown) return;
         this._endingShown = true;
 
@@ -503,15 +512,28 @@ export class WorldUI {
             position: absolute; left: 50%; top: 64px; transform: translateX(-50%);
             color: rgba(255,255,255,0.92); z-index: 480; pointer-events: none;
             font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
-            font-size: clamp(13px, 3.2vw, 18px); font-weight: 300; letter-spacing: 0.18em;
+            font-size: clamp(13px, 1.5cqw, 18px); font-weight: 300; letter-spacing: 0.18em;
             text-align: center; white-space: nowrap;
             text-shadow: 0 0 6px rgba(0,0,0,0.85), 0 0 18px rgba(212,175,55,0.5);
             opacity: 0; transition: opacity 1.4s ease;
         `;
         ending.textContent = '水の循環、完成 — すべての水をめぐった';
         this.container.appendChild(ending);
+        this.ending = ending;
+        
         // ふわっと浮かび上がらせる
         requestAnimationFrame(() => { ending.style.opacity = '1'; });
+
+        // 5秒後に自動的にフェードアウトし、DOMから完全に削除する(残りっぱなしを防止)
+        this._endingTimeout = setTimeout(() => {
+            ending.style.opacity = '0';
+            this._endingRemoveTimeout = setTimeout(() => {
+                if (ending.parentNode) {
+                    ending.parentNode.removeChild(ending);
+                }
+                if (this.ending === ending) this.ending = null;
+            }, 1400);
+        }, 5000);
     }
 
     _updateProgressCounter() {
@@ -551,6 +573,12 @@ export class WorldUI {
             this.labelsContainer.style.display = 'none';
             if (this.selectionPanel) this.selectionPanel.style.display = 'none';
             if (this.thumbCard) this.thumbCard.style.display = 'none';
+            if (this._endingTimeout) clearTimeout(this._endingTimeout);
+            if (this._endingRemoveTimeout) clearTimeout(this._endingRemoveTimeout);
+            if (this.ending?.parentNode) {
+                this.ending.parentNode.removeChild(this.ending);
+                this.ending = null;
+            }
             eventBus.emit('loadSong', song);
             this.isTransitioning = false;
         });
@@ -982,6 +1010,11 @@ export class WorldUI {
         }
         if (this._affordanceStyleEl?.parentNode) {
             this._affordanceStyleEl.parentNode.removeChild(this._affordanceStyleEl);
+        }
+        if (this._endingTimeout) clearTimeout(this._endingTimeout);
+        if (this._endingRemoveTimeout) clearTimeout(this._endingRemoveTimeout);
+        if (this.ending?.parentNode) {
+            this.ending.parentNode.removeChild(this.ending);
         }
     }
 }

@@ -82,7 +82,7 @@ export class TitleScreen {
         this.title.style.position = 'relative';
         this.title.style.zIndex = '1';
         this.title.style.fontFamily = '"Inter", sans-serif';
-        this.title.style.fontSize = 'min(10vw, 80px)';
+        this.title.style.fontSize = 'min(6.67cqw, 80px)';
         this.title.style.fontWeight = '300';
         this.title.style.letterSpacing = '10px';
         this.title.style.opacity = '0';
@@ -94,7 +94,7 @@ export class TitleScreen {
         this.tagline = document.createElement('div');
         this.tagline.innerText = '- 水の循環 -';
         this.tagline.style.marginTop = '18px';
-        this.tagline.style.fontSize = 'min(4vw, 20px)';
+        this.tagline.style.fontSize = 'min(1.67cqw, 20px)';
         this.tagline.style.letterSpacing = '8px';
         this.tagline.style.fontWeight = '300';
         this.tagline.style.opacity = '0';
@@ -106,7 +106,7 @@ export class TitleScreen {
         this.subtitle = document.createElement('div');
         this.subtitle.innerText = '画面をクリックして波紋を起こす';
         this.subtitle.style.marginTop = '40px';
-        this.subtitle.style.fontSize = '18px';
+        this.subtitle.style.fontSize = 'min(1.5cqw, 18px)';
         this.subtitle.style.letterSpacing = '4px';
         this.subtitle.style.opacity = '0';
         this.subtitle.style.transition = 'opacity 1s ease';
@@ -173,7 +173,7 @@ export class TitleScreen {
             bottom: calc(22px + env(safe-area-inset-bottom, 0px));
             padding: 9px 20px;
             font-family: 'Noto Sans JP', 'Inter', sans-serif;
-            font-size: 13px; letter-spacing: 0.18em;
+            font-size: min(1.08cqw, 13px); letter-spacing: 0.18em;
             color: rgba(255,255,255,0.85);
             background: rgba(255,255,255,0.08);
             border: 1px solid rgba(255,255,255,0.28);

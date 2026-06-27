@@ -16,29 +16,33 @@
 class QualityManager {
     constructor() {
         this.dpr = window.devicePixelRatio || 1;
-        this.isMobile = window.innerWidth < 768
-            || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+        this.isMobile = Math.min(window.innerWidth, window.innerHeight) < 768
+            || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+            || (navigator.maxTouchPoints > 0 && /Macintosh/i.test(navigator.userAgent || ''));
 
         // ティア(0=最高 … 3=最低)。pr は pixelRatio の上限。
         this.tiers = [
-            { name: 'high',   pr: 1.5,  bloom: true,  shadows: true,  antialias: true  },
-            { name: 'medium', pr: 1.25, bloom: true,  shadows: false, antialias: false },
-            { name: 'low',    pr: 1.0,  bloom: false, shadows: false, antialias: false },
-            { name: 'min',    pr: 0.8,  bloom: false, shadows: false, antialias: false },
+            { name: 'high',   pr: 1.75, bloom: true,  shadows: true,  antialias: true  },
+            { name: 'medium', pr: 1.5,  bloom: true,  shadows: true,  antialias: true  },
+            { name: 'low',    pr: 1.2,  bloom: true,  shadows: false, antialias: false },
+            { name: 'min',    pr: 0.95, bloom: false, shadows: false, antialias: false },
         ];
 
         // 端末ヒューリスティクスで初期ティアを推定
         const cores = navigator.hardwareConcurrency || 4;
         const mem = navigator.deviceMemory || 4;   // GB(対応ブラウザのみ)
         let t = 0;
-        if (this.isMobile) t = 1;                          // モバイルは中から
-        if (this.isMobile && (cores <= 4 || mem <= 4)) t = 2;
+        if (this.isMobile) {
+            // 最近のモバイルデバイスは高性能なため、コア数やメモリに応じて高〜中画質を初期割り当て
+            t = (cores >= 6) ? 0 : 1;
+            if (cores <= 4 || mem <= 4) t = 2;
+        }
         if (cores <= 2 || mem <= 2) t = 3;                 // かなり非力
         this.tierIndex = t;
 
         // 実行時の追加スケール(FPS監視で 0.6〜1.0 を動かす)
         this.runtimeScale = 1;
-        this.floorPr = 0.6;          // これ以下には落とさない(可読性の限界)
+        this.floorPr = 0.95;          // 画面がボケる(モザイク状になる)のを防ぐため、下限をクッキリ見える範囲に引き上げ
         this.manualPr = null;        // デバッグ等で手動固定する場合の実効pixelRatio
 
         // FPS監視の内部状態
@@ -59,8 +63,9 @@ class QualityManager {
     _bindViewportChange() {
         const onChange = () => {
             this.dpr = window.devicePixelRatio || 1;
-            this.isMobile = window.innerWidth < 768
-                || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+            this.isMobile = Math.min(window.innerWidth, window.innerHeight) < 768
+                || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+                || (navigator.maxTouchPoints > 0 && /Macintosh/i.test(navigator.userAgent || ''));
         };
         window.addEventListener('resize', onChange);
         window.addEventListener('orientationchange', onChange);
@@ -127,8 +132,9 @@ class QualityManager {
         // 重い: 45fps未満が1.2秒続いたら1段階下げる
         if (fps < 45) {
             this._lowMs += dt; this._goodMs = 0;
-            if (this._lowMs > 1200 && this.runtimeScale > this.floorPr) {
-                this.runtimeScale = Math.max(0.55, this.runtimeScale - 0.15);
+            const currentPr = this.effectivePixelRatio();
+            if (this._lowMs > 1200 && currentPr > this.floorPr) {
+                this.runtimeScale = Math.max(0.6, this.runtimeScale - 0.12);
                 this._lowMs = 0;
             }
         // 軽い: 57fps超が4秒続いたら少しだけ戻す(振動を避け控えめに)
