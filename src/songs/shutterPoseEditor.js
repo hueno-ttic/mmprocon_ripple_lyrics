@@ -133,6 +133,10 @@ export class ShutterPoseEditor {
     this.panel = null;
     this._exprApplied = null; // 直近に適用した表情モーフ名(切替時に0へ戻す)
     this._styleEl = null;
+    // 「かっちり止める」ための差分適用: 変化があった時だけ即時セット＋クランプし、
+    // 落ち着いたら凍結して一切触らない(lerp綱引きによるプルプル振動を根絶)。
+    this._poseDirty = true;   // 適用が必要か(編集・土台変更・リセット・起動で立てる)
+    this._settleClock = 0;    // 変化後の経過秒(一定で凍結)
   }
 
   get isEditing() { return this.editing; }
@@ -151,6 +155,7 @@ export class ShutterPoseEditor {
       if (p) base = mergePose(base, p.pose);
     }
     this.editPose = base;
+    this._markDirty();
 
     song.poseEditing = true;
     this.editing = true;
@@ -188,15 +193,27 @@ export class ShutterPoseEditor {
   }
 
   // ── 毎フレーム適用(song.update から編集中のみ呼ばれる) ──────────
-  // 被写体を中央へ据えて(うろつき停止)カメラへ正対させ、editPose を滑らかに反映する。
+  // 被写体を中央へ据えてカメラへ正対させ、editPose を反映する。
+  // ポーズ本体は「変化があった時だけ即時セット＋クランプ」を行い、少し落ち着いたら凍結する。
+  //   - 即時セット(applySubjectPoseImmediate): 毎フレーム同じ editPose から始めるので
+  //     clampArmsWorld の結果が決定論的になり、lerp(増分補間)×クランプの綱引きで起きる
+  //     プルプル振動が原理的に発生しない。
+  //   - 凍結: 変化が収まったら一切ボーンに触らない＝かっちり静止。
   applyToSubject(subject, deltaTime) {
     const song = this.song;
     if (!subject || !subject.mesh) return;
-    song.lerpSubjectPose(subject, this.editPose, 0.4);
-    if (song.clampArmsWorld) song.clampArmsWorld(subject);
-    this._applyExpr(subject);
 
-    // 中央固定＋カメラ正対(撮影者が周り込んでも正面を維持)
+    if (this._poseDirty) {
+      song.applySubjectPoseImmediate(subject, this.editPose); // 毎回 editPose から開始＝決定論的
+      if (song.clampArmsWorld) song.clampArmsWorld(subject);
+      this._settleClock += deltaTime;
+      if (this._settleClock > 0.12) this._poseDirty = false;  // 入り後に凍結(以後は不干渉)
+    }
+
+    this._applyExpr(subject); // 表情は固定値の代入のみ＝振動しない
+
+    // 中央固定＋カメラ正対(撮影者が周り込んでも正面を維持)。
+    // ルート回転はボーンのローカル回転に影響しないため、凍結中でも貫通は再発しない。
     const px = subject.baseX;
     const pz = song.mikuBaseZ;
     subject.mesh.position.set(px, song.mikuBaseY, pz);
@@ -225,9 +242,13 @@ export class ShutterPoseEditor {
   }
 
   // ── 値の更新 ─────────────────────────────────────────────
+  // editPose が変わったら適用を再開させる(凍結→再適用→再凍結)。
+  _markDirty() { this._poseDirty = true; this._settleClock = 0; }
+
   _setBone(bone, axis, value) {
     if (!this.editPose[bone]) this.editPose[bone] = { x: 0, y: 0, z: 0 };
     this.editPose[bone][axis] = clampVal(bone, axis, value);
+    this._markDirty();
   }
 
   // ── DOM 構築(UI/UXはここに集約。後から差し替えやすいよう自己完結) ──
@@ -276,6 +297,7 @@ export class ShutterPoseEditor {
       const p = (song.getAllCutePoses ? song.getAllCutePoses() : []).find((x) => x.id === baseSel.value);
       if (p) base = mergePose(base, p.pose);
       this.editPose = base;
+      this._markDirty();
       this._syncExprSelect();
       this._buildGroups();
     });
@@ -298,6 +320,7 @@ export class ShutterPoseEditor {
 
     panel.querySelector('.spe-reset').addEventListener('click', () => {
       this.editPose = clonePose(BASE_POSE);
+      this._markDirty();
       baseSel.value = '';
       this._syncExprSelect();
       this._buildGroups();
