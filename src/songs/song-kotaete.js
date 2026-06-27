@@ -22,7 +22,6 @@ import { sfx } from '../core/sfx.js';
 // 補助インタラクション(同一画面で共存):
 //   A. 歌詞にこたえる: 葉っぱをタッチで開く・光る=足場確定(問いにこたえる)。
 //   B. 足場づくり    : 空きをタッチで葉っぱを生やしルートを作る。
-//   C. 太陽操作      : 太陽をドラッグ→光の向き/成長速度と葉の生える側が変わる。
 // どれも「やると良くなる」だけで、やらなくても必ずゴールに着く。
 // =============================================================================
 
@@ -74,14 +73,6 @@ export class SongKotaete extends BaseSong {
         this.mikuPulse = 0;
         this.faceDir = 0;              // -1左 / 0正面 / +1右(進行方向)
 
-        // ---- 太陽 / 環境 ----
-        this.sun = null;
-        this.sunX = 2.5;               // 太陽の横位置(光の向き)
-        this.sunHeight = 7.0;          // 太陽の高さ(光の強さ=成長速度)
-        this.draggingSun = false;
-        this.growthRate = 1.0;
-        this.sideBias = 0;             // -1..+1 太陽の側へ葉が寄る
-
         // ---- ゴール ----
         this.goalLeaf = null;
         this.goalPending = false;
@@ -104,8 +95,6 @@ export class SongKotaete extends BaseSong {
 
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
-        this.boundOnPointerMove = this.onPointerMove.bind(this);
-        this.boundOnPointerUp = this.onPointerUp.bind(this);
         this.boundOnSongEnd = () => this.reachGoal();
     }
 
@@ -117,13 +106,10 @@ export class SongKotaete extends BaseSong {
         this.buildSky();
         this.buildGround();
         this.buildStem();
-        this.buildSun();
         this.loadMiku();
 
         window.addEventListener('resize', this.boundOnResize);
         this.songWrapper.addEventListener('pointerdown', this.boundOnPointerDown);
-        window.addEventListener('pointermove', this.boundOnPointerMove);
-        window.addEventListener('pointerup', this.boundOnPointerUp);
         eventBus.on('songEnd', this.boundOnSongEnd);
 
         super.init();
@@ -150,14 +136,14 @@ export class SongKotaete extends BaseSong {
         this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
-        // 空(青)と地(緑)の自然な回り込み＋太陽の方向光で立体感を出す
+        // 空(青)と地(緑)の自然な回り込み＋斜め上からの方向光で立体感を出す
         this.hemiLight = new THREE.HemisphereLight(0xbfe3ff, 0x5f9a44, 0.9);
         this.scene.add(this.hemiLight);
         this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
         this.scene.add(this.ambientLight);
-        this.sunLight = new THREE.DirectionalLight(0xfff1bf, 2.0);
-        this.sunLight.position.set(this.sunX, 12, 6);
-        this.scene.add(this.sunLight);
+        this.keyLight = new THREE.DirectionalLight(0xfff1bf, 2.0);
+        this.keyLight.position.set(3, 12, 6);
+        this.scene.add(this.keyLight);
         // カメラ側からの弱いフィル(正面の陰を起こす)
         this.fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
         this.fillLight.position.set(0, 2, 12);
@@ -347,31 +333,6 @@ export class SongKotaete extends BaseSong {
         return geo;
     }
 
-    // 太陽(ドラッグ可能)。光線つき。
-    buildSun() {
-        const c = document.createElement('canvas'); c.width = c.height = 256;
-        const x = c.getContext('2d');
-        const g = x.createRadialGradient(128, 128, 10, 128, 128, 120);
-        g.addColorStop(0, 'rgba(255,248,200,1)');
-        g.addColorStop(0.55, 'rgba(255,196,40,1)');
-        g.addColorStop(0.8, 'rgba(255,170,30,0.85)');
-        g.addColorStop(1, 'rgba(255,170,30,0)');
-        x.fillStyle = g; x.beginPath(); x.arc(128, 128, 120, 0, Math.PI * 2); x.fill();
-        this._sunTex = new THREE.CanvasTexture(c);
-        // 青空の上では加算合成だと白飛びするので通常合成で金色を保つ
-        const mat = new THREE.SpriteMaterial({ map: this._sunTex, transparent: true, depthTest: false });
-        this.sun = new THREE.Sprite(mat);
-        this.sun.scale.set(5, 5, 1);
-        this.sun.renderOrder = 5;
-        this.scene.add(this.sun);
-        this._positionSun();
-    }
-
-    _positionSun() {
-        // 太陽は常に空(カメラの上方)に位置し、横は sunX に追従
-        this.sun.position.set(this.sunX, this.camera.position.y + (this.sunHeight - 4), -8);
-    }
-
     // =====================================================================
     // ミク
     // =====================================================================
@@ -410,15 +371,13 @@ export class SongKotaete extends BaseSong {
     // =====================================================================
     // 葉っぱ(足場)
     // =====================================================================
-    // 次の葉を生やす。yを指定しなければラダーの次段に。sideは太陽バイアスで決定。
+    // 次の葉を生やす。yを指定しなければラダーの次段に。sideは左右交互。
     spawnLeaf(text, opts = {}) {
         const idx = this.leafIndexCounter++;
         let y = (opts.y != null) ? opts.y : (FIRST_LEAF_Y + idx * LEAF_SPACING);
-        // 側: 交互を基本に、太陽の側へ寄せる(sideBias)
+        // 側: 左右交互(opts.side 指定があればそれを優先)
         let side = (idx % 2 === 0) ? -1 : 1;
         if (opts.side) side = opts.side;
-        else if (this.sideBias > 0.4) side = 1;
-        else if (this.sideBias < -0.4) side = -1;
         const x = side * LEAF_X;
 
         const group = new THREE.Group();
@@ -490,9 +449,7 @@ export class SongKotaete extends BaseSong {
     // 茎の成長
     // =====================================================================
     updateStem(dt) {
-        // 太陽が高いほど速く伸びる
-        this.growthRate = 0.6 + 0.8 * THREE.MathUtils.clamp((this.sunHeight - 3) / 6, 0, 1);
-        const speed = 2.2 * this.growthRate;
+        const speed = 2.2; // 茎が目標高へ追従する速さ
         this.stemDisplay += (this.stemTopTarget - this.stemDisplay) * Math.min(1, dt * speed);
         if (this.stem) {
             this.stem.scale.y = this.stemDisplay;
@@ -606,16 +563,6 @@ export class SongKotaete extends BaseSong {
         this.camera.lookAt(0, this.climbY + LOOK_Y_OFF, 0);
     }
 
-    updateSun(dt) {
-        // 太陽の側へ葉が寄るバイアス(滑らかに)
-        const want = THREE.MathUtils.clamp(this.sunX / 5, -1, 1);
-        this.sideBias += (want - this.sideBias) * Math.min(1, dt * 2);
-        this._positionSun();
-        if (this.sunLight) this.sunLight.position.set(this.sunX, this.camera.position.y + 10, 6);
-        // 太陽のゆらめき
-        if (this.sun) this.sun.material.rotation = (this.sun.material.rotation || 0) + dt * 0.1;
-    }
-
     // =====================================================================
     // 入力
     // =====================================================================
@@ -629,11 +576,6 @@ export class SongKotaete extends BaseSong {
         this._setNDC(event);
         this._raycaster.setFromCamera(this._ndc, this.camera);
 
-        // C. 太陽をつかむ
-        if (this.sun) {
-            const hitSun = this._raycaster.intersectObject(this.sun, false);
-            if (hitSun.length) { this.draggingSun = true; this.dismissFirstInteractable(); return; }
-        }
         // A. 葉っぱ(葉本体 or テキスト札)をタッチ → 確定(問いにこたえる)
         const targets = [];
         for (const l of this.leaves) { if (l.foliage) targets.push(l.foliage); if (l.label) targets.push(l.label); }
@@ -654,16 +596,6 @@ export class SongKotaete extends BaseSong {
             this.dismissFirstInteractable();
         }
     }
-
-    onPointerMove(event) {
-        if (!this.draggingSun || !this.camera) return;
-        this._setNDC(event);
-        // NDC.x → 太陽の横位置、NDC.y → 太陽の高さ(光の強さ=成長速度)
-        this.sunX = THREE.MathUtils.clamp(this._ndc.x * 7, -7, 7);
-        this.sunHeight = THREE.MathUtils.clamp(4 + (this._ndc.y * 0.5 + 0.5) * 6, 3, 10);
-    }
-
-    onPointerUp() { this.draggingSun = false; }
 
     _confirmLeaf(l) {
         l.confirmed = true;
@@ -787,7 +719,6 @@ export class SongKotaete extends BaseSong {
         this.updateMiku(now, dt);
         this.updateBloom(dt);
         this.updateCamera(dt);
-        this.updateSun(dt);
 
         if (this._victoryPose) this._applyVictoryPose(dt);
     }
@@ -873,8 +804,6 @@ export class SongKotaete extends BaseSong {
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
         this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
-        window.removeEventListener('pointermove', this.boundOnPointerMove);
-        window.removeEventListener('pointerup', this.boundOnPointerUp);
         eventBus.off('songEnd', this.boundOnSongEnd);
 
         // 葉/花: 共有ジオメトリ(_leafGeo/_petalGeo)は最後に1回だけ破棄するので、
@@ -897,8 +826,6 @@ export class SongKotaete extends BaseSong {
         this._stemTex && this._stemTex.dispose();
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
-        if (this.sun) { this.scene.remove(this.sun); this.sun.material.dispose(); }
-        this._sunTex && this._sunTex.dispose();
         [this.stem, this.ground, this.sky].forEach(m => {
             if (!m) return; this.scene.remove(m);
             if (m.geometry) m.geometry.dispose();
