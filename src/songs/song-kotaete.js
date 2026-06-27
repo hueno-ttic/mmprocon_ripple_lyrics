@@ -24,6 +24,7 @@ import { buildNightLake } from '../lake/kotaeteLakes.js';
 const WATER_Y = -2.0;                     // 水面の高さ(kotaeteLakes の WY と一致)
 const WARM = new THREE.Color('#F4A86A');  // 奥(光・夜明け)へ触れたときの暖色
 const COOL = new THREE.Color('#5E78C8');  // 手前(静けさ)へ触れたときの寒色
+const FIREFLY = new THREE.Color('#d8f0a0'); // ホタルの緑がかった黄金色
 
 export class SongKotaete extends BaseSong {
     constructor(container, songId) {
@@ -57,7 +58,7 @@ export class SongKotaete extends BaseSong {
         this._lastBeatStart = -1;
         this._beatStart = 0;
         this._beatDuration = 0;
-        this.beatSparkles = null;    // 水面のきらめき点群(拍で一斉に瞬く)
+        this.fireflies = null;       // 水面の上を飛ぶホタル(各自明滅・拍で一斉に強く光る)
 
         // ---- 水鏡の反射(ミクの映り込み・波紋で揺れる) ----
         this.mikuReflection = null;
@@ -109,7 +110,7 @@ export class SongKotaete extends BaseSong {
         this.createTextures();
         this.initThree();
         this.buildLake();
-        this.createBeatSparkles();
+        this.createFireflies();
         this.loadMiku();
         this.createMikuReflection();
         this.createTintOverlay();
@@ -168,34 +169,68 @@ export class SongKotaete extends BaseSong {
         buildNightLake(THREE, this, this.lakeGroup, this.lakeItems);
     }
 
-    // 水面に散らした光の点。拍(ビート)に合わせて一斉に瞬く = 湖が音楽で呼吸する。
-    createBeatSparkles() {
-        const N = this.isMobile ? 40 : 80;
+    // 水面の上を飛ぶホタル。各自がふわふわ漂って明滅し、拍(ビート)で一斉に強く光る。
+    // 位置アニメ・明滅・サイズを点群シェーダ(GPU)で計算するのでCPU負荷は uTime 更新のみ。
+    createFireflies() {
+        const N = this.isMobile ? 28 : 56;
         const geo = new THREE.BufferGeometry();
         const pos = new Float32Array(N * 3);
         const phase = new Float32Array(N);
+        const speed = new Float32Array(N);
+        const scale = new Float32Array(N);
         for (let i = 0; i < N; i++) {
-            pos[i * 3] = (Math.random() - 0.5) * 60;             // x: ±30
-            pos[i * 3 + 1] = WATER_Y + 0.06;                     // 水面のすぐ上
-            pos[i * 3 + 2] = this.camera.position.z - 2 - Math.random() * 60; // 手前〜対岸
+            pos[i * 3] = (Math.random() - 0.5) * 56;                        // x ±28
+            pos[i * 3 + 1] = WATER_Y + 0.3 + Math.random() * 1.6;          // 水面のすぐ上を漂う
+            pos[i * 3 + 2] = this.camera.position.z - 3 - Math.random() * 52; // 手前〜対岸
             phase[i] = Math.random() * Math.PI * 2;
+            speed[i] = 0.6 + Math.random() * 0.9;
+            scale[i] = 0.7 + Math.random() * 0.9;
         }
         geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        this._sparklePhase = phase;
-        const mat = new THREE.PointsMaterial({
-            map: this.glowTexture,
-            size: 0.5,
-            transparent: true,
-            opacity: 0.12,
-            depthWrite: false,
-            depthTest: false,
+        geo.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
+        geo.setAttribute('aSpeed', new THREE.BufferAttribute(speed, 1));
+        geo.setAttribute('aScale', new THREE.BufferAttribute(scale, 1));
+        const mat = new THREE.ShaderMaterial({
+            transparent: true, depthWrite: false, depthTest: false,
             blending: THREE.AdditiveBlending,
-            color: new THREE.Color('#bfe6ff'),
+            uniforms: {
+                uTime: { value: 0 }, uBeat: { value: 0 }, uFade: { value: 0 },
+                uColor: { value: new THREE.Color('#d8f0a0') },
+                uSize: { value: this.isMobile ? 20 : 24 },
+            },
+            vertexShader: `
+              attribute float aPhase; attribute float aSpeed; attribute float aScale;
+              uniform float uTime, uBeat, uSize;
+              varying float vBright;
+              void main(){
+                vec3 p = position;
+                float t = uTime * aSpeed;
+                // ゆらゆらと飛ぶ(大小2つの周期を重ねる)
+                p.x += sin(t*0.6 + aPhase)*2.6 + cos(t*0.23 + aPhase*1.7)*1.2;
+                p.z += cos(t*0.5 + aPhase*0.7)*2.4 + sin(t*0.19 + aPhase*1.3)*1.1;
+                p.y += sin(t*0.9 + aPhase*1.5)*0.7 + 0.5;
+                vec4 mv = modelViewMatrix * vec4(p, 1.0);
+                gl_Position = projectionMatrix * mv;
+                // 個々の明滅 + 拍での一斉フレア
+                float tw = 0.45 + 0.55*sin(uTime*3.0*aSpeed + aPhase*3.1);
+                vBright = clamp(tw, 0.0, 1.0) * (0.55 + uBeat*1.1);
+                gl_PointSize = clamp(uSize*aScale*(1.0 + uBeat*0.9)*(12.0 / -mv.z), 2.0, 50.0);
+              }`,
+            fragmentShader: `
+              uniform vec3 uColor; uniform float uFade, uBeat;
+              varying float vBright;
+              void main(){
+                float r = length(gl_PointCoord - vec2(0.5));
+                if(r > 0.5) discard;
+                float glow = pow(smoothstep(0.5, 0.0, r), 1.6);   // 柔らかい丸い光
+                vec3 col = mix(uColor, vec3(1.0), uBeat*0.5);      // 拍では白く強く
+                gl_FragColor = vec4(col, glow * vBright * uFade);
+              }`,
         });
         const pts = new THREE.Points(geo, mat);
         pts.renderOrder = 3;
         this.scene.add(pts);
-        this.beatSparkles = pts;
+        this.fireflies = pts;
     }
 
     // ミクの「水鏡」の映り込み。波紋(reflectWobble)で左右に揺れ歪む。
@@ -419,14 +454,14 @@ export class SongKotaete extends BaseSong {
         this.beatPulse = Math.max(0, this.beatPulse - dt * 2.6);
     }
 
-    updateSparkles(now) {
-        if (!this.beatSparkles) return;
-        const t = now * 0.001;
-        const twinkle = 0.06 + 0.05 * Math.sin(t * 3.0);
-        const m = this.beatSparkles.material;
-        m.opacity = (twinkle + this.beatPulse * 0.6) * this.lakeFade;
-        m.size = 0.45 + this.beatPulse * 0.7;
-        m.color.copy(this.answerColor).lerp(this._white, 0.7);
+    updateFireflies(now) {
+        if (!this.fireflies) return;
+        const u = this.fireflies.material.uniforms;
+        u.uTime.value = now * 0.001;
+        u.uBeat.value = this.beatPulse;
+        u.uFade.value = this.lakeFade;
+        // ホタル色(緑がかった黄金)を基調に、答えの色をほんのり混ぜる
+        u.uColor.value.copy(this.answerColor).lerp(FIREFLY, 0.62);
     }
 
     updateReflection(now, dt) {
@@ -744,7 +779,7 @@ export class SongKotaete extends BaseSong {
         this.updateRipples(dt);
         this.updateLyrics(dt);
         this.updateMotes(dt);
-        this.updateSparkles(now);     // 水面のきらめき(拍で一斉に瞬く)
+        this.updateFireflies(now);    // 水面の上を飛ぶホタル(拍で一斉に光る)
         this.updateReflection(now, dt); // 水鏡の反射ゆらぎ
 
         // 歌詞の自動流れ + 歌唱パルス(チュートリアル中は止める)
@@ -893,7 +928,7 @@ export class SongKotaete extends BaseSong {
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
         if (this.mikuGlow) { this.scene.remove(this.mikuGlow); this.mikuGlow.material.dispose(); }
-        if (this.beatSparkles) { this.scene.remove(this.beatSparkles); this.beatSparkles.geometry.dispose(); this.beatSparkles.material.dispose(); }
+        if (this.fireflies) { this.scene.remove(this.fireflies); this.fireflies.geometry.dispose(); this.fireflies.material.dispose(); }
         if (this.mikuReflection) { this.scene.remove(this.mikuReflection); this.mikuReflection.material.dispose(); }
         this._reflectTex && this._reflectTex.dispose();
         this.glowTexture && this.glowTexture.dispose();
