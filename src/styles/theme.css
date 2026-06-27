@@ -804,7 +804,17 @@
     flex-wrap: wrap;
     align-content: flex-start;
     justify-content: flex-start;
-    gap: 6px 10px;
+    /* タイルの基準寸法。歌詞が多くて背景に収まらないときは JS が
+       --to-tile-scale を 1 未満へ下げ、全歌詞を縮小して収める
+       （_fitTilesToContainer）。pointer-events:none でスクロール不可のため、
+       はみ出すと下半分が見えなくなる＝必ずスケールで収める。 */
+    --to-tile-base: 14px;
+    --to-tile-padx: 8px;
+    --to-tile-pady: 4px;
+    --to-gap-y: 6px;
+    --to-gap-x: 10px;
+    --to-tile-scale: 1;
+    gap: calc(var(--to-gap-y) * var(--to-tile-scale)) calc(var(--to-gap-x) * var(--to-tile-scale));
     padding: 15px;
     box-sizing: border-box;
     scrollbar-width: none;       /* Hide scrollbar for clean UI */
@@ -812,14 +822,19 @@
 .to-bg-container::-webkit-scrollbar {
     display: none;               /* Hide scrollbar for WebKit browsers */
 }
+/* 自動フィット計測中はタイルのサイズ遷移(transition:all .5s)を止める。
+   遷移が残ると scrollHeight が遷移途中の大きい値を返し、過剰縮小してしまうため。 */
+.to-bg-container.to-fitting .to-tile {
+    transition: none !important;
+}
 
 /* Individual lyric tile – appears as a semi‑transparent block */
 .to-tile {
     position: relative;
     display: inline-block;
-    padding: 4px 8px;
+    padding: calc(var(--to-tile-pady, 4px) * var(--to-tile-scale, 1)) calc(var(--to-tile-padx, 8px) * var(--to-tile-scale, 1));
     font-family: "Courier New", monospace;
-    font-size: 14px;
+    font-size: calc(var(--to-tile-base, 14px) * var(--to-tile-scale, 1));
     font-weight: bold;
     line-height: 1.2;
     border-radius: 4px;
@@ -866,17 +881,20 @@
 }
 
 @container (max-width: 768px) {
-    .is-mobile .to-tile {
-        font-size: 10px;
-        padding: 2px 4px;
-    }
     .is-mobile .to-bg-container {
-        gap: 4px 6px;
+        /* タイル寸法はコンテナ変数経由で算出（_fitTilesToContainer がスケール調整）。
+           スマホ・タブレットは横幅が狭く折り返し行が増えるため、基準を小さめにしつつ
+           背景の縦領域も広げて全歌詞が収まる余地を確保する。 */
+        --to-tile-base: 10px;
+        --to-tile-padx: 4px;
+        --to-tile-pady: 2px;
+        --to-gap-y: 4px;
+        --to-gap-x: 6px;
         padding: 8px;
         top: 13%;
         left: 5%;
         width: 90%;
-        height: 65%;
+        height: 70%;
     }
 }
 
