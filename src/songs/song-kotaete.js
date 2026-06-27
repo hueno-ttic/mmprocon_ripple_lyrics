@@ -699,7 +699,9 @@ export class SongKotaete extends BaseSong {
             const burst = 1 + Math.min(SPAM_BURST_MAX, Math.floor(this._clickStreak / 3));
             const baseY = Math.max(this.climbY + 0.6, p.y);
             for (let i = 0; i < burst; i++) {
-                if (this.leaves.length >= LEAF_HARD_CAP) break; // 重さ防止のハード上限(塔は十分高い)
+                // 上限は“生成を止める”のではなく“通過済みの葉を下から回収して席を空ける”で守る
+                // (生成を止めると、登り切った後に新しい足場が生えず操作不能になるため)。
+                if (this.leaves.length >= LEAF_HARD_CAP) this._recycleLeaves(true);
                 const side = (i === 0) ? (p.x >= 0 ? 1 : -1) : (Math.random() < 0.5 ? -1 : 1);
                 const yy = baseY + i * LEAF_SPACING * (0.7 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.4;
                 const leaf = this.spawnLeaf(this._currentLyricText() || '♪', { y: yy, side });
@@ -801,16 +803,18 @@ export class SongKotaete extends BaseSong {
         if (this._hudAltSpan) this._hudAltSpan.textContent = String(val);
     }
 
-    // 破綻ガード: 葉が増えすぎたら、通過済み&画面外下方の葉を回収して総数を抑える。
-    // 近く/上方の「塔」は残すので、見た目の“めちゃくちゃ伸びてる感”は保たれる。
-    _recycleLeaves() {
-        if (this.leaves.length <= LEAF_HARD_CAP) return;
-        const cutY = this.camera.position.y - 14;
-        const target = this.leaves.length - LEAF_HARD_CAP;
+    // 破綻ガード: 葉が増えたら、ミクが通過済み(landed かつ足元より下)の葉を下から回収。
+    // 上方の「塔」と足元付近は残すので“めちゃくちゃ伸びてる感”は保たれ、かつ churn する
+    // ので「上限で生成が止まって操作不能」にはならない。
+    // makeRoom=true のときは、上限ぴったりでも1枚は席を空ける(生成直前の呼び出し用)。
+    _recycleLeaves(makeRoom = false) {
+        const over = this.leaves.length - LEAF_HARD_CAP;
+        const target = makeRoom ? Math.max(1, over + 1) : over;
+        if (target <= 0) return;
         let removed = 0;
         for (let i = 0; i < this.leaves.length && removed < target; ) {
             const l = this.leaves[i];
-            if (!l.isGoal && l.landed && l.y < cutY && l.y < this.climbY - 3) {
+            if (!l.isGoal && l.landed && l.y < this.climbY - 2) {
                 this._disposeLeaf(l);
                 this.leaves.splice(i, 1);
                 removed++;
