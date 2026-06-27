@@ -39,6 +39,13 @@ const CAM_Z = 9.0;
 const CAM_Y_OFF = 2.6;        // ミクより少し上を見る
 const LOOK_Y_OFF = 2.4;
 
+// ── まだ行けるよモード（#119: 暴走は残す。破綻は消す。）──
+const LEAF_HARD_CAP = 64;       // 葉の総数上限(超過分は通過済みの下方から回収=重さ防止)
+const CAM_LAG = 1.4;            // カメラ追従の鈍さ(小さいほど遅れて追う=暴走感)
+const CAM_MAX_LEAD = 7.0;       // ミクがカメラより上へ離れてよい上限(超えたら一気に追う=画面外消失防止)
+const SPAM_WINDOW = 320;        // 連打判定の時間窓(ms)
+const SPAM_BURST_MAX = 3;       // 連打加速時に1クリックで足す葉の最大数
+
 const LEAF_GREEN = '#3f8f4a';
 const LEAF_GREEN_D = '#2c6b37';
 const SUN_GOLD = new THREE.Color('#FFD54A');
@@ -77,8 +84,7 @@ export class SongKotaete extends BaseSong {
         // ---- 太陽 / 環境 ----
         this.sun = null;
         this.sunX = 2.5;               // 太陽の横位置(光の向き)
-        this.sunHeight = 7.0;          // 太陽の高さ(光の強さ=成長速度)
-        this.draggingSun = false;
+        this.sunHeight = 7.0;          // 太陽の高さ(空での位置)
         this.growthRate = 1.0;
         this.sideBias = 0;             // -1..+1 太陽の側へ葉が寄る
 
@@ -94,6 +100,14 @@ export class SongKotaete extends BaseSong {
         this._lastWordStart = -1;
         this._lastLeafAt = -Infinity;  // 葉の生成レート制限(実時間ms)
         this._lastFrameReal = performance.now();
+
+        // ---- まだ行けるよモード(#119) ----
+        this._altitude = 0;            // 到達高度(HUD・オチ用、climbYの最大)
+        this._lastClickAt = -Infinity; // 連打加速の計測
+        this._clickStreak = 0;         // 連続クリック数(暴走の段階)
+        this._hudEl = null;            // 高度HUD
+        this._finaleEl = null;         // 締め字幕
+        this._overflowFired = false;   // オチの空フラッシュ発火済み
 
         // ---- レイキャスト ----
         this._raycaster = new THREE.Raycaster();
@@ -128,12 +142,12 @@ export class SongKotaete extends BaseSong {
 
         super.init();
 
+        this._ensureHud(); // 高度HUDを常設(オチの伏線)
+
         this.highlightFirstInteractable(() => {
             if (this.answeredCount > 0 || this.builtCount > 0) return null;
-            const leaf = this.leaves.find(l => !l.confirmed);
-            if (leaf) { const p = this.worldToScreen(leaf.group.position.clone()); if (p) return p; }
-            return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 };
-        }, { label: '歌詞の葉にふれて、道をつくろう', autoDismissMs: 11000 });
+            return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.62 };
+        }, { label: 'クリック連打で葉を伸ばせ！ミクを空へ', autoDismissMs: 9000 });
     }
 
     initThree() {
@@ -532,12 +546,26 @@ export class SongKotaete extends BaseSong {
             return;
         }
 
-        // idle: 自分より上で一番近い葉へ次の一歩
+        // idle: 自分より上で一番近い葉へ。ただし上に葉が積み上がっている(バックログ)ほど
+        // 数枚スキップして上の葉へ「超ジャンプ」する(=連打の暴走が勢いに化ける/#119)。
         if (this._jumpCooldown > 0) return;
         const next = this._nextLeafAbove(this.climbY);
-        if (next) {
-            this._startJump(next);
+        if (!next) return;
+
+        let target = next, level = 0;
+        if (!this.finishing) {
+            const above = this.leaves
+                .filter(l => !l.landed && !l.isGoal && l.y > this.climbY + 0.15)
+                .sort((a, b) => a.y - b.y);
+            if (above.length >= 4) {
+                const skip = Math.min(above.length - 1, 1 + Math.floor(above.length / 4));
+                target = above[skip];
+                level = Math.min(4, Math.floor(above.length / 4));
+                // スキップした下の葉は通過済み扱い(回収対象になり、見た目は下へ流れる)
+                for (let k = 0; k < skip; k++) above[k].landed = true;
+            }
         }
+        this._startJump(target, level);
     }
 
     _nextLeafAbove(y) {
@@ -551,14 +579,15 @@ export class SongKotaete extends BaseSong {
         return best;
     }
 
-    _startJump(leaf) {
+    _startJump(leaf, level = 0) {
         this.climbState = 'jumping';
         this.faceDir = Math.sign(leaf.x - this.climbX) || 0;
         this.jump = {
             fromX: this.climbX, fromY: this.climbY,
-            toX: leaf.x, toY: leaf.y, toLeaf: leaf, t: 0,
+            toX: leaf.x, toY: leaf.y, toLeaf: leaf, t: 0, level,
         };
-        sfx.play('ripple'); // 軽い踏み切り音(欠損時は無音)
+        // デッドパン方針: 超ジャンプでも煽らない。踏み切り音だけ(欠損時は無音)。
+        sfx.play('ripple');
     }
 
     // ミクのポーズ/向き/上下(ジャンプの弧)を反映
@@ -600,19 +629,39 @@ export class SongKotaete extends BaseSong {
     // =====================================================================
     updateCamera(dt) {
         const targetY = this.climbY + CAM_Y_OFF;
+        // わざと鈍く追う(=ミクが一時的に上へ抜けて暴走感)。離れすぎたら一気に追って
+        // 画面外に消えっぱなしになるのを防ぐ(破綻ガード)。終盤は登り切りを見せる。
+        const lead = this.climbY - this.camera.position.y;
+        let k = dt * CAM_LAG;
+        if (lead > CAM_MAX_LEAD) k = dt * 7;
+        else if (this.finishing) k = dt * 4;
         this.camera.position.x += (0 - this.camera.position.x) * Math.min(1, dt * 3);
-        this.camera.position.y += (targetY - this.camera.position.y) * Math.min(1, dt * 3);
+        this.camera.position.y += (targetY - this.camera.position.y) * Math.min(1, k);
         this.camera.position.z = CAM_Z;
+        // 位置は遅れて追いつつ、画角はミクを見上げて追う(ぶっ飛ぶと上を仰ぐ)。
         this.camera.lookAt(0, this.climbY + LOOK_Y_OFF, 0);
     }
 
     updateSun(dt) {
-        // 太陽の側へ葉が寄るバイアス(滑らかに)
+        // 終盤: 太陽は「飛んでいく先」。巨大化＆ミクの到達点へ降りてきて、
+        // 暴走の果てに“太陽へ着く”絵を作る(真顔のイカロス)。
+        if (this._sunFinale && this.sun) {
+            this._sunSwell = Math.min(1, (this._sunSwell || 0) + dt * 0.7);
+            const s = 5 + this._sunSwell * 18;
+            this.sun.scale.set(s, s, 1);
+            const ty = (this.goalLeaf ? this.goalLeaf.y : this.climbY) + 2.2;
+            this.sun.position.y += (ty - this.sun.position.y) * Math.min(1, dt * 2);
+            this.sun.position.x += (0 - this.sun.position.x) * Math.min(1, dt * 2);
+            this.sun.position.z = -6;
+            if (this.sunLight) this.sunLight.intensity = 2.0 + this._sunSwell * 2.2;
+            this.sun.material.rotation = (this.sun.material.rotation || 0) + dt * 0.2;
+            return;
+        }
+        // 通常: 太陽は常に空(カメラ上方)にいる=これから登っていく終着点
         const want = THREE.MathUtils.clamp(this.sunX / 5, -1, 1);
         this.sideBias += (want - this.sideBias) * Math.min(1, dt * 2);
         this._positionSun();
         if (this.sunLight) this.sunLight.position.set(this.sunX, this.camera.position.y + 10, 6);
-        // 太陽のゆらめき
         if (this.sun) this.sun.material.rotation = (this.sun.material.rotation || 0) + dt * 0.1;
     }
 
@@ -629,11 +678,6 @@ export class SongKotaete extends BaseSong {
         this._setNDC(event);
         this._raycaster.setFromCamera(this._ndc, this.camera);
 
-        // C. 太陽をつかむ
-        if (this.sun) {
-            const hitSun = this._raycaster.intersectObject(this.sun, false);
-            if (hitSun.length) { this.draggingSun = true; this.dismissFirstInteractable(); return; }
-        }
         // A. 葉っぱ(葉本体 or テキスト札)をタッチ → 確定(問いにこたえる)
         const targets = [];
         for (const l of this.leaves) { if (l.foliage) targets.push(l.foliage); if (l.label) targets.push(l.label); }
@@ -645,25 +689,29 @@ export class SongKotaete extends BaseSong {
             this.dismissFirstInteractable();
             return;
         }
-        // B. 空きをタッチ → 葉を生やす(ルートづくり)
+        // B. 空きをタッチ → 葉を生やす(ルートづくり)。連打加速で“暴走”させる(#119)。
         const p = this._raycaster.ray.intersectPlane(this._climbPlane, this._hit);
-        if (p && p.y > this.climbY + 0.4 && Math.abs(p.x) < LEAF_X * 2.2) {
-            const side = p.x >= 0 ? 1 : -1;
-            const leaf = this.spawnLeaf(this._currentLyricText() || '♪', { y: p.y, side });
-            leaf.confirmed = true; this.builtCount++;
+        if (p && Math.abs(p.x) < LEAF_X * 3.2 && !this.finishing) {
+            // 短時間に連続クリックするほど 1回で多くの葉を積む(=塔が一気に伸びる)
+            const tnow = performance.now();
+            this._clickStreak = (tnow - this._lastClickAt < SPAM_WINDOW) ? this._clickStreak + 1 : 0;
+            this._lastClickAt = tnow;
+            const burst = 1 + Math.min(SPAM_BURST_MAX, Math.floor(this._clickStreak / 3));
+            const baseY = Math.max(this.climbY + 0.6, p.y);
+            for (let i = 0; i < burst; i++) {
+                if (this.leaves.length >= LEAF_HARD_CAP) break; // 重さ防止のハード上限(塔は十分高い)
+                const side = (i === 0) ? (p.x >= 0 ? 1 : -1) : (Math.random() < 0.5 ? -1 : 1);
+                const yy = baseY + i * LEAF_SPACING * (0.7 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.4;
+                const leaf = this.spawnLeaf(this._currentLyricText() || '♪', { y: yy, side });
+                leaf.confirmed = true; this.builtCount++;
+            }
             this.dismissFirstInteractable();
         }
     }
 
-    onPointerMove(event) {
-        if (!this.draggingSun || !this.camera) return;
-        this._setNDC(event);
-        // NDC.x → 太陽の横位置、NDC.y → 太陽の高さ(光の強さ=成長速度)
-        this.sunX = THREE.MathUtils.clamp(this._ndc.x * 7, -7, 7);
-        this.sunHeight = THREE.MathUtils.clamp(4 + (this._ndc.y * 0.5 + 0.5) * 6, 3, 10);
-    }
-
-    onPointerUp() { this.draggingSun = false; }
+    // 太陽は「飛んでいく先」になったので、もう操作対象ではない(ドラッグ廃止)。
+    onPointerMove() { /* no-op */ }
+    onPointerUp() { /* no-op */ }
 
     _confirmLeaf(l) {
         l.confirmed = true;
@@ -678,14 +726,145 @@ export class SongKotaete extends BaseSong {
     }
 
     // =====================================================================
+    // まだ行けるよモード UI(#119): 導入・高度HUD・超ジャンプラベル・オチ
+    // =====================================================================
+    _ensureModeStyles() {
+        if (document.getElementById('kotaete-mada-styles')) return;
+        const s = document.createElement('style');
+        s.id = 'kotaete-mada-styles';
+        s.textContent = `
+            .mada-intro {
+                position:absolute; left:50%; top:22%; transform:translate(-50%,-50%);
+                z-index:60; pointer-events:none; text-align:center;
+                font-family:"Noto Sans JP",sans-serif; color:#fff;
+                opacity:0; transition:opacity .5s ease, transform .5s ease;
+                text-shadow:0 2px 10px rgba(0,0,0,.45);
+            }
+            .mada-intro.show { opacity:1; transform:translate(-50%,-50%) scale(1.0); }
+            .mada-intro .t { font-size:clamp(22px,6vw,40px); font-weight:800; letter-spacing:2px;
+                color:#FFD54A; text-shadow:0 0 16px rgba(255,213,74,.7),0 2px 8px rgba(0,0,0,.5); }
+            .mada-intro .s { margin-top:10px; font-size:clamp(12px,3.2vw,16px); line-height:1.7; font-weight:600; }
+            .mada-hud {
+                position:absolute; right:14px; top:64px; z-index:55; pointer-events:none;
+                font-family:"Courier New",monospace; font-weight:bold; text-align:right;
+                color:#2c6b37; text-shadow:0 1px 4px rgba(255,255,255,.6);
+            }
+            .mada-hud .alt { font-size:clamp(18px,4.4vw,30px); color:#3f8f4a; }
+            .mada-hud .unit { font-size:11px; letter-spacing:2px; opacity:.8; }
+            .mada-finale {
+                position:absolute; inset:0; z-index:62; pointer-events:none;
+                display:flex; flex-direction:column; align-items:center; justify-content:center;
+                font-family:"Noto Sans JP",sans-serif; color:#fff; text-align:center;
+                opacity:0; transition:opacity 1.0s ease;
+            }
+            .mada-finale.show { opacity:1; }
+            .mada-finale .cap { font-size:clamp(15px,4vw,24px); font-weight:700; letter-spacing:2px;
+                text-shadow:0 2px 12px rgba(0,0,0,.55); }
+            .mada-flash { position:absolute; inset:0; z-index:61; pointer-events:none;
+                background:#fff; opacity:0; }
+            .mada-flash.fire { animation:madaFlash .9s ease-out forwards; }
+            @keyframes madaFlash { 0%{opacity:0;} 12%{opacity:.85;} 100%{opacity:0;} }
+        `;
+        document.head.appendChild(s);
+    }
+
+    // 開始時: これは「ネタ寄りの暴走モード」だと伝える短い導入
+    _showModeIntro() {
+        this._ensureModeStyles();
+        const el = document.createElement('div');
+        el.className = 'mada-intro';
+        el.innerHTML = `
+            <div class="t">まだ行けるよモード</div>
+            <div class="s">クリック連打で答えの葉を伸ばそう。<br>伸ばしすぎると、ミクが空へ飛びます。</div>
+        `;
+        this.songWrapper.appendChild(el);
+        requestAnimationFrame(() => el.classList.add('show'));
+        setTimeout(() => { if (el.parentNode) el.classList.remove('show'); }, 4200);
+        setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 4900);
+    }
+
+    _ensureHud() {
+        if (this._hudEl) return;
+        this._ensureModeStyles();
+        const el = document.createElement('div');
+        el.className = 'mada-hud';
+        el.innerHTML = `<span class="alt">0</span><span class="unit"> こたえ</span>`;
+        this.songWrapper.appendChild(el);
+        this._hudEl = el;
+        this._hudAltSpan = el.querySelector('.alt');
+    }
+
+    _updateHud() {
+        if (!this._hudEl) this._ensureHud();
+        // 高度は到達した最大Y。バカっぽく1m=10こたえ換算で水増しして爆発感を出す
+        const val = Math.max(0, Math.round((this._altitude - GROUND_Y) * 10));
+        if (this._hudAltSpan) this._hudAltSpan.textContent = String(val);
+    }
+
+    // 破綻ガード: 葉が増えすぎたら、通過済み&画面外下方の葉を回収して総数を抑える。
+    // 近く/上方の「塔」は残すので、見た目の“めちゃくちゃ伸びてる感”は保たれる。
+    _recycleLeaves() {
+        if (this.leaves.length <= LEAF_HARD_CAP) return;
+        const cutY = this.camera.position.y - 14;
+        const target = this.leaves.length - LEAF_HARD_CAP;
+        let removed = 0;
+        for (let i = 0; i < this.leaves.length && removed < target; ) {
+            const l = this.leaves[i];
+            if (!l.isGoal && l.landed && l.y < cutY && l.y < this.climbY - 3) {
+                this._disposeLeaf(l);
+                this.leaves.splice(i, 1);
+                removed++;
+            } else { i++; }
+        }
+    }
+
+    _disposeLeaf(l) {
+        this.scene.remove(l.group);
+        l.group.traverse(o => {
+            if (o.geometry && o.geometry !== this._leafGeo && o.geometry !== this._petalGeo) o.geometry.dispose();
+            if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+                if (m.map && m.map !== this._leafVeinTex) m.map.dispose();
+                m.dispose && m.dispose();
+            });
+        });
+    }
+
+    // オチ(デッドパン): 太陽へ迫った瞬間に空が一瞬だけ白む(過露光)。文字での煽りはしない。
+    _overflowFinale() {
+        if (this._overflowFired) return;
+        this._overflowFired = true;
+        this._ensureModeStyles();
+        const flash = document.createElement('div');
+        flash.className = 'mada-flash';
+        this.songWrapper.appendChild(flash);
+        requestAnimationFrame(() => flash.classList.add('fire'));
+        setTimeout(() => { if (flash.parentNode) flash.parentNode.removeChild(flash); }, 950);
+    }
+
+    // 着地後のオチ字幕(真顔で一行だけ。テーマへ軽く戻す)
+    _finaleCaption() {
+        this._ensureModeStyles();
+        const el = document.createElement('div');
+        el.className = 'mada-finale';
+        el.innerHTML = `<div class="cap">こたえは、まだ空の上。</div>`;
+        this.songWrapper.appendChild(el);
+        this._finaleEl = el;
+        requestAnimationFrame(() => el.classList.add('show'));
+    }
+
+    // =====================================================================
     // ゴール(満開のひまわり)
     // =====================================================================
     reachGoal() {
         if (this.goalPending || this.goalReached) return;
         this.goalPending = true;
-        this.finishing = true; // 残りの足場を一気に登り切る
-        // 最高到達点の上に「満開ひまわり」の足場を出し、ミクをそこへ登らせる
-        const topY = (this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y) + LEAF_SPACING;
+        this.finishing = true; // 一気に締めへ
+        this._sunFinale = true; // 太陽が終着点として降りてきて巨大化(飛んでいく先)
+        // 塔がどれだけ高くても確実に締まるよう、既存の葉は通過済みにして、
+        // ミクを満開ひまわりへ“最後の超ジャンプ”で一気に到達させる。
+        const highest = this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y;
+        this.leaves.forEach(l => { if (!l.isGoal) l.landed = true; });
+        const topY = Math.max(this.climbY, highest) + LEAF_SPACING * 1.6;
         this.goalLeaf = this.spawnLeaf('', { y: topY, side: 0, isGoal: true });
         this.goalLeaf.confirmed = true;
         this.goalLeaf.group.position.x = 0; this.goalLeaf.x = 0;
@@ -752,8 +931,11 @@ export class SongKotaete extends BaseSong {
         // 決めポーズ(両手を上げて咲かせる)
         this._victoryPose = true;
         sfx.play('complete');
+        this._overflowFinale(); // 太陽へ着いた瞬間、空が一瞬だけ白む(過露光)
+        this._finaleCaption();  // 真顔の一行(テーマへ軽く戻す)
+        const peak = Math.max(0, Math.round((this._altitude - GROUND_Y) * 10));
         this.setResultSummary({
-            lines: ['満開のひまわりに到達！', `こたえた葉: ${this.answeredCount}枚 / つくった足場: ${this.builtCount}`],
+            lines: [`まだ行けるよモード クリア`, `到達こたえ高度: ${peak} ・ 生やした葉: ${this.builtCount}枚`],
             accentColor: '#FFD54A', swatch: '#FFD54A',
         });
     }
@@ -781,6 +963,13 @@ export class SongKotaete extends BaseSong {
 
         if (!this.isTutorialActive) this._trackLyrics();
 
+        // 再生が始まった瞬間に一度だけ「まだ行けるよモード」を提示(チュートリアル後)
+        if (!this._introShown && !this.isTutorialActive
+            && playerManager.player && playerManager.player.isPlaying) {
+            this._introShown = true;
+            this._showModeIntro();
+        }
+
         this.updateStem(dt);
         this.updateLeaves(dt);
         this.updateClimb(dt);
@@ -788,6 +977,11 @@ export class SongKotaete extends BaseSong {
         this.updateBloom(dt);
         this.updateCamera(dt);
         this.updateSun(dt);
+
+        // 到達高度の更新 + HUD(バカっぽい爆発カウンタ) + 破綻ガード(葉の回収)
+        this._altitude = Math.max(this._altitude, this.climbY);
+        this._updateHud();
+        this._recycleLeaves();
 
         if (this._victoryPose) this._applyVictoryPose(dt);
     }
@@ -876,6 +1070,12 @@ export class SongKotaete extends BaseSong {
         window.removeEventListener('pointermove', this.boundOnPointerMove);
         window.removeEventListener('pointerup', this.boundOnPointerUp);
         eventBus.off('songEnd', this.boundOnSongEnd);
+
+        // まだ行けるよモードの後始末(DOMオーバーレイ)
+        [this._hudEl, this._finaleEl].forEach(el => {
+            if (el && el.parentNode) el.parentNode.removeChild(el);
+        });
+        this._hudEl = this._finaleEl = null;
 
         // 葉/花: 共有ジオメトリ(_leafGeo/_petalGeo)は最後に1回だけ破棄するので、
         // ここでは材質と固有ジオメトリ(葉柄/種/中心)のみ破棄する。
