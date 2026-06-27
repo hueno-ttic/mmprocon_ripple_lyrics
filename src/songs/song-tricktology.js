@@ -14,11 +14,14 @@ import { playerManager } from '../core/player.js';
  *   上＝地上の世界 / 下＝水面（水鏡）の世界。
  * - 月が曲の進行に合わせて天を周回する:
  *     0:00 左から昇る → 上 → 右へ。1:01 あたりで沈むと同時に上下が反転し、
- *     また左から昇る。2:04 あたりで月が水に沈み「本当の自分」を選ぶ選択肢が現れる。
+ *     また左から昇る。2:04 あたりで月が水に沈み「本当の自分」が決まる。
  * - 月は地上の月／水面の月の2つに分かれる。歌詞も地上にだけ昇る句と
  *   水面にだけ逆さに昇る句に分かれ、タップした歌詞の世界の月が満ちていく。
- * - 選んだ側で月が中央から昇りその世界を照らし、選ばなかった自分は
- *   輪郭が揺れて曖昧に薄くなり、光の粒へと溶けて消える。
+ *   さらに各句は時間とともに水面ラインを越えて反対の世界へ渡り、越境の瞬間に
+ *   フェードして文字が反転する（現実⇄鏡像）。
+ * - 終盤、明示的な選択肢は出さない。それまでに満ちた月（balance）が多い側の
+ *   世界が「本物」として残り、もう一方の自分は輪郭が揺れて曖昧に薄くなり、
+ *   光の粒へと溶けて消える。プレイヤーの積み重ねが本物の世界を決める。
  *
  * 旧リズムゲーム版は song-tricktology.legacy.js に保存。
  * main.js の TRICKTOLOGY_LEGACY=true で即座に戻せる。
@@ -28,7 +31,7 @@ const MAX_RIPPLES = 10;
 
 // ── 月の周回タイムライン（曲頭からの絶対時刻 ms）──
 const T_INVERT = 61000;   // 1:01 月が右へ沈み、世界が上下反転
-const T_CHOICE = 124000;  // 2:04 月が水に沈み、選択肢が浮かぶ
+const T_CHOICE = 124000;  // 2:04 月が水に沈み、満ちた月の側が「本物」に決まる
 
 export class SongTricktology extends BaseSong {
     constructor(container, songId) {
@@ -69,6 +72,8 @@ export class SongTricktology extends BaseSong {
         this.mirrorSilhouette = null;
         this.mikuZ = -5.0;
         this.mikuScale = this.isMobile ? 3.0 : 3.6;
+        // スマホ縦画面はカメラを寄せて横の見える幅が狭いので、歌詞の左右展開を内側へ寄せる。
+        this.hSpread = this.isMobile ? 0.62 : 1;
 
         // 鏡像の不気味さ（呼吸位相ズレ＋たまにこちらを向く）
         this.gazeWeight = 0;
@@ -83,7 +88,8 @@ export class SongTricktology extends BaseSong {
         // ── 二つの月（満ち欠け）──
         this.moonGround = null;   // 地上の世界の月
         this.moonWater = null;    // 水面の世界の月
-        this.moonR = this.isMobile ? 9 : 12;     // 周回の横半径
+        // カメラを寄せた分、月が画面端で見切れないよう周回半径を内側へ。
+        this.moonR = this.isMobile ? 7 : 12;     // 周回の横半径
         this.moonArcH = this.isMobile ? 7 : 9;   // 天頂の高さ
         this.moonZ = -17;
         this.moonScale = this.isMobile ? 3.2 : 4.0;
@@ -103,12 +109,11 @@ export class SongTricktology extends BaseSong {
         this.crackLevel = 0;  // 曲が進むほど世界に走るヒビ
         this.mirrorAlpha = 0.62; // 鏡像のリンは姿が透ける
 
-        // ── 終盤の選択 ──
-        this.choiceShown = false;
-        this.worldChosen = null;     // 'ground' | 'water'
-        this.chosenSide = null;      // 'upper' | 'lower'（画面上の選んだ側）
+        // ── 終盤の決着（満ちた月で本物の世界が決まる）──
+        this.choiceShown = false;    // 決着処理に入ったか
+        this.worldChosen = null;     // 'ground' | 'water'（本物として残る世界）
         this.collapseStart = -1;
-        this.choiceOverlay = null;
+        this.choiceOverlay = null;   // 互換のため保持（現在は未使用）
         this.captionEl = null;
         this._captionTimer = null;
 
@@ -170,7 +175,8 @@ export class SongTricktology extends BaseSong {
         this.scene.fog = new THREE.FogExp2(this.bgColor, 0.021);
 
         this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
-        this.camera.position.set(0, 1.4, 13);
+        // スマホ縦画面では被写体が遠く小さく見えるため、カメラを手前に寄せて全体を大きく映す。
+        this.camera.position.set(0, 1.4, this.isMobile ? 9 : 13);
         // 注意: BaseSong.animate がパララックスで rotation を上書きするため lookAt は使わない
 
         this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
@@ -542,7 +548,7 @@ export class SongTricktology extends BaseSong {
         const z = -4 - Math.random() * 4;
 
         // 最終的な定位置（target）
-        let tx = (Math.random() - 0.5) * 9;
+        let tx = (Math.random() - 0.5) * 9 * this.hSpread;
         let ty = sign * (1.6 + Math.random() * 2.6);
         // 出現パターンごとの初期オフセット（target からの差分）
         let offX = 0, offY = 0;
@@ -553,13 +559,13 @@ export class SongTricktology extends BaseSong {
         } else if (entry === 'side') {
             // 左右から流れ込む（現実と鏡像が引っ張り合う）
             const fromLeft = Math.random() < 0.5;
-            tx = (Math.random() - 0.5) * 5;
+            tx = (Math.random() - 0.5) * 5 * this.hSpread;
             offX = (fromLeft ? -1 : 1) * (11 + Math.random() * 4);
         } else if (entry === 'fall') {
             // 上から（逆さ世界は下から）落ちてくる（重力が壊れた）
             offY = sign * (6 + Math.random() * 3);
         } else { // gather: 中央の水面ラインへ収束していく
-            tx = (Math.random() - 0.5) * 3.2;
+            tx = (Math.random() - 0.5) * 3.2 * this.hSpread;
             ty = sign * (0.5 + Math.random() * 0.9);
             offX = (Math.random() - 0.5) * 12;
             offY = sign * (3.5 + Math.random() * 2.5);
@@ -572,6 +578,14 @@ export class SongTricktology extends BaseSong {
         (mirrored ? this.lowerGroup : this.upperGroup).add(sprite);
 
         const duration = (phrase.endTime - phrase.startTime) || 2500;
+
+        // 時間とともに水面ラインを越えて反対の世界へ渡る縦速度(u/s)。
+        // 終盤の収束(gather)句は渡らせない。寿命の6〜8割で対岸へ着くおおよその速さ。
+        const willCross = entry !== 'gather';
+        const crossSec = Math.max(0.6, (duration / 1000) * (0.6 + Math.random() * 0.2));
+        const crossTravel = Math.abs(ty) + 1.2 + Math.random() * 1.0;
+        const vy = willCross ? (-sign * crossTravel / crossSec) : 0;
+
         this.lyrics.push({
             sprite, tex: texture, world, mirrored, entry,
             text: phrase.text,
@@ -580,6 +594,7 @@ export class SongTricktology extends BaseSong {
             baseScale: scale, aspect,
             baseX: tx, baseY: ty,
             offX0: offX, offY0: offY,   // 初期オフセット
+            vy, crossed: false,         // 世界をまたぐ縦移動と越境フラグ
             entryT: 0, entryDur: entry === 'fall' ? 0.55 : 0.85,
             drift: (Math.random() - 0.5) * 0.004,
             pulse: 0,
@@ -592,6 +607,25 @@ export class SongTricktology extends BaseSong {
         if (l.sprite.parent) l.sprite.parent.remove(l.sprite);
         if (l.sprite.material.map) l.sprite.material.map.dispose();
         l.sprite.material.dispose();
+    }
+
+    // 歌詞が水面ライン(y=0)を越えた瞬間: テクスチャを反対世界の様式へ焼き直し
+    // （上下反転＋色替え＝「反転」）、所属世界とグループを入れ替える。
+    // 越境点では crossDip で深くフェードするため、反転はフェードに包まれて起こる。
+    crossLyricWorld(l) {
+        l.crossed = true;
+        const newWorld = l.world === 'ground' ? 'water' : 'ground';
+        const newMirrored = (newWorld === 'water');
+        const { texture, aspect } = this.createTextTexture(l.text, newMirrored);
+        if (l.sprite.material.map) l.sprite.material.map.dispose();
+        l.sprite.material.map = texture;
+        l.sprite.material.needsUpdate = true;
+        l.tex = texture;
+        l.world = newWorld;
+        l.mirrored = newMirrored;
+        l.aspect = aspect;
+        (newMirrored ? this.lowerGroup : this.upperGroup).add(l.sprite); // 旧グループからは自動で外れる
+        this.addRipple(l.sprite.position.x, 0, 0.22);
     }
 
     // ───────────────────────── 入力 ─────────────────────────
@@ -848,7 +882,8 @@ export class SongTricktology extends BaseSong {
             // 選択後: 選んだ世界の月が中央から選んだ側へ昇り、世界を照らす
             const riseT = Math.min(1, (t - this.collapseStart) / 3);
             const ease = riseT * riseT * (3 - 2 * riseT);
-            const dir = this.chosenSide === 'upper' ? 1 : -1;
+            // 残った世界がいま画面の上下どちら側にあるか（反転状態で決まる）
+            const dir = ((this.worldChosen === 'ground') === groundUp) ? 1 : -1;
             const chosen = this.worldChosen === 'ground' ? this.moonGround : this.moonWater;
             const other = this.worldChosen === 'ground' ? this.moonWater : this.moonGround;
             chosen.root.position.set(0, dir * (this.moonArcH * 0.75) * ease, this.moonZ);
@@ -990,44 +1025,11 @@ export class SongTricktology extends BaseSong {
         this.crackEl = cracks;
     }
 
-    // ───────────────────────── 終盤の選択UI ─────────────────────────
+    // ───────────────────────── 終盤の決着キャプション ─────────────────────────
 
     injectCustomStyles() {
         this.styleEl = document.createElement('style');
         this.styleEl.textContent = `
-            .tricktology-choice-overlay {
-                position: absolute; inset: 0; z-index: 50;
-                display: flex; flex-direction: column;
-                opacity: 0; transition: opacity 1.2s ease;
-                font-family: "Inter", "Noto Sans JP", sans-serif;
-            }
-            .tricktology-choice-overlay.visible { opacity: 1; }
-            .tricktology-choice-half {
-                flex: 1; display: flex; align-items: center; justify-content: center;
-                cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
-                transition: background 0.4s ease;
-            }
-            .tricktology-choice-half.upper { background: linear-gradient(to bottom, rgba(95,184,230,0.20), rgba(95,184,230,0.0)); }
-            .tricktology-choice-half.lower { background: linear-gradient(to top, rgba(95,184,230,0.20), rgba(95,184,230,0.0)); }
-            .tricktology-choice-half:hover { background: rgba(120,206,238,0.16); }
-            .tricktology-choice-label {
-                color: #fff; font-size: clamp(16px, 3.4vw, 26px); letter-spacing: 0.18em;
-                padding: 12px 28px; border: 1px solid rgba(255,255,255,0.55); border-radius: 999px;
-                background: rgba(6,20,32,0.45); backdrop-filter: blur(4px);
-                text-shadow: 0 0 14px #5fb8e6;
-                animation: tricktology-pulse 2.2s ease-in-out infinite;
-            }
-            .tricktology-choice-half.lower .tricktology-choice-label { transform: scaleY(-1); }
-            .tricktology-choice-question {
-                position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-                color: #fff; font-size: clamp(14px, 3vw, 22px); letter-spacing: 0.3em;
-                pointer-events: none; text-shadow: 0 0 18px #5fb8e6, 0 0 4px #000;
-                white-space: nowrap;
-            }
-            @keyframes tricktology-pulse {
-                0%, 100% { box-shadow: 0 0 8px rgba(120,206,238,0.4); }
-                50% { box-shadow: 0 0 26px rgba(120,206,238,0.95); }
-            }
             .tricktology-caption {
                 position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%);
                 z-index: 51; color: #fff; font-size: clamp(13px, 2.6vw, 19px);
@@ -1062,45 +1064,32 @@ export class SongTricktology extends BaseSong {
         document.head.appendChild(this.styleEl);
     }
 
-    showChoiceUI() {
-        if (this.choiceOverlay || this.worldChosen) return;
+    // 終盤の決着: 明示的な選択肢は出さず、それまでに満ちた月（balance）の
+    // 多い側の世界を「本物」として確定する。プレイヤーの積み重ねが結末を決める。
+    resolveFinalWorld() {
+        if (this.worldChosen) return;
         this.choiceShown = true;
 
         // 月が水に沈む余韻の波紋
         this.addRipple(0, this.mikuZ + 10, 1.0);
         this.waveEnergy = 1.4;
 
-        const overlay = document.createElement('div');
-        overlay.className = 'tricktology-choice-overlay';
-        overlay.innerHTML = `
-            <div class="tricktology-choice-half upper" data-side="upper">
-                <span class="tricktology-choice-label">こちらが本物</span>
-            </div>
-            <div class="tricktology-choice-half lower" data-side="lower">
-                <span class="tricktology-choice-label">こちらが本物</span>
-            </div>
-            <div class="tricktology-choice-question">本物は、どっち？</div>
-        `;
-        this.songWrapper.appendChild(overlay);
-        this.choiceOverlay = overlay;
-        requestAnimationFrame(() => overlay.classList.add('visible'));
-
-        overlay.querySelectorAll('.tricktology-choice-half').forEach((el) => {
-            el.addEventListener('pointerdown', (ev) => {
-                ev.stopPropagation();
-                this.chooseWorld(el.dataset.side);
-            });
-        });
+        // balance: 1=地上の月が満月 / 0=水面の月が満月。多い側が残る。
+        // ほぼ拮抗（差が小さい）なら、いま“上”にある世界を本物とする。
+        const EPS = 0.02;
+        let world;
+        if (Math.abs(this.balance - 0.5) <= EPS) {
+            world = (this.invertCount % 2 === 0) ? 'ground' : 'water';
+        } else {
+            world = this.balance >= 0.5 ? 'ground' : 'water';
+        }
+        this.commitWorld(world);
     }
 
-    chooseWorld(side) {
+    commitWorld(world) {
         if (this.worldChosen) return;
-        this.chosenSide = side;
         sfx.play('trick_choose');
-        const groundUp = (this.invertCount % 2 === 0);
-        const upperWorld = groundUp ? 'ground' : 'water';
-        const lowerWorld = groundUp ? 'water' : 'ground';
-        this.worldChosen = side === 'upper' ? upperWorld : lowerWorld;
+        this.worldChosen = world;
         const rejectedWorld = this.worldChosen === 'ground' ? 'water' : 'ground';
         this.collapseStart = this.relSec();
 
@@ -1108,25 +1097,18 @@ export class SongTricktology extends BaseSong {
         this.setResultSummary({
             accentColor: '#7fd4ff',
             lines: [
-                `選んだのは — ${worldLabel(this.worldChosen)}`,
+                `残ったのは — ${worldLabel(this.worldChosen)}`,
                 `地上の月 ${Math.round(this.worldFull.ground * 100)}% ／ 水面の月 ${Math.round(this.worldFull.water * 100)}%`,
                 'もう一人のあたしは、光になって溶けた',
             ],
         });
-
-        if (this.choiceOverlay) {
-            this.choiceOverlay.classList.remove('visible');
-            const el = this.choiceOverlay;
-            setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 1300);
-            this.choiceOverlay = null;
-        }
 
         // 選ばれなかった世界の自分 → 輪郭が揺れ、光の粒へ
         this.dissolveRejected(rejectedWorld);
 
         const cap = document.createElement('div');
         cap.className = 'tricktology-caption';
-        cap.textContent = 'あなたが選んだ世界が、本物になった';
+        cap.textContent = '満ちた月が、本物の世界を選んだ';
         this.songWrapper.appendChild(cap);
         this.captionEl = cap;
         requestAnimationFrame(() => cap.classList.add('visible'));
@@ -1279,7 +1261,7 @@ export class SongTricktology extends BaseSong {
         const duration = playerManager.player.video.duration;
         const choiceAt = (duration && duration < T_CHOICE + 4000) ? Math.max(T_INVERT + 8000, duration - 6000) : T_CHOICE;
         if (!this.choiceShown && !this.worldChosen && position >= choiceAt) {
-            this.showChoiceUI();
+            this.resolveFinalWorld();
         }
 
         // ── 世界反転のなめらかな追従 ──
@@ -1371,6 +1353,19 @@ export class SongTricktology extends BaseSong {
             const offY = l.offY0 * (1 - ee);
 
             l.baseX += l.drift;
+
+            // 世界をまたぐ縦移動: 水面ライン(y=0)を越えたらフェードして反転する
+            let crossDip = 1;
+            if (l.vy && !l.collected) {
+                l.baseY += l.vy * delta;
+                const wSign = l.world === 'ground' ? 1 : -1;
+                if (!l.crossed && l.baseY * wSign <= 0) {
+                    this.crossLyricWorld(l);
+                }
+                // 越境点(y≈0)付近で深くフェード → 反転がフェードに包まれて見える
+                crossDip = THREE.MathUtils.clamp(Math.abs(l.baseY) / 0.9, 0.12, 1);
+            }
+
             const sway = l.mirrored ? Math.sin(t * 3.0 + l.baseY * 2.0) * wobbleAmp : 0;
             const bob = Math.sin(t * 0.8 + Math.abs(l.baseY)) * 0.08;
             l.sprite.position.set(l.baseX + offX + sway, l.baseY + offY + (l.mirrored ? -bob : bob), l.sprite.position.z);
@@ -1391,7 +1386,7 @@ export class SongTricktology extends BaseSong {
             else if (age > l.life - 300) alpha = Math.max(0, (l.life - age) / 300);
             const worldB = l.world === 'ground' ? groundB : waterB;
             const floor = l.world === 'ground' ? 0.2 : 0.35; // 水面句は薄暗くても拾える
-            l.sprite.material.opacity = Math.min(1, alpha * (Math.max(floor, worldB) + l.pulse * 0.3)) * shatterFade;
+            l.sprite.material.opacity = Math.min(1, alpha * (Math.max(floor, worldB) + l.pulse * 0.3)) * shatterFade * crossDip;
 
             if (age > l.life || (l.shatter && l.shatterT >= 1)) {
                 this.disposeLyric(l);
