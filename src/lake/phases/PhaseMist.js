@@ -9,8 +9,18 @@ export class PhaseMist extends PhaseBase {
         super(scene, camera, renderer);
         this.exposure = 1.12;
         this.bloomParams = { strength: 0.26, radius: 0.5, threshold: 0.96 };
+        // The little spring (the "水たまり" of this clear-sky scene) sits dead
+        // centre at x=0, fully hidden behind the centred jacket card. Per the
+        // project convention (see PhaseStream), the card stays centred and the
+        // scene is re-framed instead: pan the camera laterally (shift pos.x and
+        // lookAt.x by the same amount, keeping the heading) so the whole pond
+        // slides well into the left of the frame and reads clearly. The spring
+        // is close to camera, so a sizeable pan is needed for a "gattsuri"
+        // reveal. Mobile uses the same pan as PC (per request) — the phone stage
+        // is locked to PC proportions, so the framing matches.
+        const shift = 16;
         this.cameraRig = {
-            pos: [0, 6.4, 36], lookAt: [0, 3.6, -40],
+            pos: [shift, 6.4, 36], lookAt: [shift, 3.6, -40],
             drift: { ax: 2.4, fx: 0.10, ay: 0.28, fy: 0.16 },
         };
         this.dpr = Math.min(window.devicePixelRatio, 2);
