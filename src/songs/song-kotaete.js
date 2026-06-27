@@ -101,12 +101,15 @@ export class SongKotaete extends BaseSong {
         this.goalPending = false;
         this.goalReached = false;
         this.bloom = null;
+        this._perchLeaf = null;        // フィナーレ: 大輪の“下の葉”=ミクの最終待機場所
 
         // ---- 進行/補助 ----
         this.answeredCount = 0;        // タッチで確定した葉の数
         this.builtCount = 0;           // プレイヤーが生やした葉の数
         this._lastWordStart = -1;
         this._lastLeafAt = -Infinity;  // 葉の生成レート制限(実時間ms)
+        this._lastLyricLeaf = null;    // 直近の歌詞葉(助詞・助動詞はここへ追記=文節結合)
+        this._lastLyricAt = -Infinity; // 直近の歌詞発火時刻(古すぎる結合を防ぐ)
         this._lastFrameReal = performance.now();
 
         // ---- まだ行けるよモード(#119) ----
@@ -332,8 +335,15 @@ export class SongKotaete extends BaseSong {
     }
 
     // カメラへ正対する可読テキスト札(歌詞)。葉の上に重ねる。
-    _makeTextLabel(text) {
-        const W = 360, H = 130;
+    // フォントサイズは一定に保ち、文字数ぶんキャンバスを横長にして可読性を保つ。
+    // sizeFactor: 文字数に応じた葉全体の倍率(札もこの倍率で大きくする)。
+    _makeTextLabel(text, sizeFactor = 1) {
+        const fs = 60, H = 130;
+        const meas = document.createElement('canvas').getContext('2d');
+        meas.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`;
+        const tw = Math.ceil(meas.measureText(text).width);
+        const padX = 46;
+        const W = Math.max(180, tw + padX * 2);
         const c = document.createElement('canvas'); c.width = W; c.height = H;
         const x = c.getContext('2d');
         // 角丸の暗い帯(背景と同化させない)
@@ -343,17 +353,22 @@ export class SongKotaete extends BaseSong {
         x.roundRect(pad, pad, W - pad * 2, H - pad * 2, r);
         x.fill();
         x.strokeStyle = 'rgba(255,236,150,0.5)'; x.lineWidth = 3; x.stroke();
-        let fs = 58;
         x.textAlign = 'center'; x.textBaseline = 'middle';
-        do { x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`; fs -= 4; }
-        while (fs > 20 && x.measureText(text).width > W - 60);
+        x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`;
         x.lineWidth = 6; x.strokeStyle = 'rgba(8,24,8,0.95)'; x.strokeText(text, W / 2, H / 2 + 2);
         x.fillStyle = '#ffffff'; x.fillText(text, W / 2, H / 2 + 2);
         const tex = new THREE.CanvasTexture(c);
         const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }));
-        spr.scale.set(1.5, 0.54, 1);
+        const h = 0.6 * sizeFactor;            // 文字の高さ(=葉サイズに連動)
+        spr.scale.set(h * (W / H), h, 1);      // キャンバス比に合わせて横幅
         spr.userData.tex = tex;
         return spr;
+    }
+
+    // 歌詞チャンクの文字数 → 葉/札の倍率。長い文節ほど葉が大きくなる。
+    _lyricSizeFactor(text) {
+        const chars = Math.max(1, [...(text || '')].length);
+        return THREE.MathUtils.clamp(0.95 + chars * 0.13, 1.0, 2.0);
     }
 
     // 花びら1枚のジオメトリ(基部=原点, 先端=+x の尖った卵形, カップ状)
@@ -438,6 +453,9 @@ export class SongKotaete extends BaseSong {
         const group = new THREE.Group();
         group.position.set(x, y, 0);
 
+        // 歌詞葉は文字数で大きさが変わる(opts.lyric && text)。それ以外は等倍の足場。
+        const sizeFactor = (opts.lyric && text) ? this._lyricSizeFactor(text) : 1.0;
+
         let foliage = null, label = null;
         if (!opts.isGoal) {
             // 茎から葉への葉柄(petiole)
@@ -447,24 +465,22 @@ export class SongKotaete extends BaseSong {
             stalk.position.set(-x / 2, 0, -0.02); stalk.rotation.z = Math.PI / 2;
             group.add(stalk);
 
-            // 3Dの葉(卵形＋葉脈＋カップ)。先端を少し上へ。札より大きくして葉らしさを見せる。
-            foliage = this._buildFoliage(side, 2.15);
+            // 3Dの葉(卵形＋葉脈＋カップ)。歌詞の文字数ぶん大きく。
+            foliage = this._buildFoliage(side, 2.15 * sizeFactor);
             foliage.rotation.z = side * 0.14;
             group.add(foliage);
 
-            // 歌詞は雲側で読ませるので、連打で量産する足場(label:false)はラベル無しにして
-            // 1枚あたりのテクスチャ生成コストを抑える(=上限を大きく取れる/破綻防止)。
-            // 歌詞葉(レート制限・少数)だけ可読テキスト札を乗せる。
-            if (opts.label !== false && text) {
-                label = this._makeTextLabel(text);
-                label.position.set(side * -0.15, 0.05, 0.4);
+            // 歌詞は葉に記載する(文節ごと)。連打/超ジャンプの足場はラベル無し。
+            if (opts.lyric && text) {
+                label = this._makeTextLabel(text, sizeFactor);
+                label.position.set(0, 0.05 * sizeFactor, 0.45);
                 group.add(label);
             }
         }
         this.scene.add(group);
 
         const item = {
-            group, foliage, label, y, x, side, text: text || '',
+            group, foliage, label, y, x, side, text: text || '', sizeFactor,
             born: 0, openT: 0, confirmed: false, landed: false, glow: 0,
             index: idx, isGoal: !!opts.isGoal,
         };
@@ -477,16 +493,52 @@ export class SongKotaete extends BaseSong {
         return item;
     }
 
-    // 歌詞ワード発火で足場の葉を生やす。総数を抑え(間隔)、ミクが遅れすぎたら止める(バックログ上限)。
-    // → 曲終わりにミクが必ずてっぺんへ追いつける範囲に保つ。
-    // 歌詞テキストは雲側(_spawnLyricCloud)で単語ごとに読ませるので、葉はラベル無しの純3D足場。
-    _spawnLyricLeaf() {
+    // 歌詞ワード発火 → 文節として葉に記載する。
+    // 助詞(P)/助動詞(M)/記号(S) は単体で意味が薄いので、直前の歌詞葉にくっつける(文節結合)。
+    _onLyricWord(w) {
+        const text = (w.text || '').trim();
+        if (!text) return;
+        const pos = w.pos || 'X'; // TextAlive: N名詞/V動詞/P助詞/M助動詞/S記号 ...
+        const attach = (pos === 'P' || pos === 'M' || pos === 'S');
         const now = performance.now();
-        if (now - this._lastLeafAt < LEAF_SPAWN_INTERVAL) return null;
-        const highestY = this.leaves.length ? this.leaves[this.leaves.length - 1].y : this.climbY;
-        if (highestY - this.climbY > MAX_BACKLOG_LEAVES * LEAF_SPACING) return null; // 遅れすぎ→生やさない
-        this._lastLeafAt = now;
-        return this.spawnLeaf('', { label: false });
+        const prev = this._lastLyricLeaf;
+        const canAttach = attach && prev && !prev.isGoal && this.leaves.includes(prev)
+            && (now - this._lastLyricAt) < 5000;
+        if (canAttach) {
+            this._appendLyric(prev, text); // 前の文節に連結し、葉を文字数ぶん大きくする
+            this._lastLyricAt = now;
+            return;
+        }
+        const leaf = this._spawnLyricLeaf(text);
+        if (leaf) { this._lastLyricLeaf = leaf; this._lastLyricAt = now; }
+    }
+
+    // 歌詞葉を生やす。最上段の上へ一段積んで読みやすいラダーにする。
+    _spawnLyricLeaf(text) {
+        const highestY = this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y;
+        const y = Math.max(highestY + LEAF_SPACING, this.climbY + LEAF_SPACING);
+        this._lastLeafAt = performance.now();
+        return this.spawnLeaf(text, { lyric: true, y });
+    }
+
+    // 既存の歌詞葉に文字を連結し、札を作り直して葉・札を文字数ぶん大きくする。
+    _appendLyric(item, extra) {
+        item.text = `${item.text}${extra}`;
+        const sizeFactor = this._lyricSizeFactor(item.text);
+        item.sizeFactor = sizeFactor;
+        if (item.foliage) {
+            const s = 2.15 * sizeFactor;
+            item.foliage.scale.set(item.side * s, s, s);
+        }
+        if (item.label) {
+            if (item.label.userData.tex) item.label.userData.tex.dispose();
+            item.label.material.dispose();
+            item.group.remove(item.label);
+        }
+        const label = this._makeTextLabel(item.text, sizeFactor);
+        label.position.set(0, 0.05 * sizeFactor, 0.45);
+        item.group.add(label);
+        item.label = label;
     }
 
     updateLeaves(dt) {
@@ -511,8 +563,13 @@ export class SongKotaete extends BaseSong {
     updateStem(dt) {
         // 太陽が高いほど速く伸びる
         this.growthRate = 0.6 + 0.8 * THREE.MathUtils.clamp((this.sunHeight - 3) / 6, 0, 1);
-        const speed = 2.2 * this.growthRate;
+        const speed = 3.2 * this.growthRate;
         this.stemDisplay += (this.stemTopTarget - this.stemDisplay) * Math.min(1, dt * speed);
+        // 葉は必ず茎から生やす: 表示中の茎は「最も高い葉」より必ず上に届かせる。
+        // 茎の成長が追いつかず葉が空中に浮く問題への根治(=毎フレーム下限をクランプ)。
+        let highestLeafY = 0;
+        for (const l of this.leaves) if (l.y > highestLeafY) highestLeafY = l.y;
+        if (this.stemDisplay < highestLeafY + 0.3) this.stemDisplay = highestLeafY + 0.3;
         if (this.stem) {
             this.stem.scale.y = this.stemDisplay;
             this.stem.position.y = this.stemDisplay / 2;
@@ -548,7 +605,8 @@ export class SongKotaete extends BaseSong {
                 this.jump = null;
                 this._jumpCooldown = this.finishing ? 0 : JUMP_MIN_INTERVAL;
                 this.faceDir = 0;
-                if (j.toLeaf && j.toLeaf.isGoal) this._onReachBloom();
+                // 大輪は頭上に咲かせ、ミクは“下の葉(perch)”に着いた瞬間に開花させて待機する。
+                if (j.toLeaf && (j.toLeaf.isGoal || j.toLeaf.isPerch)) this._onReachBloom();
             }
             return;
         }
@@ -572,7 +630,7 @@ export class SongKotaete extends BaseSong {
                 const top = above[above.length - 1];
                 const bonus = Math.min(26, 6 + above.length * 0.3); // 積み上がるほど高く打ち上がる
                 const land = this.spawnLeaf('', {
-                    y: top.y + bonus, side: (Math.random() < 0.5 ? -1 : 1), label: false,
+                    y: top.y + bonus, side: (Math.random() < 0.5 ? -1 : 1),
                 });
                 land.confirmed = true;
                 target = land; level = 4;
@@ -708,7 +766,7 @@ export class SongKotaete extends BaseSong {
                 const side = (i === 0) ? (p.x >= 0 ? 1 : -1) : (Math.random() < 0.5 ? -1 : 1);
                 const yy = baseY + i * LEAF_SPACING * (0.7 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.4;
                 // 量産する足場はラベル無し(歌詞は雲側)。大量でも軽い。
-                const leaf = this.spawnLeaf('', { y: yy, side, label: false });
+                const leaf = this.spawnLeaf('', { y: yy, side });
                 leaf.confirmed = true; this.builtCount++;
             }
             this.dismissFirstInteractable();
@@ -887,43 +945,18 @@ export class SongKotaete extends BaseSong {
         return this._cloudTex;
     }
 
-    // 雲に乗せる歌詞ラベル(濃い文字＋白フチ＝雲に書いてあるように読める)
-    _makeCloudLabel(text) {
-        const W = 380, H = 120;
-        const c = document.createElement('canvas'); c.width = W; c.height = H;
-        const x = c.getContext('2d');
-        let fs = 56; x.textAlign = 'center'; x.textBaseline = 'middle';
-        do { x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`; fs -= 4; }
-        while (fs > 18 && x.measureText(text).width > W - 36);
-        x.lineWidth = 11; x.strokeStyle = 'rgba(255,255,255,0.96)'; x.strokeText(text, W / 2, H / 2);
-        x.lineWidth = 4; x.strokeStyle = 'rgba(150,190,230,0.5)'; x.strokeText(text, W / 2, H / 2);
-        x.fillStyle = '#2b4a6b'; x.fillText(text, W / 2, H / 2);
-        const tex = new THREE.CanvasTexture(c);
-        const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }));
-        spr.scale.set(2.0, 0.63, 1);
-        spr.userData.tex = tex;
-        return spr;
-    }
-
-    // 雲を1つ生やす。lyric があれば歌詞札を乗せる。side で左右の空きへ寄せる。
+    // 装飾の雲を1つ生やす(歌詞は葉に記載するので雲はテキスト無し)。side で左右の空きへ。
     _spawnCloud(opts = {}) {
         const cap = this.isMobile ? 14 : 24;
-        if (this._clouds.length >= cap) {
-            // 歌詞雲は単語ごとに必ず出したい。満杯なら最古の装飾雲(歌詞でない)を退避して席を空ける。
-            if (!opts.lyric) return null;
-            const victim = this._clouds.find(c => !c.lyric) || this._clouds[0];
-            if (victim) this._disposeCloud(victim);
-        }
+        if (this._clouds.length >= cap) return null;
         const side = opts.side || this._cloudSide;
         this._cloudSide = -side; // 交互
         const group = new THREE.Group();
-        // 横の空き(葉は±1.5)。歌詞雲は読みやすい中距離、装飾雲は外側まで。
-        const xMin = opts.lyric ? 3.4 : 3.0;
-        const xMax = opts.lyric ? 5.4 : 7.2;
-        const x = side * (xMin + Math.random() * (xMax - xMin));
+        // 横の空き(葉は±1.5)の外側へ。
+        const x = side * (3.0 + Math.random() * 4.2);
         // ミクが速く昇っても置いていかれないよう、上方向に広めの帯へ出す
         const y = (opts.y != null) ? opts.y : (this.climbY + 4 + Math.random() * 20);
-        group.position.set(x, y, opts.lyric ? -1.5 : -3 - Math.random() * 3);
+        group.position.set(x, y, -3 - Math.random() * 3);
 
         const puff = new THREE.Sprite(new THREE.SpriteMaterial({
             map: this._cloudTexture(), transparent: true, opacity: 0, depthWrite: false, depthTest: true,
@@ -932,27 +965,14 @@ export class SongKotaete extends BaseSong {
         puff.scale.set(w, w * 0.62, 1);
         group.add(puff);
 
-        let label = null;
-        if (opts.lyric) {
-            label = this._makeCloudLabel(opts.lyric); // 雲に“書いてある”見た目(濃い文字+白フチ)
-            label.position.set(0, 0, 0.2);
-            group.add(label);
-        }
         this.scene.add(group);
         const cloud = {
-            group, puff, label,
+            group, puff, label: null,
             x, y, vx: (Math.random() * 0.3 + 0.1) * (Math.random() < 0.5 ? -1 : 1),
-            halfW: w * 0.5, born: 0, appear: 0, lyric: !!opts.lyric, dead: false,
+            halfW: w * 0.5, born: 0, appear: 0, lyric: false, dead: false,
         };
         this._clouds.push(cloud);
         return cloud;
-    }
-
-    _spawnLyricCloud(text) {
-        // 歌詞は単語ごとに必ず雲へ。連続発火は _trackLyrics 側で startTime 単位に間引かれているので
-        // ここではレート制限せず、各単語ぶんの雲を出す(満杯時は装飾雲を退避=_spawnCloud)。
-        this._lyricCloudAt = performance.now();
-        this._spawnCloud({ lyric: text });
     }
 
     // 衝突: 雲を白い粒へ霧散させて消す
@@ -1043,13 +1063,24 @@ export class SongKotaete extends BaseSong {
         if (this.goalPending || this.goalReached) return;
         this.goalPending = true;
         this.finishing = true; // 一気に締めへ
-        // 塔がどれだけ高くても確実に締まるよう、既存の葉は通過済みにして、
-        // ミクを満開ひまわりへ“最後の超ジャンプ”で一気に到達させる。
         const highest = this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y;
+        // 既存の葉は通過済みにして、ミクを“最後の超ジャンプ”で perch(下の葉)へ一気に運ぶ。
         this.leaves.forEach(l => { if (!l.isGoal) l.landed = true; });
-        const topY = Math.max(this.climbY, highest) + LEAF_SPACING * 1.6;
+
+        // ミクの最終待機場所=大輪の「下の葉(perch)」。ここに着いたら開花し、ここで待つ。
+        const perchY = Math.max(this.climbY, highest) + LEAF_SPACING * 1.4;
+        const perch = this.spawnLeaf('', { y: perchY, side: -1 }); // 通常の3D葉(ラベル無し)
+        perch.confirmed = true;
+        perch.landed = false; // ← ミクの登攀ターゲットにする
+        perch.isPerch = true;
+        this._perchLeaf = perch;
+
+        // 大輪はミクの頭上に咲く(ミクは花の後ろへ回らず、下の葉で待つ)。
+        // perch から十分上に置き、前へ膨らむ花盤がミクに重ならないようにする。
+        const topY = perchY + 5.2;
         this.goalLeaf = this.spawnLeaf('', { y: topY, side: 0, isGoal: true });
         this.goalLeaf.confirmed = true;
+        this.goalLeaf.landed = true; // ← ミクはここへは飛ばない(頭上の花)
         this.goalLeaf.group.position.x = 0; this.goalLeaf.x = 0;
         this._buildBloom(this.goalLeaf.group, topY);
         this.stemTopTarget = topY + 0.5;
@@ -1200,10 +1231,7 @@ export class SongKotaete extends BaseSong {
         const w = p.video.findWord(pos);
         if (w && w.startTime !== this._lastWordStart) {
             this._lastWordStart = w.startTime;
-            if (w.text) {
-                this._spawnLyricLeaf();         // 足場(ラベル無し)を間隔制御で生やす
-                this._spawnLyricCloud(w.text);  // 歌詞は単語ごとに必ず雲へ(歌詞アプリの芯)
-            }
+            if (w.text) this._onLyricWord(w); // 歌詞は葉に記載(文節結合)。雲は装飾のみ。
         }
     }
 
