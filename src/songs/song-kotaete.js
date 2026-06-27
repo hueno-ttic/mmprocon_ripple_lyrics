@@ -437,10 +437,9 @@ export class SongKotaete extends BaseSong {
         const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
         const tgt = (this._lookScratch || (this._lookScratch = new THREE.Vector3()));
         tgt.copy(this.camera.position).lerp(this.lookTarget, this.lookBlend);
-        if (head) this.lookAtTarget(head, tgt, 0.6, 0.5, 1.0);
-        if (neck) this.lookAtTarget(neck, tgt, 0.35, 0.3, 0.5);
-        // 拍で軽くうなずき、重心移動に合わせて首をかしげる(look-at の上に加算)
-        if (head) { head.rotation.x += this.mikuPulse * 0.05; head.rotation.z += Math.sin(t * 0.6) * 0.02; }
+        // 首は曲げない: ほぼ水平のまま向き(ヨー)だけ変える。うなずき/かしげは廃止。
+        if (head) this.lookAtTarget(head, tgt, 0.55, 0.12, 1.0);
+        if (neck) neck.rotation.set(0, 0, 0); // 首はまっすぐに保つ
 
         // 微笑み(触れられた直後・歌唱パルスで強まる)。VRM0/1で表情キー名が違うので両対応。
         if (this.currentVRM.expressionManager) {
