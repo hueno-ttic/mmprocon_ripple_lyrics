@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
+import { SONGS } from '../config/songs.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
@@ -49,6 +50,11 @@ export class SongOrchestra extends BaseSong {
         this._premonitionFoldStart = undefined; // 昇華(消滅)フェーズ開始時刻(ms)
         this._tutCardTimer = null;
         this._introOverlay = null;
+        this._headerDimmed = false; // イントロ中だけ左上ヘッダー(#song-info)を控えめにする状態
+        this._firstLyricTime = null; // 最初の歌詞(=イントロ終端)の時刻(ms)。判定でキャッシュ
+        this.introTitleSprites = []; // イントロでタップ可能なタイトル文字スプライト(ふれるとオーブ化)
+        this.introFinaleFired = false; // イントロ終端の花火を一度だけ発火するフラグ
+        this._finaleQueue = null; // イントロ終端の花火を時間差で夜空に咲かせるための予約列
         this._mousePos = null;
         
         // 歌詞の単語キャッシュステート
@@ -91,6 +97,7 @@ export class SongOrchestra extends BaseSong {
         this.initNightSky();
         this.initOrbGauge();
         this.initPremonitionOrbs(); // 開幕直後の予兆オーブを配置（操作前でも画面を動かす）
+        this.createIntroTitle();    // イントロ中に曲名・作者・遊び方を歌詞風に提示
         this.updateResultSummary(); // 0個の状態でも成果サマリーを初期登録
         window.addEventListener('resize', this.boundOnResize);
         this.container.addEventListener('click', this.boundOnClick);
@@ -339,7 +346,8 @@ export class SongOrchestra extends BaseSong {
         // 天の川: 開幕からゆっくりフェードイン、サビでさらに明るく
         if (this.milkyWay) {
             const introFade = Math.min(1.0, position / 6000); // 最初の6秒で満ちる
-            const target = (0.42 + 0.45 * open) * introFade;
+            // イントロ(open≈0)でも天の川が見えるよう下限を引き上げ、サビのピークは概ね据え置き。
+            const target = (0.52 + 0.40 * open) * introFade;
             const m = this.milkyWay.material;
             m.opacity += (target - m.opacity) * 0.04;
             this.milkyWay.rotation.z += 0.00012; // ごく緩やかに流す
@@ -351,10 +359,254 @@ export class SongOrchestra extends BaseSong {
             for (const a of this.auroras) {
                 const u = a.userData;
                 const pulse = 0.6 + 0.4 * Math.sin(t * 0.5 + u.phase);
-                const target = u.baseOpacity * (0.7 + 1.6 * open) * pulse * introFade;
+                // イントロからオーロラのカーテンが脈動して見えるよう下限を引き上げる。
+                // サビ(open=1)のピークは旧 2.3 → 新 2.35 とほぼ同等を維持。
+                const target = u.baseOpacity * (1.15 + 1.2 * open) * pulse * introFade;
                 a.material.opacity += (target - a.material.opacity) * 0.05;
                 // ゆらめき: 横にゆっくり漂わせる
                 a.position.x = u.baseX + Math.sin(t * 0.3 + u.phase) * 1.6;
+            }
+        }
+    }
+
+    // 最初の歌詞(=イントロ終端)の時刻を返す。TextAlive の firstPhrase から一度だけ取得しキャッシュ。
+    // まだ video が準備できていない間は null（その場合はイントロ中とみなす）。
+    _getFirstLyricTime() {
+        if (this._firstLyricTime != null) return this._firstLyricTime;
+        const v = playerManager.player && playerManager.player.video;
+        if (v && v.firstPhrase && typeof v.firstPhrase.startTime === 'number') {
+            this._firstLyricTime = v.firstPhrase.startTime;
+        }
+        return this._firstLyricTime;
+    }
+
+    // イントロ中、曲タイトルを「タップ可能な光の文字」として夜空に提示する。
+    // 文字にふれるとオーブ化して蓄積し、イントロ終端でまとめて花火になる ──
+    // 本編のコア操作(歌詞タップ→色オーブ→サビで花火)をタイトルで予行演習させる狙い。
+    // 文字の表示/オーブ化/花火の制御は update() → updateIntroTitle() が行う。
+    createIntroTitle() {
+        if (!this.songWrapper || !this.scene) return;
+        const cfg = SONGS.find(s => s.id === this.songId) || {};
+        const color = cfg.color || '#185FA5';
+
+        // --- 3D: タイトル文字をタップ可能スプライトとして夜空へ並べる ---
+        this._buildIntroTitleSprites(cfg.title || '');
+
+        // --- DOM: 作者と操作説明の小さなキャプション(タイトルは3Dなので重複しない) ---
+        const sub = [cfg.artist, cfg.vocal].filter(Boolean).join(' ／ ');
+        const overlay = document.createElement('div');
+        overlay.className = 'orchestra-intro-title';
+        overlay.style.cssText = `
+            position:absolute; top:64%; left:50%; transform:translate(-50%,-50%);
+            width:min(86vw,640px); text-align:center; pointer-events:none; z-index:150;
+            opacity:0; transition:opacity 0.9s ease;
+            font-family:"Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
+            text-shadow:0 0 14px ${color}, 0 2px 20px rgba(0,0,0,0.55);
+        `;
+        overlay.innerHTML = `
+            <div style="font-size:clamp(12px,2.2vw,16px);letter-spacing:0.16em;color:rgba(255,255,255,0.72);">${sub}</div>
+            <div style="margin:14px auto 0;width:54px;height:1px;background:linear-gradient(90deg,transparent,${color},transparent);"></div>
+            <div style="margin-top:14px;font-size:clamp(13px,2.4vw,17px);line-height:1.9;color:rgba(255,255,255,0.92);">タイトルの文字にふれると、光のオーブになって<br>夜空にひびきます</div>
+        `;
+        this.songWrapper.appendChild(overlay);
+        this._introOverlay = overlay;
+
+        // イントロ中は3Dタイトルが主役なので、左上の常設ヘッダーを控えめにする。
+        this._setHeaderDimmed(true);
+        this._headerDimmed = true;
+    }
+
+    // タイトル文字列を1文字ずつ、タップ可能な発光スプライトとして中央上部に並べる。
+    // 既存の歌詞用 createTextTexture を流用(白文字・透明背景)。activeSprites には入れず、
+    // onClick 側で専用にレイキャストするため歌詞パイプラインとは干渉しない。
+    _buildIntroTitleSprites(title) {
+        const chars = Array.from(title).filter(c => c.trim());
+        if (!chars.length) return;
+        const S = window.innerWidth < 768 ? 0.7 : 0.92; // 文字のベーススケール
+        const gap = S * 1.18;                            // 文字間隔
+        const totalW = (chars.length - 1) * gap;
+        const y0 = 2.2;                                  // ミクより上、夜空の中ほど
+        const z0 = -10.0;
+        chars.forEach((ch, i) => {
+            const { texture, aspect } = this.createTextTexture(ch, 'default');
+            const mat = new THREE.SpriteMaterial({
+                map: texture, color: new THREE.Color('#ffffff'),
+                transparent: true, opacity: 0, depthWrite: false
+            });
+            const sp = new THREE.Sprite(mat);
+            const baseX = -totalW / 2 + i * gap;
+            sp.position.set(baseX, y0, z0);
+            sp.scale.set(aspect * S, S, 1);
+            sp.userData = {
+                isIntroTitle: true, text: ch,
+                baseX, baseY: y0, baseScale: S, aspect,
+                phase: Math.random() * Math.PI * 2, tapped: false
+            };
+            this.scene.add(sp);
+            this.introTitleSprites.push(sp);
+        });
+    }
+
+    // タイトル文字をタップ/自動でオーブ化し、蓄積オーブ(resonateOrbs)へ加える。
+    // 本編 resonateLyricColor のオーブ生成部を踏襲し、イントロ終端の花火の素にする。
+    _resonateIntroTitle(sprite, auto = false) {
+        if (!sprite || sprite.userData.tapped) return;
+        sprite.userData.tapped = true;
+
+        const hex = this.getSemanticColor(sprite.userData.text) ||
+            ['#ffffff', '#ffb834', '#ff3b5c', '#00d4ff', '#00ffb0', '#d95bff'][Math.floor(Math.random() * 6)];
+        const newColor = new THREE.Color(hex);
+
+        // 文字スプライトを除去
+        const idx = this.introTitleSprites.indexOf(sprite);
+        if (idx !== -1) this.introTitleSprites.splice(idx, 1);
+        const pos = sprite.position.clone();
+        this.scene.remove(sprite);
+        if (sprite.material.map) sprite.material.map.dispose();
+        sprite.material.dispose();
+
+        // オーブ生成(resonateLyricColor と同じ蓄積系へ載せる → イントロ終端でまとめて花火に)
+        if (this.resonateOrbs.length >= 120) {
+            const old = this.resonateOrbs.shift();
+            this.scene.remove(old);
+            if (old.material) old.material.dispose();
+        }
+        const orbMat = new THREE.MeshBasicMaterial({ color: newColor, transparent: true, opacity: 0.85 });
+        const orb = new THREE.Mesh(this.orbGeometry, orbMat);
+        if (this.glowTexture) {
+            const haloMat = new THREE.SpriteMaterial({
+                map: this.glowTexture, color: newColor, transparent: true,
+                opacity: 0.95, blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            const halo = new THREE.Sprite(haloMat);
+            halo.scale.set(0.65, 0.65, 1.0);
+            orb.add(halo);
+        }
+        orb.position.copy(pos);
+        orb.userData = {
+            color: newColor, angle: Math.random() * Math.PI * 2,
+            radius: 3.2 + Math.random() * 2.2, speed: 0.015 + Math.random() * 0.015,
+            yBase: (Math.random() - 0.5) * 3.5, phase: Math.random() * Math.PI * 2, isExploded: false
+        };
+        this.scene.add(orb);
+        this.resonateOrbs.push(orb);
+
+        this.spawnOrbBirthFlare(newColor, pos);
+        this.spawnTapSparkles(newColor, pos);
+
+        this.hasResonatedColor = true;     // 予兆オーブの昇華・誘導ガイド片付けと同調
+        this.dismissFirstInteractable();
+        this.collectedColors.push(hex);
+        this.totalCollectedCount++;
+        this.addOrbToGauge(hex);
+        this.updateResultSummary();
+    }
+
+    // イントロ終端: 未タップのタイトル文字を自動でオーブ化し、集めた色を時間差で夜空に
+    // 打ち上げて「花火のショー」にする。無操作でも必ず「タップ→オーブ→花火」の payoff を
+    // 見せ、本編操作(歌詞タップ→色オーブ→サビで花火)の予告にする。
+    _fireIntroFinale(position) {
+        // 残りの文字をオーブ化(色を回収)
+        for (let i = this.introTitleSprites.length - 1; i >= 0; i--) {
+            this._resonateIntroTitle(this.introTitleSprites[i], true);
+        }
+        // 集めた色を取り出し、蓄積オーブ本体は「花火に昇華した」ものとして片付ける。
+        const colors = this.resonateOrbs.map(o => o.userData.color.clone());
+        this.resonateOrbs.forEach(o => { this.scene.remove(o); if (o.material) o.material.dispose(); });
+        this.resonateOrbs = [];
+        if (!colors.length) return;
+
+        // 花火ショーの発火リストを組む:
+        //  ・主役の大輪 … 集めた色ごとに1発(intensity=2.4=最大)
+        //  ・余韻のecho … 約0.7倍数を小さめに添えて夜空を埋める(層を作る)
+        const bursts = [];
+        colors.forEach(c => bursts.push({ color: c, intensity: 2.4 }));
+        const echoN = Math.ceil(colors.length * 0.7);
+        for (let i = 0; i < echoN; i++) {
+            bursts.push({ color: colors[Math.floor(Math.random() * colors.length)].clone(), intensity: 1.3 });
+        }
+
+        // 夜空の各所へ時間差(約1.4s)で咲かせる予約列(songポジション駆動=一時停止に強い)。
+        // 大輪を先に、echoを後半へ寄せて「開いて→散る」流れを作る。x±12/y1.6〜6.2/z近めで大きく見せる。
+        const span = 1400;
+        const n = bursts.length;
+        this._finaleQueue = bursts.map((b, i) => ({
+            color: b.color,
+            intensity: b.intensity,
+            atPos: position + (i / n) * span,
+            pos: new THREE.Vector3((Math.random() - 0.5) * 12, 1.6 + Math.random() * 4.6, -6 - Math.random() * 6),
+        }));
+    }
+
+    // 予約された花火を、現在のsongポジションに達したものから順に打ち上げる(イントロ終端のショー)。
+    _drainFinaleQueue(position) {
+        if (!this._finaleQueue || !this._finaleQueue.length) return;
+        for (let i = this._finaleQueue.length - 1; i >= 0; i--) {
+            if (position >= this._finaleQueue[i].atPos) {
+                const f = this._finaleQueue[i];
+                this.spawnCustomColorFirework(f.color, f.pos, f.intensity); // 大輪/echoで開きを出し分け
+                this._finaleQueue.splice(i, 1);
+            }
+        }
+        if (!this._finaleQueue.length) this._finaleQueue = null;
+    }
+
+    // 左上の曲情報ヘッダー(#song-info: 曲名+作者)の濃さを切り替える。
+    // dimmed=true でイントロ中だけ淡く、false で通常へ滑らかに戻す(他曲・他UIには非干渉)。
+    _setHeaderDimmed(dimmed) {
+        const el = document.getElementById('song-info');
+        if (!el) return;
+        el.style.transition = 'opacity 0.9s ease';
+        el.style.opacity = dimmed ? '0.16' : '';
+    }
+
+    // イントロ演出の駆動: タイトル文字のフェードイン/脈動 → 終端で花火 → キャプション退場。
+    updateIntroTitle(position) {
+        const firstLyric = this._getFirstLyricTime();
+        const HINT_LEAD = 1500;   // DOMキャプションを退場させる(最初の歌詞の手前)
+        const FINALE_LEAD = 1500; // この時刻にタイトルを花火へ変えてイントロを締める
+
+        // --- 3D タイトル文字: フェードイン + ゆらぎ + タップ誘発の脈動 ---
+        if (this.introTitleSprites.length) {
+            const t = position * 0.001;
+            const appear = Math.min(1, Math.max(0, (position - 300) / 900));
+            for (const sp of this.introTitleSprites) {
+                const u = sp.userData;
+                const pulse = 0.82 + 0.18 * Math.sin(t * 2.2 + u.phase);
+                sp.material.opacity += (appear * pulse - sp.material.opacity) * 0.12;
+                sp.position.y = u.baseY + Math.sin(t * 0.9 + u.phase) * 0.10;
+                const breathe = 1.0 + 0.05 * Math.sin(t * 2.2 + u.phase);
+                sp.scale.set(u.aspect * u.baseScale * breathe, u.baseScale * breathe, 1);
+            }
+        }
+
+        // --- イントロ終端の花火(一度きり) ---
+        if (!this.introFinaleFired && firstLyric != null && position >= firstLyric - FINALE_LEAD) {
+            this.introFinaleFired = true;
+            this._fireIntroFinale(position);
+            // 文字が花火になって去るのでヘッダーを通常表示へ戻す
+            if (this._headerDimmed) { this._setHeaderDimmed(false); this._headerDimmed = false; }
+        }
+        // 予約された花火を時間差で打ち上げる(ショー演出)
+        this._drainFinaleQueue(position);
+
+        // --- DOM キャプション(作者+操作説明)の表示/退場 ---
+        if (this._introOverlay) {
+            let target;
+            if (firstLyric != null && position >= firstLyric - HINT_LEAD) target = 0;
+            else if (position < 400) target = 0;
+            else target = 1;
+            const cur = parseFloat(this._introOverlay.style.opacity) || 0;
+            if (Math.abs(cur - target) > 0.01) this._introOverlay.style.opacity = String(target);
+
+            // ヘッダーの濃さをキャプションに同期(花火でまだ戻していなければ)。
+            const wantDim = (target === 1) && !this.introFinaleFired;
+            if (this._headerDimmed !== wantDim) { this._setHeaderDimmed(wantDim); this._headerDimmed = wantDim; }
+
+            if (firstLyric != null && position >= firstLyric + 800) {
+                if (this._introOverlay.parentNode) this._introOverlay.parentNode.removeChild(this._introOverlay);
+                this._introOverlay = null;
+                if (this._headerDimmed) { this._setHeaderDimmed(false); this._headerDimmed = false; }
             }
         }
     }
@@ -366,7 +618,10 @@ export class SongOrchestra extends BaseSong {
     initPremonitionOrbs() {
         if (!this.glowTexture || !this.scene) return;
         const isMobile = window.innerWidth < 768;
-        const count = isMobile ? 4 : 8;
+        // イントロの主役はタップ可能なタイトル文字なので、予兆オーブは「背景の控えめな
+        // アンビエント」に抑える(数を減らす)。クリック判定には含めず(activeSprites非参加)、
+        // glowTexture共有なので描画コストとリーク懸念は軽微。
+        const count = isMobile ? 3 : 7;
         // 共鳴で実際に生まれるオーブ色(getSemanticColor の6色)＋テーマ青。
         // これらを予兆に使うことで「触れるとこの色たちが集まる」と視覚的に予告する。
         const PALETTE = ['#185FA5', '#ffb834', '#ff3b5c', '#00d4ff', '#00ffb0', '#d95bff'];
@@ -387,7 +642,7 @@ export class SongOrchestra extends BaseSong {
             const baseY = (Math.random() - 0.5) * 3.2 - 0.2;
             const baseZ = -6.0 - Math.random() * 3.0;
             sp.position.set(baseX, baseY, baseZ);
-            const s = 0.5 + Math.random() * 0.35;
+            const s = 0.6 + Math.random() * 0.4;
             sp.scale.set(s, s, 1);
             sp.userData = {
                 baseX, baseY,
@@ -399,7 +654,9 @@ export class SongOrchestra extends BaseSong {
                 ampX: 0.5 + Math.random() * 0.6,
                 ampY: 0.35 + Math.random() * 0.4,
                 twinkle: 0.7 + Math.random() * 0.8,
-                foldDelay: i * 260 + Math.random() * 120 // 昇華を一斉でなく順番に始めるためのずらし(ms)
+                // 昇華を一斉でなく順番に始めるためのずらし(ms)。オーブ数を12へ増やしたぶん
+                // 間隔を詰め、最後のオーブも ORB_LEAD 内(歌詞開始前)に消え切るようにする。
+                foldDelay: i * 120 + Math.random() * 100
             };
             this.scene.add(sp);
             this.premonitionOrbs.push(sp);
@@ -415,18 +672,26 @@ export class SongOrchestra extends BaseSong {
             return;
         }
 
-        // 初回共鳴で畳み(昇華)フェーズへ。時間切れによる一斉消滅はしない
-        // ので、無操作でも予兆オーブが漂い続けて序盤の画面が痩せない。
-        const folding = this.hasResonatedColor;
+        // 畳み(昇華)フェーズへ移行する条件:
+        //  ① 初回共鳴(操作)した、または
+        //  ② イントロ終端(最初の歌詞)が近づいた ── 予兆オーブは「歌詞が始まる前の助走」
+        //     なので、歌詞が来る少し前(ORB_LEAD)に役割を終えて夜空へ還す。
+        //     これにより無操作でも歌詞開始時には予兆オーブが残らない。
+        const firstLyric = this._getFirstLyricTime();
+        const ORB_LEAD = 2800; // 最初の歌詞の約2.8秒前から昇華を開始(全オーブが歌詞前に消え切る)
+        const introEnding = (firstLyric != null) && (position >= firstLyric - ORB_LEAD);
+        const folding = this.hasResonatedColor || introEnding;
         if (folding) {
             if (this._premonitionFoldStart === undefined) this._premonitionFoldStart = position;
             // ゲージの「序盤の脈動」も操作開始で解除
             if (this.orbGaugeEl) this.orbGaugeEl.classList.remove('orchestra-orb-gauge-intro');
         }
 
-        // 歌詞(=本来の見せ場)が立ち上がるほど予兆は控えめに引いていく
+        // 歌詞(=本来の見せ場)が立ち上がるほど予兆は控えめに引いていく。
+        // ただし引きすぎると歌詞が出た瞬間に画面が痩せるので、減衰は緩やかにし、
+        // 最低限の存在感(0.35)は残す。
         const activeLyrics = this.activeSprites.filter(s => !s.userData.isNode).length;
-        const lyricDim = Math.max(0, 1 - activeLyrics * 0.34);
+        const lyricDim = Math.max(0.35, 1 - activeLyrics * 0.22);
 
         const t = position * 0.001;
         const fadeIn = Math.min(1.0, position / 800);
@@ -462,7 +727,8 @@ export class SongOrchestra extends BaseSong {
             } else {
                 // 通常の漂い: フェードイン＋明滅＋わずかな呼吸スケール
                 const twinkle = 0.55 + 0.45 * Math.sin(t * u.twinkle + u.phase);
-                const target = 0.5 * fadeIn * twinkle * lyricDim;
+                // タイトル文字を主役にするため、予兆オーブは控えめな明るさに抑える(背景アンビエント)。
+                const target = 0.42 * fadeIn * twinkle * lyricDim;
                 sp.material.opacity += (target - sp.material.opacity) * 0.06;
                 const breathe = 1.0 + 0.12 * Math.sin(t * u.twinkle + u.phase);
                 const sc = u.baseScale * breathe;
@@ -946,6 +1212,16 @@ export class SongOrchestra extends BaseSong {
         mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
         raycaster.setFromCamera(mouse, this.camera);
 
+        // ─── イントロ: タイトル文字のタップ(→オーブ化) ───
+        // 歌詞より先に判定し、ふれた文字をその場でオーブへ変える。
+        if (this.introTitleSprites.length) {
+            const tHit = raycaster.intersectObjects(this.introTitleSprites);
+            if (tHit.length > 0) {
+                this._resonateIntroTitle(tHit[0].object, false);
+                return;
+            }
+        }
+
         // ─── 歌詞共鳴タップ ───
         // アクティブな歌詞スプライトに対するクリック判定を行う
         const intersects = raycaster.intersectObjects(this.activeSprites);
@@ -1367,8 +1643,11 @@ export class SongOrchestra extends BaseSong {
         // --- Night sky ambience (twinkle / milky way / aurora) ---
         this.updateNightSky(position, open);
 
-        // --- 序盤の予兆オーブ(開幕の無音地帯を埋める。操作 or 時間切れで自然に畳む) ---
+        // --- 序盤の予兆オーブ(開幕の無音地帯を埋める。操作 or イントロ終端で自然に畳む) ---
         this.updatePremonitionOrbs(position);
+
+        // --- イントロのタイトル/作者/遊び方(歌詞が始まる前に世界観と操作を提示) ---
+        this.updateIntroTitle(position);
 
         // --- 3D Lyrics logic (Pre-cached Word-Group granularity for rhythmic touch interaction) ---
         if (!this.lyricsCacheBuilt) {
@@ -2287,6 +2566,17 @@ export class SongOrchestra extends BaseSong {
         if (this._introOverlay && this._introOverlay.parentNode) {
             this._introOverlay.parentNode.removeChild(this._introOverlay);
         }
+        this._introOverlay = null;
+        // 未タップで残ったタイトル文字スプライトを破棄(イントロ中の離脱に備える)。
+        if (this.introTitleSprites && this.introTitleSprites.length) {
+            this.introTitleSprites.forEach(sp => {
+                this.scene.remove(sp);
+                if (sp.material) { if (sp.material.map) sp.material.map.dispose(); sp.material.dispose(); }
+            });
+            this.introTitleSprites = [];
+        }
+        // イントロ中にESC等で離脱した場合でも、左上ヘッダーを通常表示へ確実に戻す。
+        if (this._headerDimmed) { this._setHeaderDimmed(false); this._headerDimmed = false; }
 
         // Cleanup VRM Avatar
         if (this.currentVRM) {
