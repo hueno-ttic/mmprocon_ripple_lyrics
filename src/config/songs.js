@@ -14,16 +14,16 @@ export const SONGS = [
       lyricDiffId: 28645
     },
     themeQuestion: 'あなたが僕ならばどんな答えを出すでしょうか',
-    color: '#7F77DD',
+    color: '#FFC83D',
     thumbnail: 'assets/thumbnails/kotaete.jpg',
-    waterBehavior: 'boiling',
-    startHint: '水面にふれて、歌詞をミクへ届けよう',
+    startHint: '歌詞の葉っぱにふれて、ミクの登る道をつくろう',
     tutorial: {
       steps: [
-        { icon: '🌙', text: '夕暮れの湖。対岸でミクがあなたに歌いかけます' },
-        { icon: '💧', text: '水面にふれると波紋が広がり、歌詞が波紋に乗って対岸へ届きます' },
-        { icon: '🎨', text: '手前=静けさ / 奥=光。触れた場所が、答えの色をそっと決めます' },
-        { icon: '✨', text: '曲の終わりに「あなただけの答えの色」が湖面を満たします' },
+        { icon: '🌱', text: '曲が進むとひまわりの茎が上へ伸びていきます' },
+        { icon: '🍃', text: '歌詞が歌われるたび、その言葉の「葉っぱ」が足場として生えます' },
+        { icon: '👆', text: '葉っぱにふれると確定して光り、空きにふれると新しい足場が生えます' },
+        { icon: '☀️', text: '太陽をドラッグすると光の向き・成長速度が変わります' },
+        { icon: '🌻', text: 'ミクは自動で登ります。落ちません。必ず満開のひまわりに到達します' },
       ]
     }
   },

@@ -7,136 +7,142 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
 import { sfx } from '../core/sfx.js';
-import { buildNightLake } from '../lake/kotaeteLakes.js';
 
 // =============================================================================
-// こたえて 「水鏡(みずかがみ)」
+// こたえて 「ひまわり登攀版」
 // -----------------------------------------------------------------------------
-// 一枚の静かな湖面だけで完結する。回廊もグリッドも選択メニューも捨てる。
-// 対岸でミクがシルエットのまま歌い、プレイヤーは「水に触れる」一動作だけで
-// 歌詞を波紋に乗せて届ける。触れた位置(手前=静けさ / 奥=光)が無意識のうちに
-// 色を決め、曲の終わりに「あなただけの答えの色」が湖面を満たす。
-//   - 操作は水に触れる、ただ一つ
-//   - 明示の二択UIは出さない(触れた位置の累積で色が決まる)
-//   - 夜の湖シェーダ(kotaeteLakes.buildNightLake)を土台に流用
+// マリオ風の縦スクロール。必ずゴール(満開のひまわり)へ着く一本道の演出。
+//   1. 開幕: ミクは地面に立ち、足元にひまわりの芽。
+//   2. 曲の進行で茎が上へ伸びる。
+//   3. 歌詞が発話されるたび、その歌詞を描いた「葉っぱ」が茎の左右交互に生える(=足場)。
+//   4. ミクは曲に合わせて自動で葉から葉へジャンプして登る(カメラが上へ追従)。
+//   5. てっぺんの満開ひまわりに到達してゴール(毎回必ず咲く)。
+//
+// ゲームではなく「必ず着く演出」。落下・ミス・GameOverは無し。
+// 補助インタラクション(同一画面で共存):
+//   A. 歌詞にこたえる: 葉っぱをタッチで開く・光る=足場確定(問いにこたえる)。
+//   B. 足場づくり    : 空きをタッチで葉っぱを生やしルートを作る。
+//   C. 太陽操作      : 太陽をドラッグ→光の向き/成長速度と葉の生える側が変わる。
+// どれも「やると良くなる」だけで、やらなくても必ずゴールに着く。
 // =============================================================================
 
-const WATER_Y = -2.0;                     // 水面の高さ(kotaeteLakes の WY と一致)
-const WARM = new THREE.Color('#F4A86A');  // 奥(光・夜明け)へ触れたときの暖色
-const COOL = new THREE.Color('#5E78C8');  // 手前(静けさ)へ触れたときの寒色
-const FIREFLY = new THREE.Color('#d8f0a0'); // ホタルの緑がかった黄金色
+const GROUND_Y = 0;
+const FIRST_LEAF_Y = 2.4;     // 最初の葉の高さ
+const LEAF_SPACING = 2.6;     // 葉と葉の縦間隔
+const LEAF_X = 1.5;           // 茎からの左右オフセット
+const STEM_R = 0.16;          // 茎の半径
+const JUMP_DUR = 0.62;        // 1ジャンプの所要(秒)
+const JUMP_MIN_INTERVAL = 0.12; // 連続ジャンプの最小間隔(=葉に追従しやすく)
+const LEAF_SPAWN_INTERVAL = 1200; // 葉の生成間隔(ms)。総数を抑え登攀が追いつくように
+const MAX_BACKLOG_LEAVES = 4;     // ミクがこれ以上遅れていたら新しい葉を生やさない
+const CAM_Z = 9.0;
+const CAM_Y_OFF = 2.6;        // ミクより少し上を見る
+const LOOK_Y_OFF = 2.4;
+
+const LEAF_GREEN = '#3f8f4a';
+const LEAF_GREEN_D = '#2c6b37';
+const SUN_GOLD = new THREE.Color('#FFD54A');
 
 export class SongKotaete extends BaseSong {
     constructor(container, songId) {
         super(container, songId);
-
         this.isMobile = window.innerWidth < 768;
 
         this.scene = null;
         this.camera = null;
         this.renderer = null;
 
-        // ---- 湖(夜の湖を group へ構築) ----
-        this.lakeGroup = null;
-        this.lakeItems = [];
-        this.lakeFade = 0;            // 0→1 でフェードイン
+        // ---- 茎 ----
+        this.stem = null;
+        this.stemDisplay = 0.4;       // いま見えている茎の高さ(lerpで伸ばす)
+        this.stemTopTarget = FIRST_LEAF_Y; // 目標の茎の高さ
 
-        // ---- ミク ----
+        // ---- 葉っぱ(足場)。y昇順で管理する ----
+        this.leaves = [];
+        this.leafIndexCounter = 0;
+
+        // ---- ミク(登攀) ----
         this.currentVRM = null;
         this.mikuLoaded = false;
-        this.mikuGlow = null;
-        this.mikuPulse = 0;          // 歌唱/反応のパルス(0..1, 毎フレーム減衰)
-        // 対岸だが「ミクだと分かる」近さに置く(遠すぎるとシルエットが潰れる)
-        this.mikuPos = new THREE.Vector3(0, WATER_Y, -19);
-        this.mikuScale = 3.5;
-        // ミクの視線追従(触れた所を見て微笑む)。lookBlend=1で注視→減衰でカメラへ戻る。
-        this.lookTarget = new THREE.Vector3();
-        this.lookBlend = 0;
+        this.basePose = null;
+        this.climbY = GROUND_Y;        // ミクの足元の高さ
+        this.climbX = 0;
+        this.currentLeafIndex = -1;    // -1=地面
+        this.climbState = 'idle';      // 'idle' | 'jumping'
+        this.jump = null;              // {fromX,fromY,toX,toY,toLeaf,t}
+        this._jumpCooldown = 0;
+        this.mikuPulse = 0;
+        this.faceDir = 0;              // -1左 / 0正面 / +1右(進行方向)
 
-        // ---- ビート(拍)同期 ----
-        this.beatPulse = 0;          // 拍頭で1にスパイクし減衰
-        this._lastBeatStart = -1;
-        this._beatStart = 0;
-        this._beatDuration = 0;
-        this.fireflies = null;       // 水面の上を飛ぶホタル(各自明滅・拍で一斉に強く光る)
+        // ---- 太陽 / 環境 ----
+        this.sun = null;
+        this.sunX = 2.5;               // 太陽の横位置(光の向き)
+        this.sunHeight = 7.0;          // 太陽の高さ(光の強さ=成長速度)
+        this.draggingSun = false;
+        this.growthRate = 1.0;
+        this.sideBias = 0;             // -1..+1 太陽の側へ葉が寄る
 
-        // ---- 水鏡の反射(ミクの映り込み・波紋で揺れる) ----
-        this.mikuReflection = null;
-        this.reflectWobble = 0;      // 触れるたびに上がり、反射を歪ませる量(減衰)
+        // ---- ゴール ----
+        this.goalLeaf = null;
+        this.goalPending = false;
+        this.goalReached = false;
+        this.bloom = null;
 
-        // ---- 演出の生きているもの ----
-        this.ripples = [];           // 水面に広がる波紋リング
-        this.lyricSprites = [];      // 水面を漂い対岸へ向かう歌詞
-        this.lightMotes = [];        // ミクへ吸い込まれる光の粒
-
-        // ---- テクスチャ ----
-        this.glowTexture = null;
-        this.ringTexture = null;
-
-        // ---- 色(答え) ----
-        this.worldColor = new THREE.Color('#9FB0EE');   // 歌詞・波紋の着色
-        this.answerColor = new THREE.Color('#6E7CC8');  // 触れて積もる「答えの色」
-        this.touchCount = 0;
-        this.tintOverlay = null;     // 画面全体を答えの色で染めるCSSオーバーレイ
-        this.tintOpacity = 0;
-
-        this.finaleActive = false;
-
-        // ---- 進行検出 ----
-        this._lastPhraseStart = -1;
+        // ---- 進行/補助 ----
+        this.answeredCount = 0;        // タッチで確定した葉の数
+        this.builtCount = 0;           // プレイヤーが生やした葉の数
         this._lastWordStart = -1;
+        this._lastLeafAt = -Infinity;  // 葉の生成レート制限(実時間ms)
         this._lastFrameReal = performance.now();
-        // 連打で歌詞が乱発されないようにするクールダウン/重複ガード
-        this._lastTouchLyricAt = -Infinity;
-        this._lastLyricText = null;
 
-        // ---- レイキャスト(水面ヒット) ----
+        // ---- レイキャスト ----
         this._raycaster = new THREE.Raycaster();
         this._ndc = new THREE.Vector2();
-        this._waterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -WATER_Y);
+        this._climbPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // z=0平面
         this._hit = new THREE.Vector3();
-
         this._white = new THREE.Color(0xffffff);
 
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
-        this.boundOnSongEnd = () => this.startFinale();
+        this.boundOnPointerMove = this.onPointerMove.bind(this);
+        this.boundOnPointerUp = this.onPointerUp.bind(this);
+        this.boundOnSongEnd = () => this.reachGoal();
     }
 
     // =====================================================================
-    // init / teardown
+    // init
     // =====================================================================
     init() {
-        this.createTextures();
         this.initThree();
-        this.buildLake();
-        this.createFireflies();
+        this.buildSky();
+        this.buildGround();
+        this.buildStem();
+        this.buildSun();
         this.loadMiku();
-        this.createMikuReflection();
-        this.createTintOverlay();
 
         window.addEventListener('resize', this.boundOnResize);
         this.songWrapper.addEventListener('pointerdown', this.boundOnPointerDown);
+        window.addEventListener('pointermove', this.boundOnPointerMove);
+        window.addEventListener('pointerup', this.boundOnPointerUp);
         eventBus.on('songEnd', this.boundOnSongEnd);
 
         super.init();
 
-        // 初回誘導: 画面下寄り(手前の水面)を「水面にふれて」で示す。
-        // 一度でも触れたら onPointerDown 側で dismiss する。
         this.highlightFirstInteractable(() => {
-            if (this.touchCount > 0) return null;
-            return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.66 };
-        }, { label: '水面にふれて、歌詞をミクへ', autoDismissMs: 10000 });
+            if (this.answeredCount > 0 || this.builtCount > 0) return null;
+            const leaf = this.leaves.find(l => !l.confirmed);
+            if (leaf) { const p = this.worldToScreen(leaf.group.position.clone()); if (p) return p; }
+            return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.5 };
+        }, { label: '歌詞の葉にふれて、道をつくろう', autoDismissMs: 11000 });
     }
 
     initThree() {
         this.scene = new THREE.Scene();
-        // 夜の湖シェーダがフォグ色/密度を毎フレーム lerp で支配する。初期値だけ与える。
-        this.scene.fog = new THREE.FogExp2(0x0b2142, 0.0045);
-        this.scene.background = new THREE.Color(0x0a1330);
+        this.scene.fog = new THREE.FogExp2(0xbfe3ff, 0.011);
+        this.scene.background = new THREE.Color(0x8fcdf0);
 
-        this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-        this.camera.position.set(0, 2.2, 9);
+        this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1000);
+        this.camera.position.set(0, CAM_Y_OFF, CAM_Z);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias, alpha: true });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
@@ -144,620 +150,466 @@ export class SongKotaete extends BaseSong {
         this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
-        // 静かな夜だが、ミクが「誰か」分かる程度には起こす。
-        this.ambientLight = new THREE.AmbientLight(0x33406e, 1.4);
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 1.15);
         this.scene.add(this.ambientLight);
-
-        // 月の方向からのリムライト(輪郭を立てる)
-        this.rimLight = new THREE.DirectionalLight(0xbcccF0, 2.0);
-        this.rimLight.position.set(3, 9, -45);
-        this.scene.add(this.rimLight);
-
-        // カメラ側からの柔らかいフィル(シルエットを潰しすぎず顔/衣装をうっすら見せる)
-        this.fillLight = new THREE.DirectionalLight(0x9fb0d8, 0.9);
-        this.fillLight.position.set(0, 4, 14);
-        this.scene.add(this.fillLight);
+        this.sunLight = new THREE.DirectionalLight(0xfff3c4, 1.5);
+        this.sunLight.position.set(this.sunX, 12, 6);
+        this.scene.add(this.sunLight);
     }
 
-    buildLake() {
-        this.lakeGroup = new THREE.Group();
-        this.scene.add(this.lakeGroup);
-        this.lakeItems = [];
-        // 中央の前景草は歌詞の視認性を下げるので抑制する
-        this.skipForegroundGrass = true;
-        // ctx として this を渡す(isMobile / camera / scene / starField を参照する)
-        buildNightLake(THREE, this, this.lakeGroup, this.lakeItems);
-    }
-
-    // 水面の上を飛ぶホタル。各自がふわふわ漂って明滅し、拍(ビート)で一斉に強く光る。
-    // 位置アニメ・明滅・サイズを点群シェーダ(GPU)で計算するのでCPU負荷は uTime 更新のみ。
-    createFireflies() {
-        const N = this.isMobile ? 28 : 56;
-        const geo = new THREE.BufferGeometry();
-        const pos = new Float32Array(N * 3);
-        const phase = new Float32Array(N);
-        const speed = new Float32Array(N);
-        const scale = new Float32Array(N);
-        for (let i = 0; i < N; i++) {
-            pos[i * 3] = (Math.random() - 0.5) * 56;                        // x ±28
-            pos[i * 3 + 1] = WATER_Y + 0.3 + Math.random() * 1.6;          // 水面のすぐ上を漂う
-            pos[i * 3 + 2] = this.camera.position.z - 3 - Math.random() * 52; // 手前〜対岸
-            phase[i] = Math.random() * Math.PI * 2;
-            speed[i] = 0.6 + Math.random() * 0.9;
-            scale[i] = 0.7 + Math.random() * 0.9;
-        }
-        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        geo.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
-        geo.setAttribute('aSpeed', new THREE.BufferAttribute(speed, 1));
-        geo.setAttribute('aScale', new THREE.BufferAttribute(scale, 1));
+    // 空のグラデーション(下=明るい地平、上=青空)。大きな背面スフィアで表現。
+    buildSky() {
         const mat = new THREE.ShaderMaterial({
-            transparent: true, depthWrite: false, depthTest: false,
-            blending: THREE.AdditiveBlending,
-            uniforms: {
-                uTime: { value: 0 }, uBeat: { value: 0 }, uFade: { value: 0 },
-                uColor: { value: new THREE.Color('#d8f0a0') },
-                uSize: { value: this.isMobile ? 20 : 24 },
-            },
-            vertexShader: `
-              attribute float aPhase; attribute float aSpeed; attribute float aScale;
-              uniform float uTime, uBeat, uSize;
-              varying float vBright;
-              void main(){
-                vec3 p = position;
-                float t = uTime * aSpeed;
-                // ゆらゆらと飛ぶ(大小2つの周期を重ねる)
-                p.x += sin(t*0.6 + aPhase)*2.6 + cos(t*0.23 + aPhase*1.7)*1.2;
-                p.z += cos(t*0.5 + aPhase*0.7)*2.4 + sin(t*0.19 + aPhase*1.3)*1.1;
-                p.y += sin(t*0.9 + aPhase*1.5)*0.7 + 0.5;
-                vec4 mv = modelViewMatrix * vec4(p, 1.0);
-                gl_Position = projectionMatrix * mv;
-                // 個々の明滅 + 拍での一斉フレア
-                float tw = 0.45 + 0.55*sin(uTime*3.0*aSpeed + aPhase*3.1);
-                vBright = clamp(tw, 0.0, 1.0) * (0.55 + uBeat*1.1);
-                gl_PointSize = clamp(uSize*aScale*(1.0 + uBeat*0.9)*(12.0 / -mv.z), 2.0, 50.0);
-              }`,
-            fragmentShader: `
-              uniform vec3 uColor; uniform float uFade, uBeat;
-              varying float vBright;
-              void main(){
-                float r = length(gl_PointCoord - vec2(0.5));
-                if(r > 0.5) discard;
-                float glow = pow(smoothstep(0.5, 0.0, r), 1.6);   // 柔らかい丸い光
-                vec3 col = mix(uColor, vec3(1.0), uBeat*0.5);      // 拍では白く強く
-                gl_FragColor = vec4(col, glow * vBright * uFade);
-              }`,
+            side: THREE.BackSide, depthWrite: false,
+            uniforms: { uTop: { value: new THREE.Color(0x4fa3e0) }, uBot: { value: new THREE.Color(0xdff2ff) } },
+            vertexShader: `varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);} `,
+            fragmentShader: `varying vec3 vP; uniform vec3 uTop, uBot;
+              void main(){ float h=clamp(vP.y/260.0+0.5,0.0,1.0); gl_FragColor=vec4(mix(uBot,uTop,h),1.0);} `,
         });
-        const pts = new THREE.Points(geo, mat);
-        pts.renderOrder = 3;
-        this.scene.add(pts);
-        this.fireflies = pts;
+        this.sky = new THREE.Mesh(new THREE.SphereGeometry(300, 24, 16), mat);
+        this.scene.add(this.sky);
     }
 
-    // ミクの「水鏡」の映り込み。波紋(reflectWobble)で左右に揺れ歪む。
-    createMikuReflection() {
-        const c = document.createElement('canvas');
-        c.width = 96; c.height = 256;
+    buildGround() {
+        const geo = new THREE.PlaneGeometry(120, 120);
+        geo.rotateX(-Math.PI / 2);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x7ec85a, roughness: 1 });
+        this.ground = new THREE.Mesh(geo, mat);
+        this.ground.position.y = GROUND_Y;
+        this.scene.add(this.ground);
+        // 遠くの丘
+        const hillMat = new THREE.MeshBasicMaterial({ color: 0x6fb84f });
+        for (let i = 0; i < 5; i++) {
+            const r = 6 + Math.random() * 6;
+            const hill = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), hillMat);
+            hill.position.set(-40 + i * 20 + (Math.random() - 0.5) * 8, GROUND_Y - r * 0.55, -30 - Math.random() * 10);
+            this.scene.add(hill);
+        }
+    }
+
+    buildStem() {
+        const mat = new THREE.MeshStandardMaterial({ color: 0x4c9a3f, roughness: 0.9 });
+        const geo = new THREE.CylinderGeometry(STEM_R * 0.7, STEM_R, 1, 10);
+        this.stem = new THREE.Mesh(geo, mat);
+        this.stem.position.set(0, this.stemDisplay / 2, 0);
+        this.stem.scale.y = this.stemDisplay;
+        this.scene.add(this.stem);
+
+        // 芽(双葉)
+        const sproutMat = new THREE.MeshStandardMaterial({ color: 0x6cc24a, roughness: 0.8, side: THREE.DoubleSide });
+        const sprout = new THREE.Mesh(new THREE.CircleGeometry(0.5, 12), sproutMat);
+        sprout.position.set(0.35, 0.4, 0.05); sprout.rotation.z = -0.5;
+        this.scene.add(sprout);
+        const sprout2 = sprout.clone(); sprout2.position.x = -0.35; sprout2.rotation.z = 0.5;
+        this.scene.add(sprout2);
+    }
+
+    // 太陽(ドラッグ可能)。光線つき。
+    buildSun() {
+        const c = document.createElement('canvas'); c.width = c.height = 256;
         const x = c.getContext('2d');
-        // 上(水際)が明るく下へ薄れる縦のにじみ。中央に芯。
-        const grad = x.createLinearGradient(0, 0, 0, 256);
-        grad.addColorStop(0, 'rgba(255,255,255,0.85)');
-        grad.addColorStop(0.25, 'rgba(200,235,255,0.5)');
-        grad.addColorStop(0.7, 'rgba(150,210,255,0.18)');
-        grad.addColorStop(1, 'rgba(120,190,255,0)');
-        x.fillStyle = grad;
-        // ぼかした縦長の楕円で「人影」を示唆
-        x.beginPath();
-        x.ellipse(48, 70, 26, 64, 0, 0, Math.PI * 2);
-        x.fill();
-        x.fillRect(30, 60, 36, 180);
-        this._reflectTex = new THREE.CanvasTexture(c);
-
-        const mat = new THREE.SpriteMaterial({
-            map: this._reflectTex,
-            transparent: true,
-            opacity: 0.0,
-            depthWrite: false,
-            depthTest: false,
-            blending: THREE.AdditiveBlending,
-            color: new THREE.Color('#7fe3ea'),
-        });
-        const spr = new THREE.Sprite(mat);
-        spr.center.set(0.5, 1.0);   // 上端(水際)を基準に下へ伸びる
-        spr.scale.set(3.4, 6.2, 1);
-        spr.position.set(this.mikuPos.x, WATER_Y + 0.05, this.mikuPos.z + 0.4);
-        spr.renderOrder = 2;
-        this.scene.add(spr);
-        this.mikuReflection = spr;
+        const g = x.createRadialGradient(128, 128, 10, 128, 128, 120);
+        g.addColorStop(0, 'rgba(255,248,200,1)');
+        g.addColorStop(0.55, 'rgba(255,196,40,1)');
+        g.addColorStop(0.8, 'rgba(255,170,30,0.85)');
+        g.addColorStop(1, 'rgba(255,170,30,0)');
+        x.fillStyle = g; x.beginPath(); x.arc(128, 128, 120, 0, Math.PI * 2); x.fill();
+        this._sunTex = new THREE.CanvasTexture(c);
+        // 青空の上では加算合成だと白飛びするので通常合成で金色を保つ
+        const mat = new THREE.SpriteMaterial({ map: this._sunTex, transparent: true, depthTest: false });
+        this.sun = new THREE.Sprite(mat);
+        this.sun.scale.set(5, 5, 1);
+        this.sun.renderOrder = 5;
+        this.scene.add(this.sun);
+        this._positionSun();
     }
 
-    createTextures() {
-        // 柔らかな光(グロー)
-        const g = document.createElement('canvas');
-        g.width = g.height = 128;
-        const gx = g.getContext('2d');
-        const grad = gx.createRadialGradient(64, 64, 0, 64, 64, 64);
-        grad.addColorStop(0, 'rgba(255,255,255,1)');
-        grad.addColorStop(0.35, 'rgba(255,255,255,0.5)');
-        grad.addColorStop(1, 'rgba(255,255,255,0)');
-        gx.fillStyle = grad;
-        gx.fillRect(0, 0, 128, 128);
-        this.glowTexture = new THREE.CanvasTexture(g);
-
-        // 波紋リング(中心が空いた淡いリング)
-        const r = document.createElement('canvas');
-        r.width = r.height = 256;
-        const rx = r.getContext('2d');
-        const rg = rx.createRadialGradient(128, 128, 70, 128, 128, 128);
-        rg.addColorStop(0, 'rgba(255,255,255,0)');
-        rg.addColorStop(0.72, 'rgba(255,255,255,0)');
-        rg.addColorStop(0.85, 'rgba(255,255,255,0.85)');
-        rg.addColorStop(0.97, 'rgba(255,255,255,0.12)');
-        rg.addColorStop(1, 'rgba(255,255,255,0)');
-        rx.fillStyle = rg;
-        rx.fillRect(0, 0, 256, 256);
-        this.ringTexture = new THREE.CanvasTexture(r);
-    }
-
-    createTintOverlay() {
-        const el = document.createElement('div');
-        el.style.cssText =
-            'position:absolute;inset:0;pointer-events:none;mix-blend-mode:soft-light;' +
-            'opacity:0;z-index:5;transition:none;';
-        el.style.background = '#' + this.answerColor.getHexString();
-        this.songWrapper.appendChild(el);
-        this.tintOverlay = el;
+    _positionSun() {
+        // 太陽は常に空(カメラの上方)に位置し、横は sunX に追従
+        this.sun.position.set(this.sunX, this.camera.position.y + (this.sunHeight - 4), -8);
     }
 
     // =====================================================================
-    // ミク(対岸で佇み、歌うシルエット)
+    // ミク
     // =====================================================================
     loadMiku() {
         const loader = new GLTFLoader();
-        loader.register((parser) => new VRMLoaderPlugin(parser));
-        loader.load(
-            import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
+        loader.register((p) => new VRMLoaderPlugin(p));
+        loader.load(import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
             (gltf) => {
                 if (!this.isActive) { this._disposeVRM(gltf.userData.vrm); return; }
                 const vrm = gltf.userData.vrm;
                 this.currentVRM = vrm;
                 this.scene.add(vrm.scene);
-                vrm.scene.scale.setScalar(this.mikuScale);
-                vrm.scene.position.set(this.mikuPos.x, WATER_Y, this.mikuPos.z);
-                vrm.scene.rotation.y = 0; // カメラ(プレイヤー)の方を向いて歌う
+                vrm.scene.scale.setScalar(1.9);
+                vrm.scene.position.set(this.climbX, this.climbY, 0.4);
+                vrm.scene.rotation.y = Math.PI; // 顔をカメラへ向ける
+                this._baseRotY = Math.PI;
                 this.setupStandPose(vrm);
                 settleSpringBones(vrm);
                 this.mikuLoaded = true;
-
-                // 背後のほのかな光輪(答えの色に追従)
-                const glowMat = new THREE.SpriteMaterial({
-                    map: this.glowTexture,
-                    color: new THREE.Color('#cfe0ff'),
-                    transparent: true,
-                    opacity: 0.3,
-                    blending: THREE.AdditiveBlending,
-                    depthWrite: false,
-                });
-                this.mikuGlow = new THREE.Sprite(glowMat);
-                this.mikuGlow.scale.set(10, 10, 1);
-                this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 4.0, this.mikuPos.z - 0.5);
-                this.mikuGlow.renderOrder = 2;   // 水面より上に描く
-                this.scene.add(this.mikuGlow);
-
-                console.log('[KOTAETE] Miku VRM loaded (mizukagami).');
-            },
-            undefined,
-            (error) => console.error('[KOTAETE] Failed to load VRM:', error),
-        );
+            }, undefined,
+            (e) => console.error('[HIMAWARI] VRM load failed', e));
     }
 
-    // 自然な立ち姿(腕を体側に下ろす)。踊らせず、静かに佇ませる。
     setupStandPose(vrm) {
         if (!vrm || !vrm.humanoid) return;
         const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
         const lu = get('leftUpperArm'), ru = get('rightUpperArm');
         const ll = get('leftLowerArm'), rl = get('rightLowerArm');
-        if (lu) lu.rotation.z = Math.PI / 2.6;
-        if (ru) ru.rotation.z = -Math.PI / 2.6;
+        if (lu) lu.rotation.z = Math.PI / 2.7;
+        if (ru) ru.rotation.z = -Math.PI / 2.7;
         if (ll) ll.rotation.y = Math.PI / 14;
         if (rl) rl.rotation.y = -Math.PI / 14;
-    }
-
-    updateMiku(now, deltaSec) {
-        if (!this.currentVRM) return;
-        const t = now * 0.001;
-
-        // 呼吸のような上下、歌唱パルスでの一瞬の伸び上がり
-        this.mikuPulse = Math.max(0, this.mikuPulse - deltaSec * 2.0);
-        const breathe = Math.sin(t * 1.4) * 0.045;
-        this.currentVRM.scene.position.y = WATER_Y + breathe + this.mikuPulse * 0.16;
-        // ごくゆるい左右の揺れ
-        this.currentVRM.scene.rotation.y = Math.sin(t * 0.5) * 0.05;
-        // 胸を少し起こして歌っている気配
-        const spine = this.currentVRM.humanoid.getNormalizedBoneNode('spine');
-        if (spine) spine.rotation.x = this.mikuPulse * 0.06;
-
-        // 視線追従: 既定はプレイヤー(カメラ)を見て、触れた直後はその場所へ目を移す
-        this.lookBlend = Math.max(0, this.lookBlend - deltaSec * 0.5);
-        const head = this.currentVRM.humanoid.getNormalizedBoneNode('head');
-        const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
-        const tgt = (this._lookScratch || (this._lookScratch = new THREE.Vector3()));
-        tgt.copy(this.camera.position).lerp(this.lookTarget, this.lookBlend);
-        if (head) this.lookAtTarget(head, tgt, 0.6, 0.5, 1.0);
-        if (neck) this.lookAtTarget(neck, tgt, 0.35, 0.3, 0.5);
-
-        // 微笑み(触れられた直後・歌唱パルスで強まる)。VRM0/1で表情キー名が違うので両対応。
-        if (this.currentVRM.expressionManager) {
-            const smile = THREE.MathUtils.clamp(0.15 + this.lookBlend * 0.5 + this.mikuPulse * 0.2, 0, 0.85);
-            try { this.currentVRM.expressionManager.setValue('happy', smile); } catch (_) {}
-            try { this.currentVRM.expressionManager.setValue('joy', smile); } catch (_) {}
-        }
-
-        if (this.mikuGlow) {
-            this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 4.0, this.mikuPos.z - 0.5);
-            this.mikuGlow.material.opacity = 0.32 + this.mikuPulse * 0.4;
-            this.mikuGlow.material.color.copy(this.answerColor).lerp(this._white, 0.5);
-        }
-
-        this.currentVRM.update(deltaSec); // SpringBone(ツインテール)更新
-    }
-
-    reactMiku(strength = 1) {
-        this.mikuPulse = Math.min(1, this.mikuPulse + strength);
-    }
-
-    // 指定ボーンを目標ワールド座標へ向ける(ヨー/ピッチをクランプ)。front=ローカル+Z前提。
-    lookAtTarget(bone, targetWorldPos, maxYaw = 0.6, maxPitch = 0.5, blend = 1) {
-        if (!bone || !this.currentVRM) return;
-        const boneWorldPos = bone.getWorldPosition(new THREE.Vector3());
-        const diff = targetWorldPos.clone().sub(boneWorldPos);
-        const localDiff = diff.applyQuaternion(this.currentVRM.scene.quaternion.clone().invert());
-        let yaw = Math.atan2(localDiff.x, localDiff.z);
-        let pitch = -Math.atan2(localDiff.y, Math.sqrt(localDiff.x * localDiff.x + localDiff.z * localDiff.z));
-        yaw = THREE.MathUtils.clamp(yaw, -maxYaw, maxYaw);
-        pitch = THREE.MathUtils.clamp(pitch, -maxPitch, maxPitch);
-        bone.rotation.y = yaw * blend;
-        bone.rotation.x = pitch * blend;
+        this.basePose = { luZ: Math.PI / 2.7, ruZ: -Math.PI / 2.7, llY: Math.PI / 14, rlY: -Math.PI / 14 };
     }
 
     // =====================================================================
-    // ビート(拍)同期 — 聴いている間ずっと湖がきらめき、オンビートで報酬
+    // 葉っぱ(足場)
     // =====================================================================
-    _beatInfo() {
-        const p = playerManager.player;
-        if (!p || typeof p.findBeat !== 'function') return null;
-        const pos = p.timer ? p.timer.position : this.currentTime;
-        const beat = p.findBeat(pos);
-        if (!beat || !(beat.duration > 0)) return null;
-        return { beat, pos };
+    createLeafTexture(text) {
+        const W = 512, H = 256;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        // 葉の形(横長の楕円)。緑のグラデ。
+        const g = x.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, LEAF_GREEN); g.addColorStop(1, LEAF_GREEN_D);
+        x.fillStyle = g;
+        x.beginPath(); x.ellipse(W / 2, H / 2, W / 2 - 8, H / 2 - 8, 0, 0, Math.PI * 2); x.fill();
+        // 葉脈
+        x.strokeStyle = 'rgba(255,255,255,0.25)'; x.lineWidth = 3;
+        x.beginPath(); x.moveTo(40, H / 2); x.lineTo(W - 40, H / 2); x.stroke();
+        // 可読性のための暗い帯
+        x.fillStyle = 'rgba(20,40,20,0.45)';
+        x.beginPath(); x.ellipse(W / 2, H / 2, W / 2 - 60, 64, 0, 0, Math.PI * 2); x.fill();
+        // 歌詞テキスト(白・濃い縁取り)
+        let fs = 64;
+        x.textAlign = 'center'; x.textBaseline = 'middle';
+        do { x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`; fs -= 4; }
+        while (fs > 22 && x.measureText(text).width > W - 90);
+        x.lineWidth = 7; x.strokeStyle = 'rgba(10,30,10,0.9)'; x.strokeText(text, W / 2, H / 2);
+        x.fillStyle = '#ffffff'; x.fillText(text, W / 2, H / 2);
+        const tex = new THREE.CanvasTexture(c);
+        return tex;
     }
 
-    // いま拍頭付近か(オンビート)？窓は拍長の22%か130msの短い方。
-    _isOnBeat() {
-        const bi = this._beatInfo();
-        if (!bi) return false;
-        const { beat, pos } = bi;
-        const delta = Math.min(pos - beat.startTime, (beat.startTime + beat.duration) - pos);
-        return delta < Math.min(130, beat.duration * 0.22);
+    // 次の葉を生やす。yを指定しなければラダーの次段に。sideは太陽バイアスで決定。
+    spawnLeaf(text, opts = {}) {
+        const idx = this.leafIndexCounter++;
+        let y = (opts.y != null) ? opts.y : (FIRST_LEAF_Y + idx * LEAF_SPACING);
+        // 側: 交互を基本に、太陽の側へ寄せる(sideBias)
+        let side = (idx % 2 === 0) ? -1 : 1;
+        if (opts.side) side = opts.side;
+        else if (this.sideBias > 0.4) side = 1;
+        else if (this.sideBias < -0.4) side = -1;
+        const x = side * LEAF_X;
+
+        const group = new THREE.Group();
+        group.position.set(x, y, 0);
+
+        // 茎から葉への短い葉柄
+        const stalkMat = new THREE.MeshBasicMaterial({ color: 0x4c9a3f });
+        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, LEAF_X, 6), stalkMat);
+        stalk.position.set(-x / 2, 0, -0.02); stalk.rotation.z = Math.PI / 2;
+        group.add(stalk);
+
+        const tex = this.createLeafTexture(text || '♪');
+        const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+        const leaf = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), mat);
+        leaf.position.set(0, 0, 0);
+        group.add(leaf);
+        this.scene.add(group);
+
+        const item = {
+            group, leaf, mat, tex, y, x, side, text: text || '',
+            born: 0, openT: 0, confirmed: false, landed: false, glow: 0,
+            index: idx, isGoal: !!opts.isGoal,
+        };
+        // 生え際は小さく → ポップして開く
+        group.scale.setScalar(0.01);
+        this.leaves.push(item);
+        this.leaves.sort((a, b) => a.y - b.y);
+        // 茎はこの葉より少し上まで伸ばす
+        this.stemTopTarget = Math.max(this.stemTopTarget, y + 1.6);
+        return item;
     }
 
-    updateBeat(dt) {
-        const bi = this._beatInfo();
-        if (bi) {
-            const { beat } = bi;
-            this._beatStart = beat.startTime;
-            this._beatDuration = beat.duration;
-            if (beat.startTime !== this._lastBeatStart) {
-                this._lastBeatStart = beat.startTime;
-                this.beatPulse = 1;            // 拍頭で点火 → 水面と蛍が一斉に瞬く
+    // 歌詞ワード発火で葉を生やす。総数を抑え(間隔)、ミクが遅れすぎたら止める(バックログ上限)。
+    // → 曲終わりにミクが必ずてっぺんへ追いつける範囲に保つ。
+    _spawnLyricLeaf(text) {
+        const now = performance.now();
+        if (now - this._lastLeafAt < LEAF_SPAWN_INTERVAL) return null;
+        const highestY = this.leaves.length ? this.leaves[this.leaves.length - 1].y : this.climbY;
+        if (highestY - this.climbY > MAX_BACKLOG_LEAVES * LEAF_SPACING) return null; // 遅れすぎ→生やさない
+        this._lastLeafAt = now;
+        return this.spawnLeaf(text);
+    }
+
+    updateLeaves(dt) {
+        for (const l of this.leaves) {
+            l.born += dt;
+            // ポップアップして開く
+            l.openT = Math.min(1, l.openT + dt * 3.2);
+            const s = this._easeOutBack(l.openT);
+            l.group.scale.setScalar(s);
+            // 確定/着地でほのかに光る
+            const targetGlow = (l.confirmed ? 0.6 : 0) + (l.landed ? 0.25 : 0);
+            l.glow += (targetGlow - l.glow) * Math.min(1, dt * 6);
+            // 葉の色を確定でやや明るく
+            l.mat.color.setRGB(1 + l.glow * 0.3, 1 + l.glow * 0.3, 1 + l.glow * 0.3);
+            // 葉は常にカメラの方へ少しだけ向く(可読性)。基本はz+正面。
+            l.group.rotation.y = 0;
+            // そよ風で軽く揺れる
+            l.leaf.rotation.z = Math.sin(l.born * 1.5 + l.index) * 0.04;
+        }
+    }
+
+    // =====================================================================
+    // 茎の成長
+    // =====================================================================
+    updateStem(dt) {
+        // 太陽が高いほど速く伸びる
+        this.growthRate = 0.6 + 0.8 * THREE.MathUtils.clamp((this.sunHeight - 3) / 6, 0, 1);
+        const speed = 2.2 * this.growthRate;
+        this.stemDisplay += (this.stemTopTarget - this.stemDisplay) * Math.min(1, dt * speed);
+        if (this.stem) {
+            this.stem.scale.y = this.stemDisplay;
+            this.stem.position.y = this.stemDisplay / 2;
+        }
+    }
+
+    // =====================================================================
+    // ミクの自動登攀(落下なし)
+    // =====================================================================
+    updateClimb(dt) {
+        if (!this.mikuLoaded) return;
+        this._jumpCooldown = Math.max(0, this._jumpCooldown - dt);
+
+        if (this.climbState === 'jumping') {
+            const j = this.jump;
+            // 終盤(ゴール発火後)はジャンプを速め、残りの足場を一気に登り切る
+            j.t += dt / (JUMP_DUR * (this.finishing ? 0.45 : 1));
+            const t = Math.min(1, j.t);
+            const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+            this.climbX = THREE.MathUtils.lerp(j.fromX, j.toX, ease);
+            this.climbY = THREE.MathUtils.lerp(j.fromY, j.toY, ease);
+            const arc = Math.sin(t * Math.PI) * (0.8 + Math.abs(j.toY - j.fromY) * 0.18);
+            this._jumpArc = arc;
+            this.mikuPulse = Math.max(this.mikuPulse, 0.5);
+            if (t >= 1) {
+                // 着地。落下なし方針: 必ず目標の葉に乗る。
+                this.climbX = j.toX; this.climbY = j.toY; this._jumpArc = 0;
+                this.currentLeafIndex = j.toLeaf ? j.toLeaf.index : this.currentLeafIndex;
+                if (j.toLeaf) { j.toLeaf.landed = true; }
+                this.climbState = 'idle';
+                this.jump = null;
+                this._jumpCooldown = this.finishing ? 0 : JUMP_MIN_INTERVAL;
+                this.faceDir = 0;
+                if (j.toLeaf && j.toLeaf.isGoal) this._onReachBloom();
             }
-        }
-        this.beatPulse = Math.max(0, this.beatPulse - dt * 2.6);
-    }
-
-    updateFireflies(now) {
-        if (!this.fireflies) return;
-        const u = this.fireflies.material.uniforms;
-        u.uTime.value = now * 0.001;
-        u.uBeat.value = this.beatPulse;
-        u.uFade.value = this.lakeFade;
-        // ホタル色(緑がかった黄金)を基調に、答えの色をほんのり混ぜる
-        u.uColor.value.copy(this.answerColor).lerp(FIREFLY, 0.62);
-    }
-
-    updateReflection(now, dt) {
-        if (!this.mikuReflection) return;
-        this.reflectWobble = Math.max(0, this.reflectWobble - dt * 0.8);
-        const t = now * 0.001;
-        const m = this.mikuReflection;
-        const wob = this.reflectWobble;
-        m.scale.x = 3.4 * (1 + Math.sin(t * 2.2) * 0.04 + wob * 0.18 * Math.sin(t * 9));
-        m.position.x = this.mikuPos.x + Math.sin(t * 1.6) * 0.12 + wob * 0.6 * Math.sin(t * 11);
-        m.position.z = this.mikuPos.z + 0.4;
-        m.material.opacity = (this.mikuLoaded ? (0.20 + this.mikuPulse * 0.18 + wob * 0.15) : 0) * this.lakeFade;
-        m.material.color.copy(this.answerColor).lerp(this._white, 0.55);
-    }
-
-    // =====================================================================
-    // 入力: 水に触れる(唯一の操作)
-    // =====================================================================
-    onClick() { /* BaseSong の汎用CSSリップルは出さない(水面の波紋に一本化) */ }
-
-    onPointerDown(event) {
-        if (!this.isActive || !this.camera || this.isTutorialActive) return;
-        if (event.target && event.target.closest &&
-            event.target.closest('button, a, input, .song-tutorial-overlay, .mizukagami-reveal')) {
             return;
         }
 
-        this._ndc.set(
-            (event.clientX / window.innerWidth) * 2 - 1,
-            -(event.clientY / window.innerHeight) * 2 + 1,
-        );
-        this._raycaster.setFromCamera(this._ndc, this.camera);
-        const hit = this._raycaster.ray.intersectPlane(this._waterPlane, this._hit);
-        if (!hit || hit.z > this.camera.position.z - 1.5) return; // 水面より手前/真下は無視
-
-        this.touchCount++;
-        this.dismissFirstInteractable();
-
-        // ミクが触れた場所へ視線を移す＋水鏡の反射が波紋で揺れる
-        this.lookTarget.copy(hit);
-        this.lookBlend = 1;
-        this.reflectWobble = Math.min(1, this.reflectWobble + 0.8);
-
-        // オンビート判定: 拍頭の±一定窓で触れると「強い波紋＋澄んだ音」のごほうび
-        const strong = this._isOnBeat();
-        this.spawnRipple(hit, strong);
-        this.accumulateColor(hit);
-        this.spawnMote(hit);
-        if (strong) {
-            this.beatPulse = 1;
-            this.spawnMote(hit);            // 光を一粒増やす
-            this.reactMiku(1.1);
-            sfx.play('kotaete_resonance');  // 欠損時は無音
-        } else {
-            this.reactMiku(0.7);
-            sfx.play('ripple');
+        // idle: 自分より上で一番近い葉へ次の一歩
+        if (this._jumpCooldown > 0) return;
+        const next = this._nextLeafAbove(this.climbY);
+        if (next) {
+            this._startJump(next);
         }
+    }
 
-        // 近くに漂う歌詞があれば共鳴(明るく・速く対岸へ)。
-        // 無いときだけ今の歌詞を立ち上げるが、連打での乱発を防ぐため
-        // クールダウン(0.9秒)＋同一フレーズの再発射禁止でゲートする。
-        const near = this.pickNearLyric(event.clientX, event.clientY);
-        if (near) {
-            this.resonateLyric(near);
-        } else {
-            const text = this.currentLyricText();
-            const tnow = performance.now();
-            if (text && text !== this._lastLyricText && tnow - this._lastTouchLyricAt > 900) {
-                this.spawnLyric(text, hit, { dur: 4.2, resonated: true });
-                this._lastTouchLyricAt = tnow;
-                this._lastLyricText = text;
+    _nextLeafAbove(y) {
+        // y より上にある葉のうち最も低いもの(まだ乗っていない)
+        let best = null;
+        for (const l of this.leaves) {
+            if (l.y > y + 0.15 && !l.landed) {
+                if (!best || l.y < best.y) best = l;
             }
-        }
-    }
-
-    accumulateColor(hit) {
-        // 手前(0)→奥/対岸(1)。奥へ触れるほど光・夜明けの暖色へ寄る。
-        const nz = THREE.MathUtils.clamp((this.camera.position.z - hit.z) / 30, 0, 1);
-        const tc = COOL.clone().lerp(WARM, nz);
-        this.answerColor.lerp(tc, 0.16);          // 触れるたびに少しずつ移ろう移動平均
-        this.worldColor.copy(this.answerColor).lerp(this._white, 0.28);
-    }
-
-    // =====================================================================
-    // 波紋 / 歌詞 / 光の粒
-    // =====================================================================
-    spawnRipple(point, strong = false) {
-        const geo = new THREE.PlaneGeometry(1, 1);
-        geo.rotateX(-Math.PI / 2);
-        const mat = new THREE.MeshBasicMaterial({
-            map: this.ringTexture,
-            transparent: true,
-            opacity: strong ? 0.95 : 0.75,
-            depthWrite: false,
-            depthTest: false,                  // 水面(renderOrder 1, ほぼ不透明)の上に必ず描く
-            blending: THREE.AdditiveBlending,
-            // オンビートは白く強く輝く
-            color: this.answerColor.clone().lerp(this._white, strong ? 0.85 : 0.55),
-        });
-        const startScale = strong ? 2.2 : 1.6;
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(point.x, WATER_Y + 0.03, point.z);
-        mesh.scale.setScalar(startScale);
-        mesh.renderOrder = 3;                  // 水面より後(=上)に描画
-        this.scene.add(mesh);
-        this.ripples.push({
-            mesh, mat, geo, life: 0,
-            dur: strong ? 2.3 : 1.9,
-            startScale, maxScale: strong ? 27 : 18.6,
-            baseOpacity: strong ? 0.95 : 0.6,
-        });
-    }
-
-    updateRipples(dt) {
-        for (let i = this.ripples.length - 1; i >= 0; i--) {
-            const r = this.ripples[i];
-            r.life += dt;
-            const t = r.life / r.dur;
-            if (t >= 1) {
-                this.scene.remove(r.mesh);
-                r.geo.dispose(); r.mat.dispose();
-                this.ripples.splice(i, 1);
-                continue;
-            }
-            r.mesh.scale.setScalar(r.startScale + t * (r.maxScale - r.startScale));
-            r.mat.opacity = r.baseOpacity * (1 - t);
-        }
-    }
-
-    spawnLyric(text, point, opts = {}) {
-        if (this.lyricSprites.length > 7) {
-            // 古いものから片付けて溢れさせない
-            const old = this.lyricSprites.shift();
-            this.scene.remove(old.spr); old.mat.dispose(); old.texture.dispose();
-        }
-        const { texture, aspect } = this.createTextTexture(text, '#' + this.worldColor.getHexString());
-        const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0, depthWrite: false });
-        const spr = new THREE.Sprite(mat);
-        const h = 1.7;
-        spr.scale.set(h * aspect, h, 1);
-        spr.position.set(point.x, WATER_Y + 0.7, point.z);
-        spr.renderOrder = 4;                 // 水面より上に描く
-        this.scene.add(spr);
-
-        // 対岸のミクの少し手前・上を目標に流す(吸い込まれていくように)
-        const target = new THREE.Vector3(this.mikuPos.x, WATER_Y + 2.4, this.mikuPos.z + 3.0);
-        this.lyricSprites.push({
-            spr, mat, texture,
-            from: spr.position.clone(), target,
-            life: 0,
-            dur: opts.dur != null ? opts.dur : 7.5,
-            maxOpacity: opts.resonated ? 1.0 : 0.55,
-            resonated: !!opts.resonated,
-        });
-    }
-
-    updateLyrics(dt) {
-        for (let i = this.lyricSprites.length - 1; i >= 0; i--) {
-            const l = this.lyricSprites[i];
-            l.life += dt;
-            const t = l.life / l.dur;
-            if (t >= 1) {
-                if (l.resonated) this.reactMiku(0.5); // 届いた言葉にミクが応える
-                this.scene.remove(l.spr);
-                l.mat.dispose(); l.texture.dispose();
-                this.lyricSprites.splice(i, 1);
-                continue;
-            }
-            const ease = 1 - Math.pow(1 - t, 2); // ease-out で対岸へ
-            l.spr.position.lerpVectors(l.from, l.target, ease);
-            // 立ち上がり→保持→消え際でフェード
-            const fadeIn = Math.min(1, t / 0.12);
-            const fadeOut = 1 - Math.max(0, (t - 0.7) / 0.3);
-            l.mat.opacity = l.maxOpacity * fadeIn * fadeOut;
-        }
-    }
-
-    resonateLyric(l) {
-        if (l.resonated) return;
-        l.resonated = true;
-        l.maxOpacity = 1.0;
-        // 残り距離を一気に詰める(波紋に押されて対岸へ)
-        l.dur = Math.min(l.dur, l.life + 2.6);
-        this.spawnMote(l.spr.position);
-    }
-
-    pickNearLyric(clientX, clientY) {
-        let best = null, bestD = 150; // px
-        for (const l of this.lyricSprites) {
-            if (l.resonated) continue;
-            const p = this.worldToScreen(l.spr.position.clone());
-            if (!p) continue;
-            const d = Math.hypot(p.x - clientX, p.y - clientY);
-            if (d < bestD) { bestD = d; best = l; }
         }
         return best;
     }
 
-    spawnMote(from) {
-        const mat = new THREE.SpriteMaterial({
-            map: this.glowTexture,
-            color: this.answerColor.clone().lerp(this._white, 0.6),
-            transparent: true,
-            opacity: 0.9,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-        });
-        const s = new THREE.Sprite(mat);
-        s.position.set(from.x, WATER_Y + 0.6, from.z);
-        s.scale.set(1.2, 1.2, 1);
-        s.renderOrder = 4;                   // 水面より上に描く
-        this.scene.add(s);
-        const target = new THREE.Vector3(this.mikuPos.x, WATER_Y + 2.6, this.mikuPos.z);
-        this.lightMotes.push({ s, mat, from: s.position.clone(), target, life: 0, dur: 1.3 });
+    _startJump(leaf) {
+        this.climbState = 'jumping';
+        this.faceDir = Math.sign(leaf.x - this.climbX) || 0;
+        this.jump = {
+            fromX: this.climbX, fromY: this.climbY,
+            toX: leaf.x, toY: leaf.y, toLeaf: leaf, t: 0,
+        };
+        sfx.play('ripple'); // 軽い踏み切り音(欠損時は無音)
     }
 
-    updateMotes(dt) {
-        for (let i = this.lightMotes.length - 1; i >= 0; i--) {
-            const m = this.lightMotes[i];
-            m.life += dt;
-            const t = m.life / m.dur;
-            if (t >= 1) {
-                this.reactMiku(0.5);
-                this.scene.remove(m.s); m.mat.dispose();
-                this.lightMotes.splice(i, 1);
-                continue;
-            }
-            const ease = 1 - Math.pow(1 - t, 3);
-            m.s.position.lerpVectors(m.from, m.target, ease);
-            m.s.position.y += Math.sin(t * Math.PI) * 1.4; // ふわりと弧を描く
-            m.s.scale.setScalar(1.2 * (1 - t * 0.6));
-            m.mat.opacity = 0.9 * (1 - t);
+    // ミクのポーズ/向き/上下(ジャンプの弧)を反映
+    updateMiku(now, dt) {
+        if (!this.currentVRM) return;
+        const t = now * 0.001;
+        this.mikuPulse = Math.max(0, this.mikuPulse - dt * 1.6);
+
+        const vrm = this.currentVRM;
+        vrm.scene.position.set(this.climbX, this.climbY + (this._jumpArc || 0), 0.4);
+        // 顔はカメラへ向けたまま、進行方向(ジャンプ中)へ体を少しひねる
+        const targetRotY = (this._baseRotY || Math.PI) + this.faceDir * 0.45;
+        vrm.scene.rotation.y += (targetRotY - vrm.scene.rotation.y) * Math.min(1, dt * 10);
+
+        // 立ち姿のグルーヴ + ジャンプ中は腕を上げる
+        const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
+        const bp = this.basePose;
+        if (bp) {
+            const jumping = this.climbState === 'jumping' ? 1 : 0;
+            const sway = Math.sin(t * 1.2) * 0.04 * (1 - jumping);
+            const lu = get('leftUpperArm'), ru = get('rightUpperArm');
+            const spine = get('spine');
+            if (lu) lu.rotation.z = bp.luZ * (1 - jumping * 0.55) + sway;
+            if (ru) ru.rotation.z = bp.ruZ * (1 - jumping * 0.55) - sway;
+            if (spine) spine.rotation.x = -jumping * 0.12 + this.mikuPulse * 0.04;
+            const llg = get('leftUpperLeg'), rlg = get('rightUpperLeg');
+            if (llg) llg.rotation.x = jumping * -0.5;   // ジャンプで膝を曲げる
+            if (rlg) rlg.rotation.x = jumping * -0.3;
         }
+        // 上(次の葉/てっぺん)を見上げる
+        const head = get('head');
+        if (head) head.rotation.x = -0.12;
+
+        vrm.update(dt);
     }
 
     // =====================================================================
-    // 歌詞テクスチャ(白文字 + 色の影。暗い水面でも読める)
+    // カメラ(縦スクロール追従)
     // =====================================================================
-    createTextTexture(text, colorStr) {
-        const FONT = 'bold 80px "Inter", "Noto Sans JP", "Hiragino Kaku Gothic Pro", sans-serif';
-        const PAD = 56;
-        const LINE_H = 116;
-        const MAX_LINE = 1100;
-
-        const meas = document.createElement('canvas').getContext('2d');
-        meas.font = FONT;
-        const fullW = meas.measureText(text).width;
-
-        let lines = [text];
-        if (fullW > MAX_LINE && text.length >= 4) {
-            let best = Math.ceil(text.length / 2);
-            for (let off = 0; off <= 3; off++) {
-                const c = text[best + off];
-                if (c && '、。　 はがにをのとへもや'.includes(c)) { best = best + off + 1; break; }
-            }
-            lines = [text.slice(0, best), text.slice(best)];
-        }
-
-        const lineWidths = lines.map(l => meas.measureText(l).width);
-        const w = Math.ceil(Math.min(MAX_LINE, Math.max(...lineWidths)) + PAD);
-        const h = LINE_H * lines.length + PAD;
-
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.font = FONT;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = colorStr;
-        ctx.shadowBlur = 22;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        lines.forEach((line, i) => {
-            const lw = lineWidths[i];
-            const y = (h / 2) - (LINE_H * (lines.length - 1)) / 2 + i * LINE_H;
-            if (lw > MAX_LINE) {
-                ctx.save();
-                ctx.translate(w / 2, y);
-                ctx.scale(MAX_LINE / lw, 1);
-                ctx.fillText(line, 0, 0);
-                ctx.restore();
-            } else {
-                ctx.fillText(line, w / 2, y);
-            }
-        });
-
-        return { texture: new THREE.CanvasTexture(canvas), aspect: w / h };
+    updateCamera(dt) {
+        const targetY = this.climbY + CAM_Y_OFF;
+        this.camera.position.x += (0 - this.camera.position.x) * Math.min(1, dt * 3);
+        this.camera.position.y += (targetY - this.camera.position.y) * Math.min(1, dt * 3);
+        this.camera.position.z = CAM_Z;
+        this.camera.lookAt(0, this.climbY + LOOK_Y_OFF, 0);
     }
 
-    currentLyricText() {
-        const p = playerManager.player;
-        if (!p || !p.video) return null;
-        const pos = p.timer ? p.timer.position : this.currentTime;
-        const ph = p.video.findPhrase(pos);
-        if (ph && ph.text) return ph.text;
-        const w = p.video.findWord(pos) || p.video.findChar(pos);
-        return (w && w.text) ? w.text : null;
+    updateSun(dt) {
+        // 太陽の側へ葉が寄るバイアス(滑らかに)
+        const want = THREE.MathUtils.clamp(this.sunX / 5, -1, 1);
+        this.sideBias += (want - this.sideBias) * Math.min(1, dt * 2);
+        this._positionSun();
+        if (this.sunLight) this.sunLight.position.set(this.sunX, this.camera.position.y + 10, 6);
+        // 太陽のゆらめき
+        if (this.sun) this.sun.material.rotation = (this.sun.material.rotation || 0) + dt * 0.1;
+    }
+
+    // =====================================================================
+    // 入力
+    // =====================================================================
+    onClick() { /* BaseSongの汎用CSSリップルは抑止 */ }
+
+    onPointerDown(event) {
+        if (!this.isActive || !this.camera || this.isTutorialActive) return;
+        if (event.target && event.target.closest &&
+            event.target.closest('button, a, input, .song-tutorial-overlay')) return;
+
+        this._setNDC(event);
+        this._raycaster.setFromCamera(this._ndc, this.camera);
+
+        // C. 太陽をつかむ
+        if (this.sun) {
+            const hitSun = this._raycaster.intersectObject(this.sun, false);
+            if (hitSun.length) { this.draggingSun = true; this.dismissFirstInteractable(); return; }
+        }
+        // A. 葉っぱをタッチ → 確定(問いにこたえる)
+        const leafMeshes = this.leaves.map(l => l.leaf);
+        const hitLeaf = this._raycaster.intersectObjects(leafMeshes, false);
+        if (hitLeaf.length) {
+            const l = this.leaves.find(x => x.leaf === hitLeaf[0].object);
+            if (l && !l.confirmed) { this._confirmLeaf(l); }
+            this.dismissFirstInteractable();
+            return;
+        }
+        // B. 空きをタッチ → 葉を生やす(ルートづくり)
+        const p = this._raycaster.ray.intersectPlane(this._climbPlane, this._hit);
+        if (p && p.y > this.climbY + 0.4 && Math.abs(p.x) < LEAF_X * 2.2) {
+            const side = p.x >= 0 ? 1 : -1;
+            const leaf = this.spawnLeaf(this._currentLyricText() || '♪', { y: p.y, side });
+            leaf.confirmed = true; this.builtCount++;
+            this.dismissFirstInteractable();
+        }
+    }
+
+    onPointerMove(event) {
+        if (!this.draggingSun || !this.camera) return;
+        this._setNDC(event);
+        // NDC.x → 太陽の横位置、NDC.y → 太陽の高さ(光の強さ=成長速度)
+        this.sunX = THREE.MathUtils.clamp(this._ndc.x * 7, -7, 7);
+        this.sunHeight = THREE.MathUtils.clamp(4 + (this._ndc.y * 0.5 + 0.5) * 6, 3, 10);
+    }
+
+    onPointerUp() { this.draggingSun = false; }
+
+    _confirmLeaf(l) {
+        l.confirmed = true;
+        l.openT = Math.min(l.openT, 0.6); // 開き直すアニメ
+        this.answeredCount++;
+        this.mikuPulse = 1;
+        sfx.play('kotaete_resonance');
+        this.setResultSummary({
+            lines: [`こたえた葉: ${this.answeredCount}枚`, `つくった足場: ${this.builtCount}`],
+            accentColor: '#FFD54A',
+        });
+    }
+
+    // =====================================================================
+    // ゴール(満開のひまわり)
+    // =====================================================================
+    reachGoal() {
+        if (this.goalPending || this.goalReached) return;
+        this.goalPending = true;
+        this.finishing = true; // 残りの足場を一気に登り切る
+        // 最高到達点の上に「満開ひまわり」の足場を出し、ミクをそこへ登らせる
+        const topY = (this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y) + LEAF_SPACING;
+        this.goalLeaf = this.spawnLeaf('', { y: topY, side: 0, isGoal: true });
+        this.goalLeaf.confirmed = true;
+        this.goalLeaf.group.position.x = 0; this.goalLeaf.x = 0;
+        this._buildBloom(this.goalLeaf.group, topY);
+        this.stemTopTarget = topY + 0.5;
+    }
+
+    _buildBloom(parent, y) {
+        // 中心の花托
+        const core = new THREE.Mesh(new THREE.CircleGeometry(0.6, 20),
+            new THREE.MeshStandardMaterial({ color: 0x6b3d1f, roughness: 1 }));
+        core.position.set(0, 0, 0.1);
+        parent.add(core);
+        // 花びら(放射状)。最初は閉じていて bloomOpen で開く。
+        this.bloomPetals = [];
+        const N = 16;
+        const petalMat = new THREE.MeshStandardMaterial({ color: SUN_GOLD, roughness: 0.7, side: THREE.DoubleSide });
+        for (let i = 0; i < N; i++) {
+            const ang = (i / N) * Math.PI * 2;
+            const petal = new THREE.Mesh(new THREE.CircleGeometry(0.42, 8), petalMat);
+            petal.scale.set(0.5, 1.3, 1);
+            petal.position.set(Math.cos(ang) * 0.8, Math.sin(ang) * 0.8, 0.05);
+            petal.rotation.z = ang - Math.PI / 2;
+            petal.scale.multiplyScalar(0.01); // 閉じた状態
+            parent.add(petal);
+            this.bloomPetals.push({ petal, ang });
+        }
+        this.bloom = { y, open: 0 };
+    }
+
+    _onReachBloom() {
+        this.goalReached = true;
+        this.mikuPulse = 1;
+        // 決めポーズ(両手を上げて咲かせる)
+        this._victoryPose = true;
+        sfx.play('complete');
+        this.setResultSummary({
+            lines: ['満開のひまわりに到達！', `こたえた葉: ${this.answeredCount}枚 / つくった足場: ${this.builtCount}`],
+            accentColor: '#FFD54A', swatch: '#FFD54A',
+        });
+    }
+
+    updateBloom(dt) {
+        if (!this.bloom) return;
+        const target = this.goalReached ? 1 : 0.0;
+        this.bloom.open += (target - this.bloom.open) * Math.min(1, dt * 2.2);
+        const s = this._easeOutBack(this.bloom.open);
+        for (const bp of this.bloomPetals) bp.petal.scale.setScalar(0.01 + s * 1.0);
     }
 
     // =====================================================================
@@ -765,125 +617,84 @@ export class SongKotaete extends BaseSong {
     // =====================================================================
     update() {
         const realNow = performance.now();
-        let dt = (realNow - this._lastFrameReal) / 1000;
+        let dt = Math.min((realNow - this._lastFrameReal) / 1000, 0.05);
         this._lastFrameReal = realNow;
-        dt = Math.min(dt, 0.05);
         const now = realNow;
 
-        // 湖をやわらかくフェードイン
-        this.lakeFade += (1 - this.lakeFade) * Math.min(1, dt * 0.6);
-        for (const item of this.lakeItems) item.update(now, dt, this.lakeFade);
+        if (!this.isTutorialActive) this._trackLyrics();
 
-        this.updateBeat(dt);          // 拍の検出 → beatPulse
+        this.updateStem(dt);
+        this.updateLeaves(dt);
+        this.updateClimb(dt);
         this.updateMiku(now, dt);
-        this.updateRipples(dt);
-        this.updateLyrics(dt);
-        this.updateMotes(dt);
-        this.updateFireflies(now);    // 水面の上を飛ぶホタル(拍で一斉に光る)
-        this.updateReflection(now, dt); // 水鏡の反射ゆらぎ
+        this.updateBloom(dt);
+        this.updateCamera(dt);
+        this.updateSun(dt);
 
-        // 歌詞の自動流れ + 歌唱パルス(チュートリアル中は止める)
-        if (!this.isTutorialActive) {
-            this.trackLyricFlow();
-        }
-
-        // 答えの色で画面全体をそっと染める(進行 + 触れた回数 + フィナーレ)
-        this.updateTint(dt);
+        if (this._victoryPose) this._applyVictoryPose(dt);
     }
 
-    trackLyricFlow() {
+    _trackLyrics() {
         const p = playerManager.player;
         if (!p || !p.video) return;
         const pos = p.timer ? p.timer.position : this.currentTime;
-
-        // 新しいフレーズが始まったら、手前の水面から淡い歌詞を立ち上げ対岸へ漂わせる
-        const ph = p.video.findPhrase(pos);
-        if (ph && ph.startTime !== this._lastPhraseStart) {
-            this._lastPhraseStart = ph.startTime;
-            if (ph.text) {
-                const sx = (Math.random() - 0.5) * 9;
-                const sz = this.camera.position.z - (9 + Math.random() * 7);
-                this.spawnLyric(ph.text, new THREE.Vector3(sx, WATER_Y + 0.7, sz), { dur: 8.0, resonated: false });
-                // この行は既に流れているので、タップでの重複発射を抑止する
-                this._lastLyricText = ph.text;
-            }
-        }
-
-        // 新しい語が歌い出されるたびにミクが小さく息づく
         const w = p.video.findWord(pos);
         if (w && w.startTime !== this._lastWordStart) {
             this._lastWordStart = w.startTime;
-            this.reactMiku(0.3);
+            if (w.text) this._spawnLyricLeaf(w.text);
         }
     }
 
-    updateTint(dt) {
+    _currentLyricText() {
         const p = playerManager.player;
-        const dur = (p && p.video && p.video.duration) || 0;
-        const pos = (p && p.timer) ? p.timer.position : this.currentTime;
-        const prog = dur > 0 ? THREE.MathUtils.clamp(pos / dur, 0, 1) : 0;
+        if (!p || !p.video) return null;
+        const pos = p.timer ? p.timer.position : this.currentTime;
+        const w = p.video.findWord(pos) || p.video.findChar(pos);
+        return (w && w.text) ? w.text : null;
+    }
 
-        let target = 0.04 + 0.12 * prog + Math.min(this.touchCount * 0.004, 0.06);
-        if (this.finaleActive) target = 0.36;
-        this.tintOpacity += (target - this.tintOpacity) * Math.min(1, dt * 1.2);
-
-        if (this.tintOverlay) {
-            this.tintOverlay.style.opacity = this.tintOpacity.toFixed(3);
-            this.tintOverlay.style.background = '#' + this.answerColor.getHexString();
-        }
+    _applyVictoryPose(dt) {
+        const vrm = this.currentVRM;
+        if (!vrm || !vrm.humanoid) return;
+        const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
+        const lu = get('leftUpperArm'), ru = get('rightUpperArm');
+        // 両手を上げて咲かせる
+        if (lu) lu.rotation.z += (Math.PI * 0.9 - lu.rotation.z) * Math.min(1, dt * 4);
+        if (ru) ru.rotation.z += (-Math.PI * 0.9 - ru.rotation.z) * Math.min(1, dt * 4);
     }
 
     render() {
-        if (this.renderer && this.scene && this.camera) {
-            this.renderer.render(this.scene, this.camera);
-        }
+        if (this.renderer && this.scene && this.camera) this.renderer.render(this.scene, this.camera);
     }
 
     // =====================================================================
-    // フィナーレ: あなただけの答えの色を明かす
+    // ヘルパ / 検証フック
     // =====================================================================
-    startFinale() {
-        if (this.finaleActive) return;
-        this.finaleActive = true;
-        this.reactMiku(1);
+    _setNDC(event) {
+        this._ndc.set(
+            (event.clientX / window.innerWidth) * 2 - 1,
+            -(event.clientY / window.innerHeight) * 2 + 1,
+        );
+    }
+    _easeOutBack(t) { const c1 = 1.70158, c3 = c1 + 1; const p = t - 1; return 1 + c3 * p * p * p + c1 * p * p; }
 
-        const hex = '#' + this.answerColor.getHexString();
-        this.showFinaleReveal(hex);
-        this.setResultSummary({
-            lines: ['あなたが触れた水面から', '生まれた答えの色'],
-            accentColor: hex,
-            swatch: hex,
-        });
+    // Preview は 0x0 で描画検証できないため、状態機械を直接駆動・観測するフック。
+    _debugState() {
+        return {
+            leaves: this.leaves.length,
+            stemTop: +this.stemDisplay.toFixed(2),
+            stemTarget: +this.stemTopTarget.toFixed(2),
+            mikuY: +this.climbY.toFixed(2),
+            mikuLeafIndex: this.currentLeafIndex,
+            climbState: this.climbState,
+            answered: this.answeredCount,
+            built: this.builtCount,
+            goalReached: this.goalReached,
+            bloomOpen: this.bloom ? +this.bloom.open.toFixed(2) : null,
+            mikuLoaded: this.mikuLoaded,
+        };
     }
 
-    showFinaleReveal(hex) {
-        if (this._revealEl) return;
-        const el = document.createElement('div');
-        el.className = 'mizukagami-reveal';
-        el.style.cssText =
-            'position:absolute;left:50%;top:50%;transform:translate(-50%,-46%);' +
-            'display:flex;flex-direction:column;align-items:center;gap:14px;' +
-            'pointer-events:none;opacity:0;transition:opacity 1.6s ease, transform 1.6s ease;' +
-            'z-index:20;text-align:center;font-family:"Inter","Noto Sans JP",sans-serif;';
-        el.innerHTML =
-            `<div style="width:96px;height:96px;border-radius:50%;background:${hex};` +
-            `box-shadow:0 0 46px ${hex},0 0 12px rgba(255,255,255,0.6);` +
-            `border:2px solid rgba(255,255,255,0.55);"></div>` +
-            `<div style="color:#fff;font-size:15px;letter-spacing:2px;font-weight:600;` +
-            `text-shadow:0 2px 10px rgba(0,0,0,0.6);">あなたの答えの色</div>` +
-            `<div style="color:rgba(255,255,255,0.78);font-size:12px;letter-spacing:1px;` +
-            `text-shadow:0 2px 8px rgba(0,0,0,0.6);">${hex.toUpperCase()}</div>`;
-        this.songWrapper.appendChild(el);
-        this._revealEl = el;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-            el.style.opacity = '1';
-            el.style.transform = 'translate(-50%,-50%)';
-        }));
-    }
-
-    // =====================================================================
-    // resize / destroy
-    // =====================================================================
     onResize() {
         if (!this.camera || !this.renderer) return;
         this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -896,9 +707,7 @@ export class SongKotaete extends BaseSong {
         try {
             vrm?.scene?.traverse((o) => {
                 if (o.geometry) o.geometry.dispose();
-                if (o.material) {
-                    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose());
-                }
+                if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose());
             });
         } catch (_) { /* noop */ }
     }
@@ -906,36 +715,25 @@ export class SongKotaete extends BaseSong {
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
         this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
+        window.removeEventListener('pointermove', this.boundOnPointerMove);
+        window.removeEventListener('pointerup', this.boundOnPointerUp);
         eventBus.off('songEnd', this.boundOnSongEnd);
 
-        // 生きている演出を破棄
-        this.ripples.forEach(r => { this.scene.remove(r.mesh); r.geo.dispose(); r.mat.dispose(); });
-        this.lyricSprites.forEach(l => { this.scene.remove(l.spr); l.mat.dispose(); l.texture.dispose(); });
-        this.lightMotes.forEach(m => { this.scene.remove(m.s); m.mat.dispose(); });
-        this.ripples = []; this.lyricSprites = []; this.lightMotes = [];
-
-        // 湖(group + items の dispose)
-        this.lakeItems.forEach(it => { if (it.dispose) try { it.dispose(); } catch (_) {} });
-        if (this.lakeGroup) {
-            this.lakeGroup.traverse((o) => {
-                if (o.geometry) o.geometry.dispose();
-                if (o.material) {
-                    (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose());
-                }
-            });
-            this.scene.remove(this.lakeGroup);
-        }
+        this.leaves.forEach(l => {
+            this.scene.remove(l.group);
+            l.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose()); });
+            l.tex && l.tex.dispose();
+        });
+        this.leaves = [];
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
-        if (this.mikuGlow) { this.scene.remove(this.mikuGlow); this.mikuGlow.material.dispose(); }
-        if (this.fireflies) { this.scene.remove(this.fireflies); this.fireflies.geometry.dispose(); this.fireflies.material.dispose(); }
-        if (this.mikuReflection) { this.scene.remove(this.mikuReflection); this.mikuReflection.material.dispose(); }
-        this._reflectTex && this._reflectTex.dispose();
-        this.glowTexture && this.glowTexture.dispose();
-        this.ringTexture && this.ringTexture.dispose();
-
-        if (this.tintOverlay && this.tintOverlay.parentNode) this.tintOverlay.parentNode.removeChild(this.tintOverlay);
-        if (this._revealEl && this._revealEl.parentNode) this._revealEl.parentNode.removeChild(this._revealEl);
+        if (this.sun) { this.scene.remove(this.sun); this.sun.material.dispose(); }
+        this._sunTex && this._sunTex.dispose();
+        [this.stem, this.ground, this.sky].forEach(m => {
+            if (!m) return; this.scene.remove(m);
+            if (m.geometry) m.geometry.dispose();
+            if (m.material) (Array.isArray(m.material) ? m.material : [m.material]).forEach(mm => mm.dispose && mm.dispose());
+        });
 
         if (this.renderer) {
             this.renderer.dispose();
@@ -943,7 +741,6 @@ export class SongKotaete extends BaseSong {
                 this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
             }
         }
-
         super.destroy();
     }
 }
