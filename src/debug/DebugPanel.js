@@ -5,7 +5,7 @@
 //   1. このファイル(src/debug/DebugPanel.js)を削除
 //   2. main.js の「DEBUG MODE」ブロック(数行)を削除
 // ─────────────────────────────────────────────────────────────
-import { SONGS } from '../config/songs.js';
+import { NORMAL_SONGS, SECRET_SONGS } from '../config/songs.js';
 import { appState } from '../core/appState.js';
 import { eventBus } from '../core/eventBus.js';
 import { quality } from '../core/quality.js';
@@ -28,11 +28,12 @@ export function initDebugPanel() {
         backdrop-filter: blur(6px);
     `;
 
-    const completed = appState.completedSongs.length;
+    // 進行は通常曲(5曲)基準。こたえて(シークレット)は別枠で扱う。
+    const completed = NORMAL_SONGS.filter(s => appState.isSongComplete(s.id)).length;
     panel.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
             <b style="letter-spacing:0.15em;">🛠 DEBUG</b>
-            <span id="dbg-status">クリア ${completed}/${SONGS.length}・フェーズ ${appState.getPhaseName()}</span>
+            <span id="dbg-status">クリア ${completed}/${NORMAL_SONGS.length}・フェーズ ${appState.getPhaseName()}</span>
         </div>
         <div style="display:flex; gap:4px; flex-wrap:wrap;" id="dbg-set-row"></div>
         <div style="display:flex; gap:6px;">
@@ -55,16 +56,17 @@ export function initDebugPanel() {
         `;
     }
 
-    // クリア数を 0〜6 に直接設定(確定的に再現するためリロード)
+    // 通常曲のクリア数を 0〜5 に直接設定(確定的に再現するためリロード)。
+    // n=5 で通常曲を全クリア=湖到達=こたえて解放の状態を再現できる。
     const setRow = panel.querySelector('#dbg-set-row');
-    for (let n = 0; n <= SONGS.length; n++) {
+    for (let n = 0; n <= NORMAL_SONGS.length; n++) {
         const b = document.createElement('button');
         b.textContent = String(n);
         b.style.cssText = btnCss() + 'width:26px; padding:5px 0;';
         if (n === completed) b.style.background = 'rgba(255,120,120,0.5)';
-        b.title = `クリア数を ${n} に設定してリロード`;
+        b.title = `通常曲のクリア数を ${n} に設定してリロード`;
         b.addEventListener('click', () => {
-            const ids = SONGS.slice(0, n).map(s => s.id);
+            const ids = NORMAL_SONGS.slice(0, n).map(s => s.id);
             localStorage.setItem('completedSongs', JSON.stringify(ids));
             location.reload();
         });
@@ -72,17 +74,19 @@ export function initDebugPanel() {
     }
 
     function refreshStatus() {
-        const c = appState.completedSongs.length;
+        const c = NORMAL_SONGS.filter(s => appState.isSongComplete(s.id)).length;
         panel.querySelector('#dbg-status').textContent =
-            `クリア ${c}/${SONGS.length}・フェーズ ${appState.getPhaseName()}`;
+            `クリア ${c}/${NORMAL_SONGS.length}・フェーズ ${appState.getPhaseName()}`;
         setRow.querySelectorAll('button').forEach((b, i) => {
             b.style.background = i === c ? 'rgba(255,120,120,0.5)' : 'rgba(255,120,120,0.15)';
         });
     }
 
-    // 次の未クリア曲を1曲クリア扱いにし、フェーズ遷移演出を再生する
+    // 次の未クリア曲を1曲クリア扱いにし、フェーズ遷移演出を再生する。
+    // 通常曲を優先し、全て終えていればシークレット曲(こたえて)を消化する。
     panel.querySelector('#dbg-plus').addEventListener('click', () => {
-        const next = SONGS.find(s => !appState.isSongComplete(s.id));
+        const order = [...NORMAL_SONGS, ...SECRET_SONGS];
+        const next = order.find(s => !appState.isSongComplete(s.id));
         if (!next) return;
         appState.markSongComplete(next.id);
         eventBus.emit('songComplete', next.id);

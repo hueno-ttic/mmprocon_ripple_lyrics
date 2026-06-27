@@ -1,4 +1,4 @@
-import { SONGS } from '../config/songs.js';
+import { NORMAL_SONGS } from '../config/songs.js';
 import { stageRoot } from '../core/stage.js';
 
 export class CompletionScreen {
@@ -87,7 +87,7 @@ export class CompletionScreen {
         this.el.appendChild(title);
 
         const subtitle = document.createElement('p');
-        subtitle.textContent = '晴れた空の一滴は、湖になった ── 6つの問いすべてに向き合いました';
+        subtitle.textContent = '晴れた空の一滴は、湖になった ── 5つの問いすべてに向き合いました';
         subtitle.style.cssText = `
             color: rgba(255,255,255,0.55); font-size: clamp(9px, 1.08cqw, 13px);
             letter-spacing: 0.3em; margin: 0 0 36px; text-align: center;
@@ -104,7 +104,7 @@ export class CompletionScreen {
             max-width: min(260px, 80cqw); width: 100%;
         `;
 
-        SONGS.forEach((song, i) => {
+        NORMAL_SONGS.forEach((song, i) => {
             const row = document.createElement('div');
             row.style.cssText = `
                 display: flex; align-items: center; gap: 12px;
@@ -159,7 +159,7 @@ export class CompletionScreen {
         this.el.appendChild(btn);
 
         // SNS Share button
-        const shareText = encodeURIComponent('マジカルミライ2026「Ripple Lyrics - 水の循環 -」で6つの問いすべてに向き合いました！ #マジカルミライ2026 #初音ミク');
+        const shareText = encodeURIComponent('マジカルミライ2026「Ripple Lyrics - 水の循環 -」で5つの問いすべてに向き合いました！ #マジカルミライ2026 #初音ミク');
         const shareUrl = encodeURIComponent(location.href);
         const shareBtn = document.createElement('a');
         shareBtn.href = `https://twitter.com/intent/tweet?text=${shareText}&url=${shareUrl}`;

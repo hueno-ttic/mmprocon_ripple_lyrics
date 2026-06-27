@@ -10,7 +10,7 @@
  *   appVolumeChange : 音量/ミュート変更 → マスターゲインを即追従
  *
  * 音源は甘茶の音楽工房のフリーBGM(商用可・クレジット任意・ループ加工可)。
- * フェーズ(晴れ→雲→雨→水たまり→小川→川→湖)ごとに曲を割り当てる。
+ * フェーズ(晴れ→雲→雨→水たまり→小川→湖)ごとに曲を割り当てる。
  * 固定尺のため loop=true でシームレスにループさせる。
  * 音量はユーザー設定(localStorage: appVolume / appMuted)に追従する。
  * 鳴っていない間は AudioContext を suspend してノイズフロアを残さない。
@@ -27,8 +27,8 @@ const FILES = {
     2: 'assets/bgm/bgm_rain.mp3',    // 雨     — 氷雨
     3: 'assets/bgm/bgm_puddles.mp3', // 水たまり — おもちゃのピアノ
     4: 'assets/bgm/bgm_stream.mp3',  // 小川   — 夏休みの探検
-    5: 'assets/bgm/bgm_river.mp3',   // 川     — 6月の遠雷
-    6: 'assets/bgm/bgm_lake.mp3',    // 湖     — プラネット・ナイン
+    5: 'assets/bgm/bgm_lake.mp3',    // 湖     — プラネット・ナイン
+    // 「川」フェーズ廃止に伴い bgm_river.mp3 は未使用(ファイルは残置)。
 };
 
 const BGM_MASTER = 0.5; // 環境音として控えめに(曲本編より主張しすぎない)

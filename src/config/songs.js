@@ -17,6 +17,9 @@ export const SONGS = [
     color: '#FFC83D',
     thumbnail: 'assets/thumbnails/kotaete.jpg',
     startHint: '歌詞の葉っぱにふれて、ミクの登る道をつくろう',
+    // 他5曲(通常曲)を全てクリアした後に、湖へ静かに現れるシークレット曲。
+    // 通常の「水の循環」の旅(晴れ→…→小川→湖)には数えず、エンディング後の隠し体験とする。
+    secret: true,
     tutorial: {
       steps: [
         { icon: '🌱', text: '曲が進むとひまわりの茎が上へ伸びていきます' },
@@ -161,5 +164,31 @@ export const SONGS = [
     }
   }
 ];
+
+// ── シークレット曲(こたえて)まわりの構成ヘルパー ───────────────────────────
+// 通常曲(secret 以外)を主たる「水の循環」の旅とする。通常曲5曲を全てクリアすると
+// 湖に到達=エンディングが流れ、その時はじめて湖にシークレット曲が姿を現す。
+
+// 通常曲(=選曲画面に常時並ぶ5曲)。曲の並び順は SONGS の定義順を保つ。
+export const NORMAL_SONGS = SONGS.filter(s => !s.secret);
+// シークレット曲(こたえて)。解放後のみ選曲画面の末尾に追加される。
+export const SECRET_SONGS = SONGS.filter(s => s.secret);
+
+// 指定IDがシークレット曲か。
+export function isSecretSong(songId) {
+  return SECRET_SONGS.some(s => s.id === songId);
+}
+
+// 通常曲(5曲)を全てクリア済みか。シークレット解放/エンディング判定に使う。
+export function areNormalSongsComplete(completedSongs = []) {
+  return NORMAL_SONGS.every(s => completedSongs.includes(s.id));
+}
+
+// 選曲画面に出す曲。通常曲は常に表示。シークレット曲は解放(=通常曲を全クリア)後のみ末尾へ。
+export function getSelectableSongs(completedSongs = []) {
+  return areNormalSongsComplete(completedSongs)
+    ? [...NORMAL_SONGS, ...SECRET_SONGS]
+    : [...NORMAL_SONGS];
+}
 
 
