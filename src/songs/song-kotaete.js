@@ -223,7 +223,22 @@ export class SongKotaete extends BaseSong {
             const target = this.activeSprites.find(s => s && !s.userData.resonated);
             if (!target) return null;
             return this.worldToScreen(target.position.clone());
-        }, { label: '歌詞をタップ' });
+        }, {
+            // ラベルで「何が起きるか」(=光がミクへ)まで伝え、傍観者の理解を助ける。
+            label: '歌詞にふれて、光をミクへ',
+            // 8秒触られなければ、最初の歌詞を自動で共鳴させて演出を一度実演する(発見性の底上げ)。
+            autoDemoMs: 8000,
+            onAutoDemo: () => {
+                if (this.resonanceCount > 0) return;
+                const sprite = this.activeSprites.find(s => s && !s.userData.resonated);
+                if (!sprite || !this.camera) return;
+                // 波紋の中心用に画面座標へ射影してから共鳴(resonate)を呼ぶ。
+                const p = this.worldToScreen(sprite.position.clone());
+                const cx = p ? p.x : window.innerWidth / 2;
+                const cy = p ? p.y : window.innerHeight / 2;
+                this.resonate(sprite, cx, cy);
+            },
+        });
     }
 
     initThree() {

@@ -297,7 +297,7 @@ export class BaseSong {
         // 二重起動防止(既に出ていれば何もしない)
         if (this._firstGuideEl) return;
 
-        const { label = 'タップ', autoDismissMs = 12000 } = opts;
+        const { label = 'タップ', autoDismissMs = 12000, onAutoDemo = null, autoDemoMs } = opts;
         const songConfig = SONGS.find(s => s.id === this.songId);
         const color = (songConfig && songConfig.color) || '#7F77DD';
 
@@ -333,8 +333,15 @@ export class BaseSong {
                 // 自動消滅タイマーは「実際に対象へ重なって見え始めてから」起動する。
                 // 歌詞スプライトの初出が遅い曲でも、出る前に消えてしまわないようにする狙い。
                 if (!this._firstGuideTimeout) {
-                    this._firstGuideTimeout = setTimeout(
-                        () => this.dismissFirstInteractable(), autoDismissMs);
+                    // 未操作のまま時間切れになったら: onAutoDemo があればギミックを1回だけ
+                    // 自動実演して payoff を見せる(傍観者にも操作の意味が伝わる)。無ければ従来通り消す。
+                    const delay = (typeof autoDemoMs === 'number') ? autoDemoMs : autoDismissMs;
+                    this._firstGuideTimeout = setTimeout(() => {
+                        if (typeof onAutoDemo === 'function') {
+                            try { onAutoDemo(); } catch (_) {}
+                        }
+                        this.dismissFirstInteractable();
+                    }, delay);
                 }
             } else {
                 // 対象が未出現/画面外のときは一旦隠す(消滅はしない)
