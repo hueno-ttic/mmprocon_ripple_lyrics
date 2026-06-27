@@ -313,18 +313,33 @@ class Application {
             transition: color 1s ease 0.3s;
         `;
 
-        const phaseNames = ['晴れた空', '雲の下', '雨の中', '水たまりのそば', '小川のほとり', '湖面'];
-        const phaseName = phaseNames[appState.getPhase()] || '湖面';
-        const hint = document.createElement('div');
-        hint.textContent = `${phaseName}へ戻ります…`;
-        hint.style.cssText = `
-            margin-top: 16px;
-            color: rgba(255,255,255,0);
-            font-size: 11px;
-            letter-spacing: 0.25em;
+        // 自動では戻らず、ユーザーが押して楽曲選択画面へ戻るためのボタン。
+        const backBtn = document.createElement('button');
+        backBtn.type = 'button';
+        backBtn.textContent = '楽曲選択画面へ';
+        backBtn.style.cssText = `
+            margin-top: 30px;
+            padding: 12px 32px;
             font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
-            transition: color 1s ease 0.6s;
+            font-size: clamp(13px, 2.4vw, 15px);
+            letter-spacing: 0.2em; cursor: pointer;
+            border-radius: 26px;
+            -webkit-tap-highlight-color: transparent;
+            pointer-events: auto;
+            color: rgba(255,255,255,0.92);
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.35);
+            opacity: 0;
+            transition: opacity 0.9s ease 0.9s, background 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
         `;
+        backBtn.addEventListener('pointerenter', () => {
+            backBtn.style.background = 'rgba(255,255,255,0.14)';
+            backBtn.style.borderColor = 'rgba(255,255,255,0.6)';
+        });
+        backBtn.addEventListener('pointerleave', () => {
+            backBtn.style.background = 'rgba(255,255,255,0.06)';
+            backBtn.style.borderColor = 'rgba(255,255,255,0.35)';
+        });
 
         overlay.appendChild(text);
 
@@ -363,16 +378,13 @@ class Application {
         }
         this._lastSongResult = null;
 
-        // 一部の曲はリザルトをユーザーのタップまで維持する(issue #30: トリツクロジー)
-        const holdUntilTap = !!(songConfig && songConfig.holdResultUntilTap);
-
-        overlay.appendChild(hint);
+        overlay.appendChild(backBtn);
         stageRoot().appendChild(overlay);
 
         requestAnimationFrame(() => {
             overlay.style.background = 'rgba(0,0,0,0.7)';
             text.style.color = 'rgba(255,255,255,0.9)';
-            hint.style.color = 'rgba(255,255,255,0.4)';
+            backBtn.style.opacity = '1';
             if (resultEl) resultEl.style.color = 'rgba(255,255,255,0.85)';
         });
 
@@ -388,19 +400,13 @@ class Application {
             }, 500);
         };
 
-        if (holdUntilTap) {
-            // タップするまで表示を維持。少し遅れて誘導を出し、誤操作での即離脱を防ぐ。
-            hint.textContent = '';
-            overlay.style.pointerEvents = 'auto';
-            overlay.style.cursor = 'pointer';
-            setTimeout(() => {
-                hint.textContent = `タップして${phaseName}へ戻る`;
-                hint.style.color = 'rgba(255,255,255,0.5)';
-                overlay.addEventListener('pointerdown', finish, { once: true });
-            }, 1600);
-        } else {
-            setTimeout(finish, 2800);
-        }
+        // 自動では戻らず、ボタンを押したときだけ楽曲選択画面へ戻る。
+        backBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        backBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            backBtn.disabled = true;
+            finish();
+        });
     }
 
     async switchToSongScene(songConfig) {
