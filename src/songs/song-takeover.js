@@ -686,6 +686,28 @@ export class SongTakeover extends BaseSong {
                     letter-spacing: 3px;
                     color: #ff7070;
                 }
+                /* 退場フェーズ1: ノイズグリッチ（速い揺れ＋色のちらつき） */
+                @keyframes toWarnGlitchFlick {
+                    0%, 100% { opacity: 1; filter: none; }
+                    20%  { opacity: 0.65; filter: hue-rotate(-25deg) saturate(2.4); }
+                    45%  { opacity: 1; filter: none; }
+                    65%  { opacity: 0.55; filter: hue-rotate(25deg) brightness(1.5); }
+                    85%  { opacity: 0.9; }
+                }
+                .to-warning-core.glitch {
+                    animation: toWarnShake 0.07s steps(2) infinite,
+                               toWarnGlitchFlick 0.16s steps(2) infinite;
+                }
+                /* 退場フェーズ2: 水平スライスに分解して左右へ飛散 */
+                .to-warning-slices { z-index: 1; }
+                .to-warning-slice {
+                    font-family: "Courier New", monospace;
+                    text-align: center;
+                    will-change: transform, opacity;
+                    transition: transform 0.55s cubic-bezier(0.2, 0.7, 0.2, 1),
+                                opacity 0.55s ease-out;
+                    filter: drop-shadow(0 0 6px #ff2a2a);
+                }
                 @media (max-width: 768px) {
                     .to-warning-title { letter-spacing: 6px; }
                     .to-warning-sub { letter-spacing: 3px; }
@@ -1120,7 +1142,7 @@ export class SongTakeover extends BaseSong {
         this.updateScore();
     }
 
-    // ── スタート時 WARNING: 赤いグリッチ警告を数秒出して本編へ ───────────
+    // ── スタート時 WARNING: 赤いグリッチ警告を表示（退場は _scatterWarning が制御）──
     _showWarning() {
         if (this.warningEl) return;
         const overlay = document.createElement('div');
@@ -1135,16 +1157,132 @@ export class SongTakeover extends BaseSong {
         this.songWrapper.appendChild(overlay);
         this.warningEl = overlay;
         sfx.play('takeover_warning');
+        // 退場（ノイズで左右に散る）は _scatterWarning() が制御する。
+        // 自動では消さず、ホールド時間ぶん表示し続ける。
+    }
 
-        const schedule = (fn, ms) => {
-            this._introTimers.push(setTimeout(() => { if (this.isActive) fn(); }, ms));
-        };
-        // 約2.4秒で退場し、本編へ（フェードアウト→DOM除去）
-        schedule(() => { if (overlay.parentNode) overlay.classList.add('out'); }, 2400);
-        schedule(() => {
+    // ── WARNING 退場: 一瞬ノイズグリッチ → 水平スライスに分解して左右へ飛散 ──
+    _scatterWarning() {
+        const overlay = this.warningEl;
+        if (!overlay || !overlay.parentNode) return;
+        const core = overlay.querySelector('.to-warning-core');
+        const cleanup = () => {
             if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             if (this.warningEl === overlay) this.warningEl = null;
-        }, 3000);
+        };
+        if (!core) { // 念のためのフォールバック（フェードのみ）
+            overlay.classList.add('out');
+            this._introTimers.push(setTimeout(cleanup, 600));
+            return;
+        }
+
+        sfx.play('takeover_decode'); // ノイズ/グリッチ音
+        // フェーズ1: 一瞬ノイズで震わせる
+        core.classList.add('glitch');
+
+        const SLICE_DELAY = 360; // グリッチを見せてから分解する
+        const SLICE_FLY = 600;   // 飛散アニメ + 余白
+        this._introTimers.push(setTimeout(() => {
+            if (!overlay.parentNode) return;
+            // core の実画面位置を測り、その場にスライスを重ねる
+            const wrapRect = this.songWrapper.getBoundingClientRect();
+            const r = core.getBoundingClientRect();
+            const left = r.left - wrapRect.left;
+            const top = r.top - wrapRect.top;
+            const w = r.width, h = r.height;
+
+            const slices = document.createElement('div');
+            slices.className = 'to-warning-slices';
+            slices.style.cssText =
+                `position:absolute; left:${left}px; top:${top}px; width:${w}px; height:${h}px; pointer-events:none;`;
+
+            const N = 9;
+            const built = [];
+            for (let i = 0; i < N; i++) {
+                const s = document.createElement('div');
+                s.className = 'to-warning-slice';
+                s.innerHTML = core.innerHTML; // 同じ内容を全幅で複製し…
+                const tPct = (i / N) * 100;
+                const bPct = (1 - (i + 1) / N) * 100;
+                // …clip-path で自分の水平バンドだけを見せる（重ねると元の表示を再構成）
+                s.style.cssText =
+                    `position:absolute; left:0; top:0; width:${w}px; height:${h}px;` +
+                    `clip-path:inset(${tPct}% 0 ${bPct}% 0); -webkit-clip-path:inset(${tPct}% 0 ${bPct}% 0);`;
+                slices.appendChild(s);
+                built.push({ s, i });
+            }
+            overlay.appendChild(slices);
+            core.style.visibility = 'hidden';
+
+            // 次フレームで各バンドを左右へ飛ばす（偶数=左/奇数=右、中心から遠いほど遠くへ）
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                const mid = (N - 1) / 2;
+                built.forEach(({ s, i }) => {
+                    const dir = (i % 2 === 0) ? -1 : 1;
+                    const dist = 240 + Math.abs(i - mid) * 80 + Math.random() * 120;
+                    const dy = (Math.random() - 0.5) * 24;
+                    s.style.transform =
+                        `translateX(${dir * dist}px) translateY(${dy}px) skewX(${dir * 8}deg)`;
+                    s.style.opacity = '0';
+                });
+                overlay.classList.add('out'); // 背景の赤グリッチもフェード
+            }));
+        }, SLICE_DELAY));
+
+        this._introTimers.push(setTimeout(cleanup, SLICE_DELAY + SLICE_FLY));
+    }
+
+    // ── TAKEOVER専用の開幕: スタート押下 → WARNING を約3秒ホールド →
+    //    ノイズで左右に散る → そのあとに本編再生を始める。
+    //    iOS のメディア解錠はユーザー操作(クリック)の同期内で行う必要があるため、
+    //    押下時に一度 play() してから（無音で）ホールドし、散り終わりに resume する。
+    _autoStartPlayback() {
+        if (!playerManager.isTimerReady) return;
+        if (this._introStarted) return;
+        this._introStarted = true;
+
+        this._unlockAudio();
+        // ホールド中は無音・頭出し位置で停止。ジェスチャ内 play() で iOS を解錠し、
+        // update() 側で isPlaying を検知して即 pause し、0 の位置に留める。
+        playerManager.setVolume(0);
+        playerManager.seek(0);
+        playerManager.play();
+        this._holdPlayback = true;
+        this._warningShown = true; // update() のフォールバック起動を抑止
+        this._showWarning();
+
+        const HOLD_MS = 3000;    // WARNING を見せる時間
+        const SCATTER_MS = 950;  // ノイズ→飛散にかかる時間
+        this._introTimers.push(setTimeout(() => {
+            if (this.isActive) this._scatterWarning();
+        }, HOLD_MS));
+        this._introTimers.push(setTimeout(() => {
+            if (this.isActive) this._beginPlayback();
+        }, HOLD_MS + SCATTER_MS));
+    }
+
+    _beginPlayback() {
+        this._holdPlayback = false;
+        playerManager.seek(0);
+        playerManager.fadeIn(1200); // 0 → 設定音量へなめらかに
+        playerManager.play();
+        this.showStartHint();
+    }
+
+    _unlockAudio() {
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (AC) {
+                const dummy = new AC();
+                if (dummy.state === 'suspended') dummy.resume();
+            }
+            if (playerManager.player && playerManager.player.audioContext) {
+                const ctx = playerManager.player.audioContext;
+                if (ctx.state === 'suspended') ctx.resume();
+            }
+        } catch (err) {
+            console.warn('[Ripple Lyrics] Web Audio unlock failed safely:', err);
+        }
     }
 
     // ── TAKEOVER COMPLETE: ブラックアウト→再起動風シーケンス→赤一色 ────
@@ -1432,12 +1570,21 @@ export class SongTakeover extends BaseSong {
         // 再生中かどうか（PAUSE中は陣取りの減衰を止める／WARNINGの起点に使う）
         const isPlaying = !!(playerManager.player && playerManager.player.isPlaying);
 
-        // 開幕の赤い WARNING（システム侵略アラート）。タイマー準備完了(isTimerReady)では
-        // フォント待ちのカーテンが開く前に消えることがあるため、実際に再生が始まった
-        // 瞬間（ユーザーがPlayを押す＝確実にシーンを見ている）に一度だけ起動する。
+        // WARNING ホールド中は頭出し位置(0)で停止させ続ける。
+        // （_autoStartPlayback がジェスチャ内で一度 play() して iOS を解錠するため、
+        //   その play を検知して即 pause し、散り終わりまで再生を保留する）
+        if (this._holdPlayback && isPlaying) {
+            playerManager.pause();
+        }
+
+        // フォールバック: スタート押下(_autoStartPlayback)以外の経路で再生が始まった
+        // 場合も、一度だけ WARNING を出して数秒後に散らす。
         if (!this._warningShown && isPlaying) {
             this._warningShown = true;
             this._showWarning();
+            this._introTimers.push(setTimeout(() => {
+                if (this.isActive) this._scatterWarning();
+            }, 3000));
         }
 
         // TextAlive公式タイマー(player.timer.position)に完全同期（先行調整を排除）
