@@ -67,6 +67,7 @@ export class SongTakeover extends BaseSong {
         this._bfx = null;                // 境界エフェクト用キャンバス一式
         this._bfxPhase = 0;              // 波・粒子アニメの位相
         this._boundarySurge = 0;         // コンボ時の境界押し上げ（1→0で減衰）
+        this._redDimUntil = 0;           // 赤ノイズを一瞬薄れさせる期限(performance.now)
 
         // ── 解読体験のテンポ改善（#113）──
         // 暗号歌詞を中央端末まわりへ寄せ、直前解読位置の近傍に出して
@@ -275,6 +276,21 @@ export class SongTakeover extends BaseSong {
                 }
                 @keyframes toFadeOut {
                     to { opacity:0; transform:translateY(-24px); }
+                }
+                /* #116: 解読クリック直後、暗号文字を一瞬だけ崩壊させる(横ブレ＋色収差) */
+                @keyframes toGlitchJitter {
+                    0%   { transform:translateX(0)    skewX(0);    }
+                    25%  { transform:translateX(-3px) skewX(-7deg);}
+                    50%  { transform:translateX(3px)  skewX(5deg); }
+                    75%  { transform:translateX(-2px) skewX(4deg); }
+                    100% { transform:translateX(0)    skewX(0);    }
+                }
+                .to-phrase.to-glitch-collapse {
+                    color:#ffffff;
+                    border-color:#ffffff;
+                    text-shadow: 0 0 14px #00ffaa, 2px 0 0 rgba(255,58,58,0.9), -2px 0 0 rgba(0,224,255,0.9);
+                    box-shadow: 0 0 26px rgba(0,255,170,0.7), inset 0 0 14px rgba(0,255,170,0.35);
+                    animation: toGlitchJitter 0.13s steps(2,end) 1;
                 }
                 .to-phrase {
                     position:absolute;
@@ -877,7 +893,10 @@ export class SongTakeover extends BaseSong {
             particles: [],   // 境界に湧くノイズ粒子
             pulses: [],      // 解読時にせり上がるシアンの光柱
             falls: [],       // サビ中に赤側から落ちる逆流ノイズ
-            ripples: [],     // 解読位置から広がるシアンの波紋（コンボ/サビ）
+            ripples: [],     // 解読位置から広がるシアンの波紋（コンボ/サビ・#113）
+            bursts: [],      // #116: クリック地点のシアン衝撃波リング/中央フラッシュ
+            burstParticles: [], // #116: クリック地点から散る四角いピクセル粒子/ノイズ線
+            signals: [],     // #116: クリック地点→制圧境界/中央端末へ走る信号線
             w: 0, h: 0,
             dpr: Math.min(2, window.devicePixelRatio || 1),
         };
@@ -902,11 +921,74 @@ export class SongTakeover extends BaseSong {
         if (this._bfx.pulses.length > 24) this._bfx.pulses.shift();
     }
 
-    // コンボ/サビ中の解読: 解読位置からシアンの波紋が広がり「押し返す」手応えを出す
+    // コンボ/サビ中の解読: 解読位置からシアンの波紋が広がり「押し返す」手応えを出す（#113）
     _spawnDecodeRipple(x, y) {
         if (!this._bfx) return;
         this._bfx.ripples.push({ x, y, age: 0, life: 0.7 });
         if (this._bfx.ripples.length > 16) this._bfx.ripples.shift();
+    }
+
+    // #116: コンボ数・サビでクリック成功時のリアクションに段階差をつける。
+    //   通常 < 3combo < 5combo の3段階＋サビ倍率。半径・粒子量・信号線・赤ノイズ抑制を制御。
+    _decodeIntensity(comboBoost) {
+        const combo = this.combo;
+        const climax = this.isClimax;
+        const tier = combo >= 5 ? 2 : combo >= 3 ? 1 : 0;
+        const mul = climax ? 1.4 : 1; // サビは半径・粒子量を1.4倍
+        return {
+            tier, climax, mul, comboBoost,
+            rings: tier >= 1 ? 2 : 1,                                   // 3combo〜でリング2枚
+            particles: Math.round((tier >= 2 ? 16 : tier >= 1 ? 11 : 7) * mul),
+            radius: (tier >= 2 ? 80 : tier >= 1 ? 64 : 52) * mul,
+            signalToCenter: tier >= 2,    // 5combo〜: 中央端末へも信号線を走らせる
+            dimRed: tier >= 2 || climax,  // 周囲の赤ノイズを一瞬薄れさせる
+        };
+    }
+
+    // #116: 解読成功したクリック地点から、シアンの復号パルスを放つ。
+    //   - 中央が白〜シアンに発光(フラッシュ)
+    //   - 細いシアンのリングがデジタルノイズを含みつつ高速で広がる(段階差あり)
+    //   - 四角いピクセル粒子と短いノイズ線が周囲へ散る
+    //   - クリック地点から制圧境界(＋5combo〜は中央端末)へ信号線が走り、既存の
+    //     境界押し上げ演出へ視覚的に接続する
+    _spawnDecodeBurst(x, y, it) {
+        const b = this._bfx;
+        if (!b) return;
+
+        // 中央フラッシュ
+        b.bursts.push({ x, y, age: 0, life: 0.22, delay: 0, maxR: 11 * it.mul, flash: true });
+        // 衝撃波リング(段階差: 通常1枚 / 3combo〜2枚)。少し時間差で重ねる。
+        for (let i = 0; i < it.rings; i++) {
+            b.bursts.push({
+                x, y, age: 0, life: 0.45 + i * 0.12 + (it.climax ? 0.08 : 0),
+                delay: i * 0.07, maxR: it.radius * (1 + i * 0.5),
+                seed: Math.random() * Math.PI * 2,
+            });
+        }
+        if (b.bursts.length > 40) b.bursts.splice(0, b.bursts.length - 40);
+
+        // 四角いピクセル粒子＋短いノイズ線
+        for (let i = 0; i < it.particles; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const sp = (45 + Math.random() * 170) * it.mul;
+            b.burstParticles.push({
+                x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+                age: 0, life: 0.4 + Math.random() * 0.3,
+                size: 1 + Math.random() * 2.5, ang: a,
+                line: Math.random() < 0.35,
+            });
+        }
+        const pcap = this.isMobile ? 60 : 120;
+        if (b.burstParticles.length > pcap) b.burstParticles.splice(0, b.burstParticles.length - pcap);
+
+        // 信号線: クリック地点 → 直下の制圧境界へ。サビ/高コンボでは中央端末へも。
+        const greenH = this.territoryEl ? this.territoryEl.clientHeight : 0;
+        const boundaryY = b.h - greenH;
+        b.signals.push({ x0: x, y0: y, x1: x, y1: boundaryY, age: 0, life: 0.26 });
+        if (it.signalToCenter) {
+            b.signals.push({ x0: x, y0: y, x1: b.w / 2, y1: b.h * 0.42, age: 0, life: 0.3 });
+        }
+        if (b.signals.length > 24) b.signals.splice(0, b.signals.length - 24);
     }
 
     // 毎フレーム: 境界線の波打ち・粒子・パルス・サビ逆流を描く
@@ -928,6 +1010,8 @@ export class SongTakeover extends BaseSong {
         if (this._boundarySurge > 0) {
             this._boundarySurge = Math.max(0, this._boundarySurge - dt * 2.2);
         }
+        // #116: 高コンボ/サビ解読直後は赤ノイズを一瞬薄れさせ「焼き切った」感を出す。
+        const redDim = now < this._redDimUntil ? 0.3 : 1;
 
         // 緑領域の実描画高さ(CSSトランジション込み)から境界 y を求め、DOMと完全同期。
         const greenH = this.territoryEl.clientHeight;
@@ -993,7 +1077,7 @@ export class SongTakeover extends BaseSong {
             if (p.age >= p.life) { b.particles.splice(i, 1); continue; }
             p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 34 * dt; // ふわっと上がって落ちる
             const k = 1 - p.age / p.life;
-            ctx.globalAlpha = k;
+            ctx.globalAlpha = k * (p.cyan ? 1 : redDim);
             ctx.fillStyle = p.cyan ? 'rgba(0,255,170,1)' : 'rgba(255,90,90,1)';
             const s = 1 + k * 2;
             ctx.fillRect(p.x, p.y, s, s);
@@ -1004,7 +1088,7 @@ export class SongTakeover extends BaseSong {
             f.age += dt; f.y += f.vy * dt;
             if (f.age >= f.life || f.y >= waveY(f.x)) { b.falls.splice(i, 1); continue; }
             const k = 1 - f.age / f.life;
-            ctx.globalAlpha = 0.5 * k;
+            ctx.globalAlpha = 0.5 * k * redDim;
             ctx.fillStyle = 'rgba(255,58,58,1)';
             ctx.fillRect(f.x, f.y, 2, 4);
         }
@@ -1032,7 +1116,7 @@ export class SongTakeover extends BaseSong {
         }
         ctx.restore();
 
-        // 5) 解読波紋（コンボ/サビ中、解読位置からシアンのリングが広がる）
+        // 5) 解読波紋（コンボ/サビ中、解読位置からシアンのリングが広がる・#113）
         ctx.save();
         for (let i = b.ripples.length - 1; i >= 0; i--) {
             const rp = b.ripples[i];
@@ -1046,6 +1130,89 @@ export class SongTakeover extends BaseSong {
             ctx.beginPath();
             ctx.arc(rp.x, rp.y, radius, 0, Math.PI * 2);
             ctx.stroke();
+        }
+        ctx.restore();
+
+        // 6) #116: クリック地点のシアン復号バースト（信号線 → リング/フラッシュ → 粒子）
+        ctx.save();
+        // 信号線: クリック地点から制圧境界(／中央端末)へ高速で走る
+        for (let i = b.signals.length - 1; i >= 0; i--) {
+            const sg = b.signals[i];
+            sg.age += dt;
+            if (sg.age >= sg.life) { b.signals.splice(i, 1); continue; }
+            const k = sg.age / sg.life;
+            const grow = Math.min(1, k * 1.7); // 先端が素早く伸びきる
+            ctx.globalAlpha = (1 - k) * 0.85;
+            ctx.strokeStyle = 'rgba(130,255,228,1)';
+            ctx.lineWidth = 2;
+            ctx.shadowColor = 'rgba(0,255,170,0.9)';
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.moveTo(sg.x0, sg.y0);
+            ctx.lineTo(sg.x0 + (sg.x1 - sg.x0) * grow, sg.y0 + (sg.y1 - sg.y0) * grow);
+            ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        // リング/フラッシュ
+        for (let i = b.bursts.length - 1; i >= 0; i--) {
+            const r = b.bursts[i];
+            if (r.delay > 0) { r.delay -= dt; continue; }
+            r.age += dt;
+            if (r.age >= r.life) { b.bursts.splice(i, 1); continue; }
+            const k = r.age / r.life; // 0→1
+            if (r.flash) {
+                const rr = r.maxR * (0.4 + k * 0.6);
+                const g = ctx.createRadialGradient(r.x, r.y, 0, r.x, r.y, rr);
+                g.addColorStop(0, 'rgba(255,255,255,0.95)');
+                g.addColorStop(0.5, 'rgba(130,255,228,0.6)');
+                g.addColorStop(1, 'rgba(0,255,170,0)');
+                ctx.globalAlpha = 1 - k;
+                ctx.fillStyle = g;
+                ctx.beginPath();
+                ctx.arc(r.x, r.y, rr, 0, Math.PI * 2);
+                ctx.fill();
+                continue;
+            }
+            // デジタルノイズを含むリング（完全な円ではなく、半径を揺らして縁を乱す）
+            const rr = r.maxR * k;
+            ctx.globalAlpha = (1 - k) * 0.9;
+            ctx.strokeStyle = 'rgba(0,255,170,1)';
+            ctx.lineWidth = 2 * (1 - k) + 0.6;
+            ctx.shadowColor = 'rgba(0,255,170,0.8)';
+            ctx.shadowBlur = 10;
+            const segs = 40;
+            ctx.beginPath();
+            for (let s = 0; s <= segs; s++) {
+                const a = (s / segs) * Math.PI * 2;
+                const jitter = (Math.sin(a * 5 + r.seed) + (Math.random() - 0.5)) * rr * 0.06;
+                const rad = rr + jitter;
+                const px = r.x + Math.cos(a) * rad;
+                const py = r.y + Math.sin(a) * rad;
+                if (s === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
+        // 四角いピクセル粒子＋短いノイズ線
+        for (let i = b.burstParticles.length - 1; i >= 0; i--) {
+            const p = b.burstParticles[i];
+            p.age += dt;
+            if (p.age >= p.life) { b.burstParticles.splice(i, 1); continue; }
+            p.x += p.vx * dt; p.y += p.vy * dt;
+            p.vx *= 0.92; p.vy *= 0.92; // 飛び出してすぐ失速
+            const k = 1 - p.age / p.life;
+            ctx.globalAlpha = k;
+            ctx.fillStyle = Math.random() < 0.85 ? 'rgba(0,255,170,1)' : 'rgba(255,255,255,1)';
+            if (p.line) {
+                ctx.save();
+                ctx.translate(p.x, p.y);
+                ctx.rotate(p.ang);
+                ctx.fillRect(0, -0.6, 4 + k * 5, 1.3);
+                ctx.restore();
+            } else {
+                const s = p.size * (0.5 + k);
+                ctx.fillRect(p.x, p.y, s, s);
+            }
         }
         ctx.restore();
         ctx.globalAlpha = 1;
@@ -1096,7 +1263,9 @@ export class SongTakeover extends BaseSong {
             this.combo = 1;
         }
         this._lastDecodeAt = now;
-        sfx.play('takeover_decode');
+        // #116: 連続解読・サビでは解読音を少し強め、テンポに乗る快感を補強する。
+        const sfxGain = this.isClimax ? 1.3 : this.combo >= 5 ? 1.18 : this.combo >= 3 ? 1.1 : 1;
+        sfx.play('takeover_decode', sfxGain);
         if (this.combo > this.maxCombo) this.maxCombo = this.combo;
 
         if (this.comboEl && this.combo >= 2) {
@@ -1349,29 +1518,18 @@ export class SongTakeover extends BaseSong {
         target.state = 'decoded';
         this.dismissFirstInteractable(); // 初回復号成功で誘導ガイドを片付ける
 
-        // Remove decryption hint from target element if it exists
-        const hint = target.el.querySelector('.to-hint');
-        if (hint && hint.parentNode) {
-            hint.parentNode.removeChild(hint);
-        }
-
-        target.textNode.nodeValue = plaintext;
-        target.el.className = 'to-phrase decoded';
-
-        // コンボ判定（コンボ中は解読フラッシュを強化）
+        // コンボ判定（コンボ中は解読フラッシュ・パルスを強化）
         const comboBoost = this._registerDecode();
-        if (comboBoost) {
-            target.el.classList.add('to-combo-boost');
-        }
+        const intensity = this._decodeIntensity(comboBoost);
 
         // タップ成功 → 緑(奪還)領域を広げる。これが無操作減衰への対抗手段。
         this._gainTerritory(comboBoost);
 
         // 境界エフェクト: 解読位置からシアンの光柱が境界をせり上がる。
         // コンボ時はさらに境界を一気に押し上げる。
+        const wrapRect = this.songWrapper.getBoundingClientRect();
         const fxEl = this.bgTiles[target.groupIndex] || target.el;
         if (fxEl) {
-            const wrapRect = this.songWrapper.getBoundingClientRect();
             const r = fxEl.getBoundingClientRect();
             const cxPx = r.left + r.width / 2 - wrapRect.left;
             const cyPx = r.top + r.height / 2 - wrapRect.top;
@@ -1385,6 +1543,60 @@ export class SongTakeover extends BaseSong {
         }
         if (comboBoost) this._boundarySurge = 1;
 
+        // #116: クリック地点からシアンの復号パルス(衝撃波リング・粒子・信号線)を放ち、
+        // 既存の制圧ライン押し上げ演出へ視覚的に接続する。
+        const er = target.el.getBoundingClientRect();
+        this._spawnDecodeBurst(
+            er.left + er.width / 2 - wrapRect.left,
+            er.top + er.height / 2 - wrapRect.top,
+            intensity
+        );
+        // 5combo〜・サビ中は周囲の赤ノイズを一瞬薄れさせる(押し返している手応え)。
+        if (intensity.dimRed) this._redDimUntil = performance.now() + 280;
+
+        // #116: 暗号文字を一瞬グリッチ崩壊させ、正しい歌詞へ「バチッ」と確定してから吸い込む。
+        this._glitchThenReveal(target, plaintext, comboBoost);
+    }
+
+    // #116: 暗号文字を数フレームだけランダム文字へ乱した後、正しい歌詞へ確定して
+    //   背景タイルへ吸い込む。「ただ置き換わる」印象を避け、破壊→復号の手応えを出す。
+    _glitchThenReveal(target, plaintext, comboBoost) {
+        const el = target.el;
+        const tn = target.textNode;
+
+        // ヒント行があれば取り除く
+        const hint = el.querySelector('.to-hint');
+        if (hint && hint.parentNode) hint.parentNode.removeChild(hint);
+
+        // 崩壊フェーズ: 赤の暗号 → 白く乱れる(横ブレ・色収差はCSS側 to-glitch-collapse)
+        el.className = 'to-phrase to-glitch-collapse';
+        const glitchChars = '!<>-_\\/[]{}=+*^?#%01ABCDEF';
+        const len = Math.max(2, tn.nodeValue.length);
+        let frame = 0;
+        const FRAMES = 5;
+        // spawn 時の scrambleTimer は既に clear 済み。再利用しておくと destroy() の
+        // phraseTargets ループでまとめて停止でき、シーン破棄時の取りこぼしを防げる。
+        target.scrambleTimer = setInterval(() => {
+            if (!this.isActive) { clearInterval(target.scrambleTimer); return; }
+            frame++;
+            if (frame >= FRAMES) {
+                clearInterval(target.scrambleTimer);
+                tn.nodeValue = plaintext;
+                // 確定: decoded のフラッシュ演出で「バチッ」と収束させる
+                el.className = 'to-phrase decoded' + (comboBoost ? ' to-combo-boost' : '');
+                this._flyToTile(target, plaintext);
+                return;
+            }
+            let s = '';
+            for (let i = 0; i < len; i++) {
+                s += glitchChars[(Math.random() * glitchChars.length) | 0];
+            }
+            tn.nodeValue = s;
+        }, 26);
+    }
+
+    // 確定した歌詞タイルを背景の所定位置へ吸い込む（従来の挙動を関数化）。
+    _flyToTile(target, plaintext) {
         const tile = this.bgTiles[target.groupIndex];
         if (!tile) {
             // Fallback if background tile wasn't pre-built
