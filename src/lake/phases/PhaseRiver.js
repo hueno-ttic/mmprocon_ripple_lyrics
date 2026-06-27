@@ -78,7 +78,7 @@ export class PhaseRiver extends PhaseBase {
         rocks.forEach(r => {
             const crown = [[0, -1.0, 1.9], [-0.85, -0.4, 1.3], [0.85, -0.4, 1.3], [0, -0.1, 1.5]];
             crown.forEach(o => { const f = new THREE.Sprite(foamMat.clone()); f.position.set(r.x + o[0] * r.s, 0.24, r.z + o[1] * r.s); const base = r.s * o[2] * 0.62; f.scale.setScalar(base); f.userData = { ph: Math.random() * 6.28, base }; g.add(f); this.foams.push(f); });
-            for (let k = 0; k < 3; k++) { const w = new THREE.Sprite(foamMat.clone()); w.material.opacity = 0.5 - k * 0.13; w.position.set(r.x + (Math.random() - 0.5) * 0.4 * r.s, 0.22, r.z + (1.0 + k * 0.9) * r.s); const base = r.s * (1.1 - k * 0.22) * 0.55; w.scale.setScalar(base); w.userData = { ph: Math.random() * 6.28, base, wake: 0.5 - k * 0.13 }; g.add(w); this.foams.push(w); }
+            for (let k = 0; k < 3; k++) { const w = new THREE.Sprite(foamMat.clone()); w.material.opacity = 0.5 - k * 0.13; w.position.set(r.x + (Math.random() - 0.5) * 0.4 * r.s, 0.22, r.z - (1.0 + k * 0.9) * r.s); const base = r.s * (1.1 - k * 0.22) * 0.55; w.scale.setScalar(base); w.userData = { ph: Math.random() * 6.28, base, wake: 0.5 - k * 0.13 }; g.add(w); this.foams.push(w); }
         });
 
         // shoreline foam
@@ -115,13 +115,13 @@ export class PhaseRiver extends PhaseBase {
     update(time) {
         if (this.disposed) return;
         const W = this.RIVER_W;
-        // river: waves travelling downstream (+z), stronger chop in the channel
-        this.water.update(time, (x, z) => { const channel = 1 - Math.min(Math.abs(x) / (W / 2), 1); const flow = Math.sin(z * 0.45 - time * 4.6) * 0.13 + Math.sin(z * 0.26 + x * 0.16 - time * 3.1) * 0.16; return (flow + Math.cos(x * 0.42 - time * 1.4) * 0.06) * (0.4 + channel * 0.95); });
+        // river: waves travelling downstream (-z, toward the distant range), stronger chop in the channel
+        this.water.update(time, (x, z) => { const channel = 1 - Math.min(Math.abs(x) / (W / 2), 1); const flow = Math.sin(z * 0.45 + time * 4.6) * 0.13 + Math.sin(z * 0.26 + x * 0.16 + time * 3.1) * 0.16; return (flow + Math.cos(x * 0.42 - time * 1.4) * 0.06) * (0.4 + channel * 0.95); });
 
-        this.streaks.forEach(s => { s.position.z += s.userData.spd * 0.016 * (1 + (s.position.z + 92) / 180); if (s.position.z > 45) { s.position.z = -92; s.userData.lane = s.userData.lane + (Math.random() - 0.5) * 5; } const life = (s.position.z + 92) / 137; s.material.opacity = Math.sin(life * Math.PI) * s.userData.amp; s.position.x = s.userData.lane + Math.sin(time * 0.8 + s.position.z * 0.1) * 0.5; });
+        this.streaks.forEach(s => { s.position.z -= s.userData.spd * 0.016 * (1 + (s.position.z + 92) / 180); if (s.position.z < -92) { s.position.z = 45; s.userData.lane = s.userData.lane + (Math.random() - 0.5) * 5; } const life = (s.position.z + 92) / 137; s.material.opacity = Math.sin(life * Math.PI) * s.userData.amp; s.position.x = s.userData.lane + Math.sin(time * 0.8 + s.position.z * 0.1) * 0.5; });
         this.foams.forEach(f => { const s = f.userData.base * (1 + Math.sin(time * 4 + f.userData.ph) * 0.14); f.scale.setScalar(s); const peak = f.userData.wake !== undefined ? f.userData.wake : 0.82; f.material.opacity = peak * 0.7 + Math.sin(time * 4 + f.userData.ph) * 0.18; });
         this.shoreFoams.forEach(f => { f.material.opacity = 0.35 + Math.sin(time * 3 + f.userData.ph) * 0.2; });
-        this.mists.forEach(m => { m.position.z += m.userData.spd * 0.016; if (m.position.z > 40) { m.position.z = -80; m.position.x = (Math.random() - 0.5) * 32; } const life = (m.position.z + 80) / 120; m.material.opacity = Math.sin(life * Math.PI) * 0.2; });
+        this.mists.forEach(m => { m.position.z -= m.userData.spd * 0.016; if (m.position.z < -80) { m.position.z = 40; m.position.x = (Math.random() - 0.5) * 32; } const life = (m.position.z + 80) / 120; m.material.opacity = Math.sin(life * Math.PI) * 0.2; });
         this.clouds.update(time);
         this.trees.forEach(tr => { tr.rotation.z = Math.sin(time * 0.9 + tr.userData.ph) * 0.025; });
         this.nodes.update(time); this.sparkles.update(); this.birds.update(time); this.sunDisc.update(this.camera);
