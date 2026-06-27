@@ -150,11 +150,18 @@ export class SongKotaete extends BaseSong {
         this.renderer.__qpr = quality.effectivePixelRatio();
         this.songWrapper.appendChild(this.renderer.domElement);
 
-        this.ambientLight = new THREE.AmbientLight(0xffffff, 1.15);
+        // 空(青)と地(緑)の自然な回り込み＋太陽の方向光で立体感を出す
+        this.hemiLight = new THREE.HemisphereLight(0xbfe3ff, 0x5f9a44, 0.9);
+        this.scene.add(this.hemiLight);
+        this.ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
         this.scene.add(this.ambientLight);
-        this.sunLight = new THREE.DirectionalLight(0xfff3c4, 1.5);
+        this.sunLight = new THREE.DirectionalLight(0xfff1bf, 2.0);
         this.sunLight.position.set(this.sunX, 12, 6);
         this.scene.add(this.sunLight);
+        // カメラ側からの弱いフィル(正面の陰を起こす)
+        this.fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        this.fillLight.position.set(0, 2, 12);
+        this.scene.add(this.fillLight);
     }
 
     // 空のグラデーション(下=明るい地平、上=青空)。大きな背面スフィアで表現。
@@ -188,20 +195,156 @@ export class SongKotaete extends BaseSong {
     }
 
     buildStem() {
-        const mat = new THREE.MeshStandardMaterial({ color: 0x4c9a3f, roughness: 0.9 });
-        const geo = new THREE.CylinderGeometry(STEM_R * 0.7, STEM_R, 1, 10);
+        // 縦の縞・微かな艶を持たせた茎。単位高(y -0.5..0.5)を scale.y で伸ばす。
+        const tex = this._stemTexture();
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        this._stemTex = tex;
+        const mat = new THREE.MeshStandardMaterial({ map: tex, color: 0x74bf45, roughness: 0.72, metalness: 0.02 });
+        const geo = new THREE.CylinderGeometry(STEM_R * 0.5, STEM_R * 1.1, 1, 18, 1, true);
         this.stem = new THREE.Mesh(geo, mat);
         this.stem.position.set(0, this.stemDisplay / 2, 0);
         this.stem.scale.y = this.stemDisplay;
         this.scene.add(this.stem);
 
-        // 芽(双葉)
-        const sproutMat = new THREE.MeshStandardMaterial({ color: 0x6cc24a, roughness: 0.8, side: THREE.DoubleSide });
-        const sprout = new THREE.Mesh(new THREE.CircleGeometry(0.5, 12), sproutMat);
-        sprout.position.set(0.35, 0.4, 0.05); sprout.rotation.z = -0.5;
-        this.scene.add(sprout);
-        const sprout2 = sprout.clone(); sprout2.position.x = -0.35; sprout2.rotation.z = 0.5;
-        this.scene.add(sprout2);
+        // 芽(双葉) — 小さな本物の葉
+        this._ensureLeafAssets();
+        for (const sx of [-1, 1]) {
+            const f = this._buildFoliage(sx, 0.6);
+            f.position.set(sx * 0.32, 0.5, 0.05);
+            f.rotation.z = sx * 0.5;
+            this.scene.add(f);
+        }
+    }
+
+    _stemTexture() {
+        const W = 48, H = 256;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        const g = x.createLinearGradient(0, 0, W, 0);
+        g.addColorStop(0, '#3f8a36'); g.addColorStop(0.45, '#7cc94a');
+        g.addColorStop(0.6, '#9bdc63'); g.addColorStop(1, '#3a8030');
+        x.fillStyle = g; x.fillRect(0, 0, W, H);
+        // 縦の繊維(濃淡)
+        x.globalAlpha = 0.25;
+        for (let i = 0; i < 7; i++) {
+            x.strokeStyle = i % 2 ? '#2f6e28' : '#a9e26f';
+            x.lineWidth = 1 + Math.random();
+            const px = 4 + Math.random() * (W - 8);
+            x.beginPath(); x.moveTo(px, 0); x.lineTo(px + (Math.random() - 0.5) * 4, H); x.stroke();
+        }
+        x.globalAlpha = 1;
+        return new THREE.CanvasTexture(c);
+    }
+
+    // 葉のジオメトリ(卵形＋葉脈テクスチャ＋カップ状の起伏)とマテリアルを一度だけ用意
+    _ensureLeafAssets() {
+        if (this._leafGeo) return;
+        // --- 形状(基部=原点, 先端=+x) ---
+        const L = 1.0, Wd = 0.62;
+        const sh = new THREE.Shape();
+        sh.moveTo(0, 0);
+        sh.bezierCurveTo(L * 0.28, Wd * 0.55, L * 0.72, Wd * 0.5, L, 0);
+        sh.bezierCurveTo(L * 0.72, -Wd * 0.5, L * 0.28, -Wd * 0.55, 0, 0);
+        const geo = new THREE.ShapeGeometry(sh, 36);
+        geo.computeBoundingBox();
+        const bb = geo.boundingBox;
+        const sxw = bb.max.x - bb.min.x, syw = bb.max.y - bb.min.y;
+        const pos = geo.attributes.position, uv = geo.attributes.uv;
+        for (let i = 0; i < pos.count; i++) {
+            const px = pos.getX(i), py = pos.getY(i);
+            uv.setXY(i, (px - bb.min.x) / sxw, (py - bb.min.y) / syw);
+            const vy = py / Wd;                 // -1..1
+            const along = px / L;               // 0基部..1先端
+            pos.setZ(i, (vy * vy) * 0.17 - along * along * 0.10); // 縁が立ち上がり、先がやや垂れる
+        }
+        pos.needsUpdate = true; uv.needsUpdate = true;
+        geo.computeVertexNormals();
+        // 中央を原点付近へ寄せて、ミクが葉の真ん中に立つように
+        geo.translate(-0.42, 0, 0);
+        this._leafGeo = geo;
+        this._leafVeinTex = this._leafVeinTexture();
+    }
+
+    _leafVeinTexture() {
+        const W = 256, H = 168;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        const g = x.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, LEAF_GREEN_D); g.addColorStop(0.5, LEAF_GREEN);
+        g.addColorStop(1, LEAF_GREEN_D);
+        x.fillStyle = g; x.fillRect(0, 0, W, H);
+        // 主脈(基部 u≈0 → 先端 u≈1)
+        x.strokeStyle = 'rgba(20,60,24,0.55)'; x.lineWidth = 4;
+        x.beginPath(); x.moveTo(8, H / 2); x.lineTo(W - 8, H / 2); x.stroke();
+        // 側脈
+        x.strokeStyle = 'rgba(20,60,24,0.35)'; x.lineWidth = 2;
+        for (let i = 1; i <= 6; i++) {
+            const u = 14 + (W - 30) * (i / 7);
+            x.beginPath(); x.moveTo(u, H / 2); x.lineTo(u + 22, 14); x.stroke();
+            x.beginPath(); x.moveTo(u, H / 2); x.lineTo(u + 22, H - 14); x.stroke();
+        }
+        // ハイライト(基部寄りの艶)
+        const hl = x.createRadialGradient(W * 0.32, H * 0.4, 4, W * 0.32, H * 0.4, 70);
+        hl.addColorStop(0, 'rgba(220,255,200,0.35)'); hl.addColorStop(1, 'rgba(220,255,200,0)');
+        x.fillStyle = hl; x.fillRect(0, 0, W, H);
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+    }
+
+    // 一枚の葉メッシュ(side: -1左/+1右, scale)。テキストは持たない純粋な3D葉。
+    _buildFoliage(side, scale = 1) {
+        this._ensureLeafAssets();
+        const mat = new THREE.MeshStandardMaterial({
+            map: this._leafVeinTex, side: THREE.DoubleSide, roughness: 0.62, metalness: 0.0,
+            emissive: 0x000000,
+        });
+        const mesh = new THREE.Mesh(this._leafGeo, mat);
+        mesh.scale.set(side * scale, scale, scale); // 左は x 反転
+        return mesh;
+    }
+
+    // カメラへ正対する可読テキスト札(歌詞)。葉の上に重ねる。
+    _makeTextLabel(text) {
+        const W = 360, H = 130;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        // 角丸の暗い帯(背景と同化させない)
+        x.fillStyle = 'rgba(18,40,18,0.62)';
+        const r = 26, pad = 8;
+        x.beginPath();
+        x.roundRect(pad, pad, W - pad * 2, H - pad * 2, r);
+        x.fill();
+        x.strokeStyle = 'rgba(255,236,150,0.5)'; x.lineWidth = 3; x.stroke();
+        let fs = 58;
+        x.textAlign = 'center'; x.textBaseline = 'middle';
+        do { x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`; fs -= 4; }
+        while (fs > 20 && x.measureText(text).width > W - 60);
+        x.lineWidth = 6; x.strokeStyle = 'rgba(8,24,8,0.95)'; x.strokeText(text, W / 2, H / 2 + 2);
+        x.fillStyle = '#ffffff'; x.fillText(text, W / 2, H / 2 + 2);
+        const tex = new THREE.CanvasTexture(c);
+        const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }));
+        spr.scale.set(1.5, 0.54, 1);
+        spr.userData.tex = tex;
+        return spr;
+    }
+
+    // 花びら1枚のジオメトリ(基部=原点, 先端=+x の尖った卵形, カップ状)
+    _petalGeometry() {
+        if (this._petalGeo) return this._petalGeo;
+        const L = 1.0, Wd = 0.26;
+        const sh = new THREE.Shape();
+        sh.moveTo(0, 0);
+        sh.bezierCurveTo(L * 0.2, Wd, L * 0.82, Wd * 0.7, L, 0);
+        sh.bezierCurveTo(L * 0.82, -Wd * 0.7, L * 0.2, -Wd, 0, 0);
+        const geo = new THREE.ShapeGeometry(sh, 18);
+        const pos = geo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            const py = pos.getY(i);
+            pos.setZ(i, (py / Wd) * (py / Wd) * 0.07); // 縦に軽くカップ
+        }
+        pos.needsUpdate = true; geo.computeVertexNormals();
+        this._petalGeo = geo;
+        return geo;
     }
 
     // 太陽(ドラッグ可能)。光線つき。
@@ -267,32 +410,6 @@ export class SongKotaete extends BaseSong {
     // =====================================================================
     // 葉っぱ(足場)
     // =====================================================================
-    createLeafTexture(text) {
-        const W = 512, H = 256;
-        const c = document.createElement('canvas'); c.width = W; c.height = H;
-        const x = c.getContext('2d');
-        // 葉の形(横長の楕円)。緑のグラデ。
-        const g = x.createLinearGradient(0, 0, 0, H);
-        g.addColorStop(0, LEAF_GREEN); g.addColorStop(1, LEAF_GREEN_D);
-        x.fillStyle = g;
-        x.beginPath(); x.ellipse(W / 2, H / 2, W / 2 - 8, H / 2 - 8, 0, 0, Math.PI * 2); x.fill();
-        // 葉脈
-        x.strokeStyle = 'rgba(255,255,255,0.25)'; x.lineWidth = 3;
-        x.beginPath(); x.moveTo(40, H / 2); x.lineTo(W - 40, H / 2); x.stroke();
-        // 可読性のための暗い帯
-        x.fillStyle = 'rgba(20,40,20,0.45)';
-        x.beginPath(); x.ellipse(W / 2, H / 2, W / 2 - 60, 64, 0, 0, Math.PI * 2); x.fill();
-        // 歌詞テキスト(白・濃い縁取り)
-        let fs = 64;
-        x.textAlign = 'center'; x.textBaseline = 'middle';
-        do { x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`; fs -= 4; }
-        while (fs > 22 && x.measureText(text).width > W - 90);
-        x.lineWidth = 7; x.strokeStyle = 'rgba(10,30,10,0.9)'; x.strokeText(text, W / 2, H / 2);
-        x.fillStyle = '#ffffff'; x.fillText(text, W / 2, H / 2);
-        const tex = new THREE.CanvasTexture(c);
-        return tex;
-    }
-
     // 次の葉を生やす。yを指定しなければラダーの次段に。sideは太陽バイアスで決定。
     spawnLeaf(text, opts = {}) {
         const idx = this.leafIndexCounter++;
@@ -307,21 +424,29 @@ export class SongKotaete extends BaseSong {
         const group = new THREE.Group();
         group.position.set(x, y, 0);
 
-        // 茎から葉への短い葉柄
-        const stalkMat = new THREE.MeshBasicMaterial({ color: 0x4c9a3f });
-        const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, LEAF_X, 6), stalkMat);
-        stalk.position.set(-x / 2, 0, -0.02); stalk.rotation.z = Math.PI / 2;
-        group.add(stalk);
+        let foliage = null, label = null;
+        if (!opts.isGoal) {
+            // 茎から葉への葉柄(petiole)
+            const stalk = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.04, 0.07, Math.abs(x) || LEAF_X, 6),
+                new THREE.MeshStandardMaterial({ color: 0x4c9a3f, roughness: 0.8 }));
+            stalk.position.set(-x / 2, 0, -0.02); stalk.rotation.z = Math.PI / 2;
+            group.add(stalk);
 
-        const tex = this.createLeafTexture(text || '♪');
-        const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
-        const leaf = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 1.2), mat);
-        leaf.position.set(0, 0, 0);
-        group.add(leaf);
+            // 3Dの葉(卵形＋葉脈＋カップ)。先端を少し上へ。札より大きくして葉らしさを見せる。
+            foliage = this._buildFoliage(side, 2.15);
+            foliage.rotation.z = side * 0.14;
+            group.add(foliage);
+
+            // 可読テキスト札(カメラ正対・暗い帯で同化を防ぐ)。葉の内側に寄せる。
+            label = this._makeTextLabel(text || '♪');
+            label.position.set(side * -0.15, 0.05, 0.4);
+            group.add(label);
+        }
         this.scene.add(group);
 
         const item = {
-            group, leaf, mat, tex, y, x, side, text: text || '',
+            group, foliage, label, y, x, side, text: text || '',
             born: 0, openT: 0, confirmed: false, landed: false, glow: 0,
             index: idx, isGoal: !!opts.isGoal,
         };
@@ -350,17 +475,14 @@ export class SongKotaete extends BaseSong {
             l.born += dt;
             // ポップアップして開く
             l.openT = Math.min(1, l.openT + dt * 3.2);
-            const s = this._easeOutBack(l.openT);
-            l.group.scale.setScalar(s);
-            // 確定/着地でほのかに光る
-            const targetGlow = (l.confirmed ? 0.6 : 0) + (l.landed ? 0.25 : 0);
+            l.group.scale.setScalar(this._easeOutBack(l.openT));
+            // 確定/着地でほのかに光る(葉は発光、札は不透明度UP)
+            const targetGlow = (l.confirmed ? 0.55 : 0) + (l.landed ? 0.25 : 0);
             l.glow += (targetGlow - l.glow) * Math.min(1, dt * 6);
-            // 葉の色を確定でやや明るく
-            l.mat.color.setRGB(1 + l.glow * 0.3, 1 + l.glow * 0.3, 1 + l.glow * 0.3);
-            // 葉は常にカメラの方へ少しだけ向く(可読性)。基本はz+正面。
-            l.group.rotation.y = 0;
-            // そよ風で軽く揺れる
-            l.leaf.rotation.z = Math.sin(l.born * 1.5 + l.index) * 0.04;
+            if (l.foliage) l.foliage.material.emissive.setRGB(l.glow * 0.45, l.glow * 0.55, l.glow * 0.18);
+            if (l.label) l.label.material.opacity = Math.min(1, 0.9 + l.glow * 0.1);
+            // そよ風で群ごと軽く揺れる
+            l.group.rotation.z = Math.sin(l.born * 1.2 + l.index) * 0.03;
         }
     }
 
@@ -512,11 +634,13 @@ export class SongKotaete extends BaseSong {
             const hitSun = this._raycaster.intersectObject(this.sun, false);
             if (hitSun.length) { this.draggingSun = true; this.dismissFirstInteractable(); return; }
         }
-        // A. 葉っぱをタッチ → 確定(問いにこたえる)
-        const leafMeshes = this.leaves.map(l => l.leaf);
-        const hitLeaf = this._raycaster.intersectObjects(leafMeshes, false);
+        // A. 葉っぱ(葉本体 or テキスト札)をタッチ → 確定(問いにこたえる)
+        const targets = [];
+        for (const l of this.leaves) { if (l.foliage) targets.push(l.foliage); if (l.label) targets.push(l.label); }
+        const hitLeaf = this._raycaster.intersectObjects(targets, false);
         if (hitLeaf.length) {
-            const l = this.leaves.find(x => x.leaf === hitLeaf[0].object);
+            const o = hitLeaf[0].object;
+            const l = this.leaves.find(x => x.foliage === o || x.label === o);
             if (l && !l.confirmed) { this._confirmLeaf(l); }
             this.dismissFirstInteractable();
             return;
@@ -570,25 +694,55 @@ export class SongKotaete extends BaseSong {
     }
 
     _buildBloom(parent, y) {
-        // 中心の花托
-        const core = new THREE.Mesh(new THREE.CircleGeometry(0.6, 20),
-            new THREE.MeshStandardMaterial({ color: 0x6b3d1f, roughness: 1 }));
-        core.position.set(0, 0, 0.1);
-        parent.add(core);
-        // 花びら(放射状)。最初は閉じていて bloomOpen で開く。
-        this.bloomPetals = [];
-        const N = 16;
-        const petalMat = new THREE.MeshStandardMaterial({ color: SUN_GOLD, roughness: 0.7, side: THREE.DoubleSide });
-        for (let i = 0; i < N; i++) {
-            const ang = (i / N) * Math.PI * 2;
-            const petal = new THREE.Mesh(new THREE.CircleGeometry(0.42, 8), petalMat);
-            petal.scale.set(0.5, 1.3, 1);
-            petal.position.set(Math.cos(ang) * 0.8, Math.sin(ang) * 0.8, 0.05);
-            petal.rotation.z = ang - Math.PI / 2;
-            petal.scale.multiplyScalar(0.01); // 閉じた状態
-            parent.add(petal);
-            this.bloomPetals.push({ petal, ang });
+        // --- 中心(花托): 手前へ膨らむ茶色のドーム ---
+        const centerMat = new THREE.MeshStandardMaterial({ color: 0x5a3417, roughness: 0.95 });
+        const center = new THREE.Mesh(new THREE.SphereGeometry(0.74, 30, 22), centerMat);
+        center.scale.set(1, 1, 0.46);
+        center.position.set(0, 0, 0.14);
+        parent.add(center);
+        this._bloomCenterMat = centerMat;
+
+        // --- 種(phyllotaxis 螺旋に並ぶ): InstancedMesh で大量配置 ---
+        const seedCount = this.isMobile ? 120 : 220;
+        const seedGeo = new THREE.CylinderGeometry(0.016, 0.03, 0.06, 5);
+        seedGeo.rotateX(Math.PI / 2); // +zへ向ける
+        const seedMat = new THREE.MeshStandardMaterial({ color: 0x271a0c, roughness: 0.85 });
+        const seeds = new THREE.InstancedMesh(seedGeo, seedMat, seedCount);
+        const golden = Math.PI * (3 - Math.sqrt(5));
+        const mtx = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+        for (let i = 0; i < seedCount; i++) {
+            const r = 0.66 * Math.sqrt(i / seedCount);
+            const a = i * golden;
+            p.set(Math.cos(a) * r, Math.sin(a) * r, 0.14 + Math.sqrt(Math.max(0, 0.55 - r * r)) * 0.42);
+            const s = 0.7 + (i / seedCount) * 0.8;
+            sc.set(s, s, s);
+            mtx.compose(p, q, sc);
+            seeds.setMatrixAt(i, mtx);
         }
+        seeds.instanceMatrix.needsUpdate = true;
+        parent.add(seeds);
+        this._bloomSeeds = seeds;
+
+        // --- 花びら: 2重リングの尖った花弁(カップ状)。閉→開アニメ ---
+        this.bloomPetals = [];
+        const petalGeo = this._petalGeometry();
+        const petalMat = new THREE.MeshStandardMaterial({
+            color: SUN_GOLD, roughness: 0.55, side: THREE.DoubleSide,
+            emissive: 0x4a3500, emissiveIntensity: 0.18,
+        });
+        this._bloomPetalMat = petalMat;
+        const rings = [{ n: 14, r: 0.72, len: 0.95 }, { n: 16, r: 0.92, len: 1.18 }];
+        rings.forEach((ring, ri) => {
+            for (let i = 0; i < ring.n; i++) {
+                const ang = (i / ring.n) * Math.PI * 2 + (ri ? Math.PI / ring.n : 0);
+                const petal = new THREE.Mesh(petalGeo, petalMat);
+                petal.position.set(Math.cos(ang) * ring.r, Math.sin(ang) * ring.r, 0.02 - ri * 0.03);
+                petal.rotation.z = ang;            // 外向き
+                petal.scale.setScalar(ring.len * 0.01); // 閉じた状態
+                parent.add(petal);
+                this.bloomPetals.push({ petal, base: ring.len, ang });
+            }
+        });
         this.bloom = { y, open: 0 };
     }
 
@@ -609,7 +763,11 @@ export class SongKotaete extends BaseSong {
         const target = this.goalReached ? 1 : 0.0;
         this.bloom.open += (target - this.bloom.open) * Math.min(1, dt * 2.2);
         const s = this._easeOutBack(this.bloom.open);
-        for (const bp of this.bloomPetals) bp.petal.scale.setScalar(0.01 + s * 1.0);
+        for (const bp of this.bloomPetals) {
+            bp.petal.scale.setScalar(Math.max(0.01, bp.base * s));
+            // 開きながら少しだけ起き上がる(unfurl)
+            bp.petal.position.z = (0.02) + (1 - this.bloom.open) * 0.18;
+        }
     }
 
     // =====================================================================
@@ -719,12 +877,24 @@ export class SongKotaete extends BaseSong {
         window.removeEventListener('pointerup', this.boundOnPointerUp);
         eventBus.off('songEnd', this.boundOnSongEnd);
 
+        // 葉/花: 共有ジオメトリ(_leafGeo/_petalGeo)は最後に1回だけ破棄するので、
+        // ここでは材質と固有ジオメトリ(葉柄/種/中心)のみ破棄する。
         this.leaves.forEach(l => {
             this.scene.remove(l.group);
-            l.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose()); });
-            l.tex && l.tex.dispose();
+            l.group.traverse(o => {
+                if (o.geometry && o.geometry !== this._leafGeo && o.geometry !== this._petalGeo) o.geometry.dispose();
+                if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
+                    if (m.map && m.map !== this._leafVeinTex) m.map.dispose();
+                    m.dispose && m.dispose();
+                });
+            });
         });
         this.leaves = [];
+        // 共有アセットを1回だけ破棄
+        this._leafGeo && this._leafGeo.dispose();
+        this._petalGeo && this._petalGeo.dispose();
+        this._leafVeinTex && this._leafVeinTex.dispose();
+        this._stemTex && this._stemTex.dispose();
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
         if (this.sun) { this.scene.remove(this.sun); this.sun.material.dispose(); }
