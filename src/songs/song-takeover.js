@@ -1339,6 +1339,7 @@ export class SongTakeover extends BaseSong {
             return;
         }
         if (!this.isActive) return; // scene destroyed while awaiting
+        if (this._completeFired) return; // 終局演出が await 中に起動した場合は出さない（#120）
 
         this.updateScore();
 
@@ -1797,6 +1798,9 @@ export class SongTakeover extends BaseSong {
         this._completeFired = true;
         this._outcome = 'clear';
 
+        // 未解読のまま残った暗号歌詞を一掃（リザルトに居座るのを防ぐ／#120）
+        this._clearRemainingTargets();
+
         // 0) 静止/吸気: 解読済みの全タイルを一斉にシアンで満たす（タメ）
         Object.values(this.bgTiles).forEach(tile => {
             if (tile) tile.classList.add('to-charge');
@@ -1939,6 +1943,9 @@ export class SongTakeover extends BaseSong {
         this._erosionStage = 0;
         sfx.play('takeover_fail');
 
+        // 未解読のまま残った暗号歌詞を一掃（リザルトに居座るのを防ぐ／#120）
+        this._clearRemainingTargets();
+
         // 端末フレームを完全な赤(敵支配)に固定し、世界を赤一色へ寄せる
         this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3', 'to-reclaim');
         this.songWrapper.classList.add('to-complete');
@@ -2071,6 +2078,22 @@ export class SongTakeover extends BaseSong {
         clearInterval(target.scrambleTimer);
         target.el.className = 'to-phrase expired';
         setTimeout(() => { if (target.el.parentNode) target.el.parentNode.removeChild(target.el); }, 400);
+    }
+
+    // 終局演出の起動時に、未解読のまま残っている暗号歌詞を一掃する（#120）。
+    // 終局後は click ハンドラが _completeFired で復号を弾くため、残ったブロックは
+    // タップしても消えずリザルト画面に居座ってしまう。ここでフェードして取り除く。
+    _clearRemainingTargets() {
+        this.phraseTargets.forEach(t => {
+            if (!t || t.state === 'expired' || t.state === 'decoded') return;
+            clearInterval(t.scrambleTimer);
+            t.state = 'expired';
+            if (t.el) {
+                t.el.className = 'to-phrase expired';
+                const el = t.el;
+                setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 400);
+            }
+        });
     }
 
     onResize() {
@@ -2241,8 +2264,10 @@ export class SongTakeover extends BaseSong {
         }
 
         // Spawn one scrambled target per word-group
-        const word = playerManager.player.video.findWord(position)
-                  || playerManager.player.video.findChar(position);
+        // 終局演出の起動後は新たな暗号歌詞を出さない（出すと復号できずに居座る／#120）
+        const word = this._completeFired ? null
+                  : (playerManager.player.video.findWord(position)
+                  || playerManager.player.video.findChar(position));
         if (word && word.parent) {
             const groups = groupPhraseWordsByMinLength(word.parent, 4);
             const group = findGroupForWord(groups, word);
