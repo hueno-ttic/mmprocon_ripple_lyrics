@@ -52,6 +52,10 @@ export class SongKotaete extends BaseSong {
         // ミクの視線追従(触れた所を見て微笑む)。lookBlend=1で注視→減衰でカメラへ戻る。
         this.lookTarget = new THREE.Vector3();
         this.lookBlend = 0;
+        // グルーヴ/手を差し伸べる
+        this.basePose = null;        // setupStandPose で基準角を保存
+        this.reachBlend = 0;         // 触れた瞬間1→減衰。差し伸べる腕の強さ
+        this.reachArm = 'right';     // 触れた位置に応じて左右どちらの腕を伸ばすか
 
         // ---- ビート(拍)同期 ----
         this.beatPulse = 0;          // 拍頭で1にスパイクし減衰
@@ -351,6 +355,7 @@ export class SongKotaete extends BaseSong {
     }
 
     // 自然な立ち姿(腕を体側に下ろす)。踊らせず、静かに佇ませる。
+    // この基準角の周りに applyMikuMotion() がグルーヴを上乗せする。
     setupStandPose(vrm) {
         if (!vrm || !vrm.humanoid) return;
         const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
@@ -360,6 +365,55 @@ export class SongKotaete extends BaseSong {
         if (ru) ru.rotation.z = -Math.PI / 2.6;
         if (ll) ll.rotation.y = Math.PI / 14;
         if (rl) rl.rotation.y = -Math.PI / 14;
+        // グルーヴの基準角(この値の周りに揺らす)
+        this.basePose = { luZ: Math.PI / 2.6, ruZ: -Math.PI / 2.6, llY: Math.PI / 14, rlY: -Math.PI / 14 };
+    }
+
+    // ---------------------------------------------------------------------
+    // ミクのグルーヴ(立ち姿のまま音楽に乗る身体の動き)
+    //   - 重心移動(腰/背/胸の連動した左右スウェイ)
+    //   - 拍の弾み(beatPulse で背・頭・肩が弾む)
+    //   - 腕の自然な揺れ
+    //   - タップへ手を差し伸べる(reachBlend)
+    // すべて基準姿勢からの相対オフセットなので、振り付けというより「揺らぎ」。
+    // ---------------------------------------------------------------------
+    applyMikuMotion(t) {
+        const vrm = this.currentVRM;
+        if (!vrm || !vrm.humanoid || !this.basePose) return;
+        const get = (n) => vrm.humanoid.getNormalizedBoneNode(n);
+        const bp = this.basePose;
+        const sway = Math.sin(t * 0.6);          // ゆったりした重心移動(約10秒周期)
+        const bounce = this.mikuPulse;           // 拍/歌唱の弾み(0..1)
+        const breathe = Math.sin(t * 1.4) * 0.5 + 0.5;
+
+        const hips = get('hips');
+        if (hips) { hips.rotation.z = sway * 0.05; hips.rotation.y = sway * 0.035; }
+        const spine = get('spine');
+        if (spine) { spine.rotation.z = -sway * 0.035; spine.rotation.x = bounce * 0.05 + breathe * 0.02; }
+        const chest = get('upperChest') || get('chest');
+        if (chest) { chest.rotation.y = sway * 0.05; chest.rotation.z = -sway * 0.02; }
+
+        const lu = get('leftUpperArm'), ru = get('rightUpperArm');
+        const ll = get('leftLowerArm'), rl = get('rightLowerArm');
+        // 腕は重心移動に合わせて自然に揺れ、拍でわずかに開く
+        if (lu) { lu.rotation.z = bp.luZ + bounce * 0.06 + sway * 0.02; lu.rotation.x = Math.sin(t * 0.6) * 0.06; }
+        if (ru) { ru.rotation.z = bp.ruZ - bounce * 0.06 - sway * 0.02; ru.rotation.x = Math.sin(t * 0.6 + Math.PI) * 0.06; }
+        if (ll) { ll.rotation.y = bp.llY; ll.rotation.z = Math.sin(t * 0.6) * 0.05; }
+        if (rl) { rl.rotation.y = bp.rlY; rl.rotation.z = -Math.sin(t * 0.6) * 0.05; }
+
+        // タップへ手を差し伸べる(触れた側の腕を上げて前へ)。reachBlend は触れた瞬間1→減衰。
+        const rb = this.reachBlend;
+        if (rb > 0.001) {
+            if (this.reachArm === 'left' && lu && ll) {
+                lu.rotation.z = bp.luZ * (1 - rb * 0.65);
+                lu.rotation.x = THREE.MathUtils.lerp(lu.rotation.x, -0.7, rb);
+                ll.rotation.z = THREE.MathUtils.lerp(ll.rotation.z, -0.25, rb);
+            } else if (this.reachArm === 'right' && ru && rl) {
+                ru.rotation.z = bp.ruZ * (1 - rb * 0.65);
+                ru.rotation.x = THREE.MathUtils.lerp(ru.rotation.x, -0.7, rb);
+                rl.rotation.z = THREE.MathUtils.lerp(rl.rotation.z, 0.25, rb);
+            }
+        }
     }
 
     updateMiku(now, deltaSec) {
@@ -370,11 +424,12 @@ export class SongKotaete extends BaseSong {
         this.mikuPulse = Math.max(0, this.mikuPulse - deltaSec * 2.0);
         const breathe = Math.sin(t * 1.4) * 0.045;
         this.currentVRM.scene.position.y = WATER_Y + breathe + this.mikuPulse * 0.16;
-        // ごくゆるい左右の揺れ
+        // ごくゆるい左右の揺れ(全身ヨー)
         this.currentVRM.scene.rotation.y = Math.sin(t * 0.5) * 0.05;
-        // 胸を少し起こして歌っている気配
-        const spine = this.currentVRM.humanoid.getNormalizedBoneNode('spine');
-        if (spine) spine.rotation.x = this.mikuPulse * 0.06;
+
+        // 音楽に乗った身体のグルーヴ(重心移動・拍の弾み・腕の揺れ・手を差し伸べる)
+        this.reachBlend = Math.max(0, this.reachBlend - deltaSec * 0.6);
+        this.applyMikuMotion(t);
 
         // 視線追従: 既定はプレイヤー(カメラ)を見て、触れた直後はその場所へ目を移す
         this.lookBlend = Math.max(0, this.lookBlend - deltaSec * 0.5);
@@ -384,6 +439,8 @@ export class SongKotaete extends BaseSong {
         tgt.copy(this.camera.position).lerp(this.lookTarget, this.lookBlend);
         if (head) this.lookAtTarget(head, tgt, 0.6, 0.5, 1.0);
         if (neck) this.lookAtTarget(neck, tgt, 0.35, 0.3, 0.5);
+        // 拍で軽くうなずき、重心移動に合わせて首をかしげる(look-at の上に加算)
+        if (head) { head.rotation.x += this.mikuPulse * 0.05; head.rotation.z += Math.sin(t * 0.6) * 0.02; }
 
         // 微笑み(触れられた直後・歌唱パルスで強まる)。VRM0/1で表情キー名が違うので両対応。
         if (this.currentVRM.expressionManager) {
@@ -500,9 +557,11 @@ export class SongKotaete extends BaseSong {
         this.touchCount++;
         this.dismissFirstInteractable();
 
-        // ミクが触れた場所へ視線を移す＋水鏡の反射が波紋で揺れる
+        // ミクが触れた場所へ視線を移す＋触れた側の手を差し伸べる＋反射が波紋で揺れる
         this.lookTarget.copy(hit);
         this.lookBlend = 1;
+        this.reachBlend = 1;
+        this.reachArm = (hit.x < this.mikuPos.x) ? 'left' : 'right';
         this.reflectWobble = Math.min(1, this.reflectWobble + 0.8);
 
         // オンビート判定: 拍頭の±一定窓で触れると「強い波紋＋澄んだ音」のごほうび
