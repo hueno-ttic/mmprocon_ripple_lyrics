@@ -6,6 +6,7 @@ import { settleSpringBones } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
+import { sfx } from '../core/sfx.js';
 import { buildNightLake } from '../lake/kotaeteLakes.js';
 
 // =============================================================================
@@ -47,6 +48,20 @@ export class SongKotaete extends BaseSong {
         // 対岸だが「ミクだと分かる」近さに置く(遠すぎるとシルエットが潰れる)
         this.mikuPos = new THREE.Vector3(0, WATER_Y, -19);
         this.mikuScale = 3.5;
+        // ミクの視線追従(触れた所を見て微笑む)。lookBlend=1で注視→減衰でカメラへ戻る。
+        this.lookTarget = new THREE.Vector3();
+        this.lookBlend = 0;
+
+        // ---- ビート(拍)同期 ----
+        this.beatPulse = 0;          // 拍頭で1にスパイクし減衰
+        this._lastBeatStart = -1;
+        this._beatStart = 0;
+        this._beatDuration = 0;
+        this.beatSparkles = null;    // 水面のきらめき点群(拍で一斉に瞬く)
+
+        // ---- 水鏡の反射(ミクの映り込み・波紋で揺れる) ----
+        this.mikuReflection = null;
+        this.reflectWobble = 0;      // 触れるたびに上がり、反射を歪ませる量(減衰)
 
         // ---- 演出の生きているもの ----
         this.ripples = [];           // 水面に広がる波紋リング
@@ -94,7 +109,9 @@ export class SongKotaete extends BaseSong {
         this.createTextures();
         this.initThree();
         this.buildLake();
+        this.createBeatSparkles();
         this.loadMiku();
+        this.createMikuReflection();
         this.createTintOverlay();
 
         window.addEventListener('resize', this.boundOnResize);
@@ -149,6 +166,73 @@ export class SongKotaete extends BaseSong {
         this.skipForegroundGrass = true;
         // ctx として this を渡す(isMobile / camera / scene / starField を参照する)
         buildNightLake(THREE, this, this.lakeGroup, this.lakeItems);
+    }
+
+    // 水面に散らした光の点。拍(ビート)に合わせて一斉に瞬く = 湖が音楽で呼吸する。
+    createBeatSparkles() {
+        const N = this.isMobile ? 40 : 80;
+        const geo = new THREE.BufferGeometry();
+        const pos = new Float32Array(N * 3);
+        const phase = new Float32Array(N);
+        for (let i = 0; i < N; i++) {
+            pos[i * 3] = (Math.random() - 0.5) * 60;             // x: ±30
+            pos[i * 3 + 1] = WATER_Y + 0.06;                     // 水面のすぐ上
+            pos[i * 3 + 2] = this.camera.position.z - 2 - Math.random() * 60; // 手前〜対岸
+            phase[i] = Math.random() * Math.PI * 2;
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        this._sparklePhase = phase;
+        const mat = new THREE.PointsMaterial({
+            map: this.glowTexture,
+            size: 0.5,
+            transparent: true,
+            opacity: 0.12,
+            depthWrite: false,
+            depthTest: false,
+            blending: THREE.AdditiveBlending,
+            color: new THREE.Color('#bfe6ff'),
+        });
+        const pts = new THREE.Points(geo, mat);
+        pts.renderOrder = 3;
+        this.scene.add(pts);
+        this.beatSparkles = pts;
+    }
+
+    // ミクの「水鏡」の映り込み。波紋(reflectWobble)で左右に揺れ歪む。
+    createMikuReflection() {
+        const c = document.createElement('canvas');
+        c.width = 96; c.height = 256;
+        const x = c.getContext('2d');
+        // 上(水際)が明るく下へ薄れる縦のにじみ。中央に芯。
+        const grad = x.createLinearGradient(0, 0, 0, 256);
+        grad.addColorStop(0, 'rgba(255,255,255,0.85)');
+        grad.addColorStop(0.25, 'rgba(200,235,255,0.5)');
+        grad.addColorStop(0.7, 'rgba(150,210,255,0.18)');
+        grad.addColorStop(1, 'rgba(120,190,255,0)');
+        x.fillStyle = grad;
+        // ぼかした縦長の楕円で「人影」を示唆
+        x.beginPath();
+        x.ellipse(48, 70, 26, 64, 0, 0, Math.PI * 2);
+        x.fill();
+        x.fillRect(30, 60, 36, 180);
+        this._reflectTex = new THREE.CanvasTexture(c);
+
+        const mat = new THREE.SpriteMaterial({
+            map: this._reflectTex,
+            transparent: true,
+            opacity: 0.0,
+            depthWrite: false,
+            depthTest: false,
+            blending: THREE.AdditiveBlending,
+            color: new THREE.Color('#7fe3ea'),
+        });
+        const spr = new THREE.Sprite(mat);
+        spr.center.set(0.5, 1.0);   // 上端(水際)を基準に下へ伸びる
+        spr.scale.set(3.4, 6.2, 1);
+        spr.position.set(this.mikuPos.x, WATER_Y + 0.05, this.mikuPos.z + 0.4);
+        spr.renderOrder = 2;
+        this.scene.add(spr);
+        this.mikuReflection = spr;
     }
 
     createTextures() {
@@ -257,6 +341,22 @@ export class SongKotaete extends BaseSong {
         const spine = this.currentVRM.humanoid.getNormalizedBoneNode('spine');
         if (spine) spine.rotation.x = this.mikuPulse * 0.06;
 
+        // 視線追従: 既定はプレイヤー(カメラ)を見て、触れた直後はその場所へ目を移す
+        this.lookBlend = Math.max(0, this.lookBlend - deltaSec * 0.5);
+        const head = this.currentVRM.humanoid.getNormalizedBoneNode('head');
+        const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
+        const tgt = (this._lookScratch || (this._lookScratch = new THREE.Vector3()));
+        tgt.copy(this.camera.position).lerp(this.lookTarget, this.lookBlend);
+        if (head) this.lookAtTarget(head, tgt, 0.6, 0.5, 1.0);
+        if (neck) this.lookAtTarget(neck, tgt, 0.35, 0.3, 0.5);
+
+        // 微笑み(触れられた直後・歌唱パルスで強まる)。VRM0/1で表情キー名が違うので両対応。
+        if (this.currentVRM.expressionManager) {
+            const smile = THREE.MathUtils.clamp(0.15 + this.lookBlend * 0.5 + this.mikuPulse * 0.2, 0, 0.85);
+            try { this.currentVRM.expressionManager.setValue('happy', smile); } catch (_) {}
+            try { this.currentVRM.expressionManager.setValue('joy', smile); } catch (_) {}
+        }
+
         if (this.mikuGlow) {
             this.mikuGlow.position.set(this.mikuPos.x, WATER_Y + 4.0, this.mikuPos.z - 0.5);
             this.mikuGlow.material.opacity = 0.32 + this.mikuPulse * 0.4;
@@ -268,6 +368,78 @@ export class SongKotaete extends BaseSong {
 
     reactMiku(strength = 1) {
         this.mikuPulse = Math.min(1, this.mikuPulse + strength);
+    }
+
+    // 指定ボーンを目標ワールド座標へ向ける(ヨー/ピッチをクランプ)。front=ローカル+Z前提。
+    lookAtTarget(bone, targetWorldPos, maxYaw = 0.6, maxPitch = 0.5, blend = 1) {
+        if (!bone || !this.currentVRM) return;
+        const boneWorldPos = bone.getWorldPosition(new THREE.Vector3());
+        const diff = targetWorldPos.clone().sub(boneWorldPos);
+        const localDiff = diff.applyQuaternion(this.currentVRM.scene.quaternion.clone().invert());
+        let yaw = Math.atan2(localDiff.x, localDiff.z);
+        let pitch = -Math.atan2(localDiff.y, Math.sqrt(localDiff.x * localDiff.x + localDiff.z * localDiff.z));
+        yaw = THREE.MathUtils.clamp(yaw, -maxYaw, maxYaw);
+        pitch = THREE.MathUtils.clamp(pitch, -maxPitch, maxPitch);
+        bone.rotation.y = yaw * blend;
+        bone.rotation.x = pitch * blend;
+    }
+
+    // =====================================================================
+    // ビート(拍)同期 — 聴いている間ずっと湖がきらめき、オンビートで報酬
+    // =====================================================================
+    _beatInfo() {
+        const p = playerManager.player;
+        if (!p || typeof p.findBeat !== 'function') return null;
+        const pos = p.timer ? p.timer.position : this.currentTime;
+        const beat = p.findBeat(pos);
+        if (!beat || !(beat.duration > 0)) return null;
+        return { beat, pos };
+    }
+
+    // いま拍頭付近か(オンビート)？窓は拍長の22%か130msの短い方。
+    _isOnBeat() {
+        const bi = this._beatInfo();
+        if (!bi) return false;
+        const { beat, pos } = bi;
+        const delta = Math.min(pos - beat.startTime, (beat.startTime + beat.duration) - pos);
+        return delta < Math.min(130, beat.duration * 0.22);
+    }
+
+    updateBeat(dt) {
+        const bi = this._beatInfo();
+        if (bi) {
+            const { beat } = bi;
+            this._beatStart = beat.startTime;
+            this._beatDuration = beat.duration;
+            if (beat.startTime !== this._lastBeatStart) {
+                this._lastBeatStart = beat.startTime;
+                this.beatPulse = 1;            // 拍頭で点火 → 水面と蛍が一斉に瞬く
+            }
+        }
+        this.beatPulse = Math.max(0, this.beatPulse - dt * 2.6);
+    }
+
+    updateSparkles(now) {
+        if (!this.beatSparkles) return;
+        const t = now * 0.001;
+        const twinkle = 0.06 + 0.05 * Math.sin(t * 3.0);
+        const m = this.beatSparkles.material;
+        m.opacity = (twinkle + this.beatPulse * 0.6) * this.lakeFade;
+        m.size = 0.45 + this.beatPulse * 0.7;
+        m.color.copy(this.answerColor).lerp(this._white, 0.7);
+    }
+
+    updateReflection(now, dt) {
+        if (!this.mikuReflection) return;
+        this.reflectWobble = Math.max(0, this.reflectWobble - dt * 0.8);
+        const t = now * 0.001;
+        const m = this.mikuReflection;
+        const wob = this.reflectWobble;
+        m.scale.x = 3.4 * (1 + Math.sin(t * 2.2) * 0.04 + wob * 0.18 * Math.sin(t * 9));
+        m.position.x = this.mikuPos.x + Math.sin(t * 1.6) * 0.12 + wob * 0.6 * Math.sin(t * 11);
+        m.position.z = this.mikuPos.z + 0.4;
+        m.material.opacity = (this.mikuLoaded ? (0.20 + this.mikuPulse * 0.18 + wob * 0.15) : 0) * this.lakeFade;
+        m.material.color.copy(this.answerColor).lerp(this._white, 0.55);
     }
 
     // =====================================================================
@@ -293,10 +465,25 @@ export class SongKotaete extends BaseSong {
         this.touchCount++;
         this.dismissFirstInteractable();
 
-        this.spawnRipple(hit);
+        // ミクが触れた場所へ視線を移す＋水鏡の反射が波紋で揺れる
+        this.lookTarget.copy(hit);
+        this.lookBlend = 1;
+        this.reflectWobble = Math.min(1, this.reflectWobble + 0.8);
+
+        // オンビート判定: 拍頭の±一定窓で触れると「強い波紋＋澄んだ音」のごほうび
+        const strong = this._isOnBeat();
+        this.spawnRipple(hit, strong);
         this.accumulateColor(hit);
         this.spawnMote(hit);
-        this.reactMiku(0.7);
+        if (strong) {
+            this.beatPulse = 1;
+            this.spawnMote(hit);            // 光を一粒増やす
+            this.reactMiku(1.1);
+            sfx.play('kotaete_resonance');  // 欠損時は無音
+        } else {
+            this.reactMiku(0.7);
+            sfx.play('ripple');
+        }
 
         // 近くに漂う歌詞があれば共鳴(明るく・速く対岸へ)。
         // 無いときだけ今の歌詞を立ち上げるが、連打での乱発を防ぐため
@@ -326,24 +513,31 @@ export class SongKotaete extends BaseSong {
     // =====================================================================
     // 波紋 / 歌詞 / 光の粒
     // =====================================================================
-    spawnRipple(point) {
+    spawnRipple(point, strong = false) {
         const geo = new THREE.PlaneGeometry(1, 1);
         geo.rotateX(-Math.PI / 2);
         const mat = new THREE.MeshBasicMaterial({
             map: this.ringTexture,
             transparent: true,
-            opacity: 0.75,
+            opacity: strong ? 0.95 : 0.75,
             depthWrite: false,
             depthTest: false,                  // 水面(renderOrder 1, ほぼ不透明)の上に必ず描く
             blending: THREE.AdditiveBlending,
-            color: this.answerColor.clone().lerp(this._white, 0.55),
+            // オンビートは白く強く輝く
+            color: this.answerColor.clone().lerp(this._white, strong ? 0.85 : 0.55),
         });
+        const startScale = strong ? 2.2 : 1.6;
         const mesh = new THREE.Mesh(geo, mat);
         mesh.position.set(point.x, WATER_Y + 0.03, point.z);
-        mesh.scale.setScalar(1.6);
+        mesh.scale.setScalar(startScale);
         mesh.renderOrder = 3;                  // 水面より後(=上)に描画
         this.scene.add(mesh);
-        this.ripples.push({ mesh, mat, geo, life: 0, dur: 1.9 });
+        this.ripples.push({
+            mesh, mat, geo, life: 0,
+            dur: strong ? 2.3 : 1.9,
+            startScale, maxScale: strong ? 27 : 18.6,
+            baseOpacity: strong ? 0.95 : 0.6,
+        });
     }
 
     updateRipples(dt) {
@@ -357,8 +551,8 @@ export class SongKotaete extends BaseSong {
                 this.ripples.splice(i, 1);
                 continue;
             }
-            r.mesh.scale.setScalar(1.6 + t * 17);
-            r.mat.opacity = 0.55 * (1 - t);
+            r.mesh.scale.setScalar(r.startScale + t * (r.maxScale - r.startScale));
+            r.mat.opacity = r.baseOpacity * (1 - t);
         }
     }
 
@@ -545,10 +739,13 @@ export class SongKotaete extends BaseSong {
         this.lakeFade += (1 - this.lakeFade) * Math.min(1, dt * 0.6);
         for (const item of this.lakeItems) item.update(now, dt, this.lakeFade);
 
+        this.updateBeat(dt);          // 拍の検出 → beatPulse
         this.updateMiku(now, dt);
         this.updateRipples(dt);
         this.updateLyrics(dt);
         this.updateMotes(dt);
+        this.updateSparkles(now);     // 水面のきらめき(拍で一斉に瞬く)
+        this.updateReflection(now, dt); // 水鏡の反射ゆらぎ
 
         // 歌詞の自動流れ + 歌唱パルス(チュートリアル中は止める)
         if (!this.isTutorialActive) {
@@ -696,6 +893,9 @@ export class SongKotaete extends BaseSong {
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
         if (this.mikuGlow) { this.scene.remove(this.mikuGlow); this.mikuGlow.material.dispose(); }
+        if (this.beatSparkles) { this.scene.remove(this.beatSparkles); this.beatSparkles.geometry.dispose(); this.beatSparkles.material.dispose(); }
+        if (this.mikuReflection) { this.scene.remove(this.mikuReflection); this.mikuReflection.material.dispose(); }
+        this._reflectTex && this._reflectTex.dispose();
         this.glowTexture && this.glowTexture.dispose();
         this.ringTexture && this.ringTexture.dispose();
 
