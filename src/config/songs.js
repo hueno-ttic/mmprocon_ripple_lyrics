@@ -31,32 +31,6 @@ export const SONGS = [
     }
   },
   {
-    id: 'after',
-    title: 'アフター・ザ・カーテン',
-    artist: 'Rulmry',
-    vocal: '初音ミク',
-    songUrl: 'https://piapro.jp/t/zoqO/20251214200738',
-    lyricUrl: 'https://piapro.jp/t/EVO2',
-    video: {
-      beatId: 4827294,
-      chordId: 2963755,
-      repetitiveSegmentId: 3086262,
-      lyricId: 126591,
-      lyricDiffId: 28627
-    },
-    themeQuestion: '終わりの後に何が残るのか',
-    color: '#1D9E75',
-    thumbnail: 'assets/thumbnails/after.jpg',
-    waterBehavior: 'residue',
-    tutorial: {
-      steps: [
-        { icon: '🔦', text: '指やマウスでスポットライトを動かし、暗闇に隠れた歌詞とミクを照らそう' },
-        { icon: '🎉', text: '歌詞をじっくり照らし切ると、光って弾け、紙吹雪となって舞い降ります' },
-        { icon: '🕯', text: '弾けた歌詞は客席の灯にもなり、終わりの後も消えずに残り続けます' },
-      ]
-    }
-  },
-  {
     id: 'shutter',
     title: 'シャッターチャンス',
     artist: '夜未アガリ',
@@ -80,6 +54,32 @@ export const SONGS = [
         { icon: '📸', text: 'クリックまたはEnterキーでシャッター。動き回る被写体を画面に収めよう' },
         { icon: '⭐', text: '被写体を画面に良く収めて、サビ／象徴的な歌詞が映る瞬間に撮ると★ベストショット — 笑顔になります' },
         { icon: '🎞️', text: '撮った写真は曲の終盤、1枚のコンタクトシートに集約されます(★は丸印付き・最大12枚)' },
+      ]
+    }
+  },
+  {
+    id: 'after',
+    title: 'アフター・ザ・カーテン',
+    artist: 'Rulmry',
+    vocal: '初音ミク',
+    songUrl: 'https://piapro.jp/t/zoqO/20251214200738',
+    lyricUrl: 'https://piapro.jp/t/EVO2',
+    video: {
+      beatId: 4827294,
+      chordId: 2963755,
+      repetitiveSegmentId: 3086262,
+      lyricId: 126591,
+      lyricDiffId: 28627
+    },
+    themeQuestion: '終わりの後に何が残るのか',
+    color: '#1D9E75',
+    thumbnail: 'assets/thumbnails/after.jpg',
+    waterBehavior: 'residue',
+    tutorial: {
+      steps: [
+        { icon: '🔦', text: '指やマウスでスポットライトを動かし、暗闇に隠れた歌詞とミクを照らそう' },
+        { icon: '🎉', text: '歌詞をじっくり照らし切ると、光って弾け、紙吹雪となって舞い降ります' },
+        { icon: '🕯', text: '弾けた歌詞は客席の灯にもなり、終わりの後も消えずに残り続けます' },
       ]
     }
   },
