@@ -1,7 +1,10 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
+import { settleSpringBones } from '../utils/vrm.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWordsByMinLength, findGroupForWord } from '../utils/lyricGroups.js';
 
@@ -104,6 +107,22 @@ export class SongTakeover extends BaseSong {
         this.mikuGlowMat = null;
         this.mikuGlowTexture = null;
 
+        // ── 完走で光の中から実体化する3DミクVRM ──
+        // 旧実装は完走時にフラットなツインテール・シルエットを拡大して「実体化」していたが、
+        // 他5曲と同じ本物のVRMミクを、背後のシアン光からせり上がらせて登場させる。
+        this.currentVRM = null;
+        this.mikuVrmReady = false;
+        this.isMobile = window.innerWidth < 768;
+        this.mikuAmbient = null;
+        this.mikuKeyLight = null;
+        this.mikuRimLight = null;
+        this._vrmT0 = performance.now();
+        this._vrmLastRel = 0;
+        // 実体化の基準姿勢（光の下から浮上 → 画面中央へ収束）
+        this._mikuVrmBaseY = -1.5;
+        this._mikuVrmBaseZ = -2.2;
+        this._mikuVrmScale = 4.2;
+
         this.boundOnResize = this.onResize.bind(this);
     }
 
@@ -111,6 +130,8 @@ export class SongTakeover extends BaseSong {
         this.initThree();
         this.initDebris();
         this.initMikuAnchor();
+        this.initMikuLights();
+        this.loadMiku();
         this.initUI();
         this._initCrypto(); // async, completes well before first phrase
         window.addEventListener('resize', this.boundOnResize);
@@ -149,10 +170,15 @@ export class SongTakeover extends BaseSong {
         this.camera.position.set(0, 0, 10);
 
         this.renderer = new THREE.WebGLRenderer({ antialias: quality.antialias });
-        this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.setPixelRatio(quality.effectivePixelRatio());
+        this.renderer.setSize(window.innerWidth, window.innerHeight);
         this.renderer.__qpr = quality.effectivePixelRatio();
-        this.renderer.domElement.style.cssText = 'position:absolute;top:0;left:0;z-index:1;';
+        // width/height:100% を必ず明示する。cssText で全消しすると setSize が付けた
+        // CSSサイズが消え、高DPI環境ではキャンバスが描画バッファの実ピクセル寸法
+        // (= window×devicePixelRatio) で表示され、ウィンドウからはみ出して画面内容が
+        // 右へずれる（ミクが右端に寄って見えるバグの原因）。
+        this.renderer.domElement.style.cssText =
+            'position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;';
         this.songWrapper.appendChild(this.renderer.domElement);
     }
 
@@ -259,6 +285,116 @@ export class SongTakeover extends BaseSong {
         this.mikuGlowSprite.scale.set(7, 7, 1);
         this.mikuGlowSprite.position.set(0, 0.5, -4.2); // シルエットより少し奥
         this.scene.add(this.mikuGlowSprite);
+    }
+
+    // ── VRMミク(MToon)用ライト ──
+    // デブリ(LineBasicMaterial)やアンカー(Sprite)は無光で描画されるため、
+    // ここで足すライトは完走時に現れるVRMミクだけを照らす（既存演出に影響なし）。
+    initMikuLights() {
+        this.mikuAmbient = new THREE.AmbientLight(0x66ffcc, 0.55);
+        this.scene.add(this.mikuAmbient);
+
+        // 正面キー光（顔・体を起こす）
+        this.mikuKeyLight = new THREE.DirectionalLight(0xffffff, 1.7);
+        this.mikuKeyLight.position.set(2.5, 5, 8);
+        this.scene.add(this.mikuKeyLight);
+
+        // 背後シアンのリム光（光の中から現れる逆光感）
+        this.mikuRimLight = new THREE.DirectionalLight(0x00ffaa, 2.6);
+        this.mikuRimLight.position.set(0, 3.5, -9);
+        this.scene.add(this.mikuRimLight);
+    }
+
+    // ── ミクVRMの読み込み。完走まで不可視で待機させる ──
+    loadMiku() {
+        const loader = new GLTFLoader();
+        loader.register((parser) => new VRMLoaderPlugin(parser));
+        loader.load(
+            import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
+            (gltf) => {
+                if (!this.isActive) { this.disposeVRM(gltf.userData.vrm); return; }
+                const vrm = gltf.userData.vrm;
+                this.currentVRM = vrm;
+                // 完走の瞬間に光の中から現れるまで隠しておく
+                vrm.scene.visible = false;
+                vrm.scene.position.set(0, this._mikuVrmBaseY, this._mikuVrmBaseZ);
+                vrm.scene.rotation.y = Math.PI; // y=0だと背中向き → π回して正面
+                vrm.scene.scale.setScalar(this._mikuVrmScale);
+                vrm.scene.traverse((obj) => {
+                    if (obj.isMesh) { obj.castShadow = false; obj.frustumCulled = false; }
+                });
+                this.setupReclaimPose(vrm);
+                settleSpringBones(vrm); // 出現時にツインテールが逆立たないよう静止状態へ
+                this.scene.add(vrm.scene);
+                this.mikuVrmReady = true;
+                console.log('[TAKEOVER] Miku VRM loaded.');
+            },
+            undefined,
+            (error) => { console.error('[TAKEOVER] Failed to load Miku VRM:', error); }
+        );
+    }
+
+    // 凱旋らしい落ち着いた立ち姿（腕は軽く下ろし、脚を僅かに開く）
+    setupReclaimPose(vrm) {
+        if (!vrm || !vrm.humanoid) return;
+        const g = (n) => vrm.humanoid.getNormalizedBoneNode(n);
+        const lU = g('leftUpperArm'),  rU = g('rightUpperArm');
+        const lL = g('leftLowerArm'),  rL = g('rightLowerArm');
+        if (lU) lU.rotation.z = -Math.PI / 2.9;
+        if (rU) rU.rotation.z =  Math.PI / 2.9;
+        if (lL) lL.rotation.y =  Math.PI / 14;
+        if (rL) rL.rotation.y = -Math.PI / 14;
+        const lUl = g('leftUpperLeg'), rUl = g('rightUpperLeg');
+        if (lUl) lUl.rotation.z =  Math.PI / 32;
+        if (rUl) rUl.rotation.z = -Math.PI / 32;
+    }
+
+    // 完走中の毎フレーム: 光からせり上がり、フェードイン＋拡大＋前進する
+    _updateMikuReclaimVRM(ease, breathe) {
+        const vrm = this.currentVRM;
+        if (!vrm) return;
+        if (!vrm.scene.visible) vrm.scene.visible = true;
+
+        // 光の中からせり上がり、画面中央の定位置へ収束（出現時から中央寄りに）
+        const y = (this._mikuVrmBaseY - 0.4) + ease * 0.4 + breathe * 0.02;
+        const z = (this._mikuVrmBaseZ - 0.7) + ease * 0.7;
+        const sc = this._mikuVrmScale * (0.92 + ease * 0.08);
+        vrm.scene.position.set(0, y, z);
+        vrm.scene.scale.setScalar(sc);
+
+        // マテリアルには一切触れない。
+        // このVRMの顔は「不透明の肌」の上に「半透明の目・眉・まつ毛・口」を
+        // renderOrderで重ねて描いており、ここで全マテリアルを transparent 化すると
+        // 不透明の肌が透明パスへ移って描画順が崩れ、上乗せの目鼻が肌に覆われて
+        // 「顔が消える」。出現の演出は終局オーバーレイの暗転明け＋背後グロー＋
+        // せり上がりで担い、顔の重ね描画はそのまま保つ。
+
+        // 軽い呼吸
+        const spine = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('spine');
+        if (spine) spine.rotation.x = breathe * 0.03 - 0.015;
+
+        // スプリングボーン更新（ツインテールが自然に揺れる）
+        const rel = (performance.now() - this._vrmT0) / 1000;
+        let dt = this._vrmLastRel ? Math.min(0.05, rel - this._vrmLastRel) : 0.016;
+        if (dt <= 0) dt = 0.016;
+        this._vrmLastRel = rel;
+        if (typeof vrm.update === 'function') vrm.update(dt);
+    }
+
+    disposeVRM(vrm) {
+        if (!vrm) return;
+        vrm.scene.traverse((obj) => {
+            if (obj.geometry) obj.geometry.dispose();
+            if (obj.material) {
+                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                mats.forEach((m) => {
+                    if (m.map) m.map.dispose();
+                    if (m.normalMap) m.normalMap.dispose();
+                    if (m.emissiveMap) m.emissiveMap.dispose();
+                    m.dispose();
+                });
+            }
+        });
     }
 
     initUI() {
@@ -1798,7 +1934,9 @@ export class SongTakeover extends BaseSong {
         this._completeFired = true;
         this._outcome = 'clear';
 
-        // 未解読のまま残った暗号歌詞を一掃（リザルトに居座るのを防ぐ／#120）
+        // 未解読のまま残った暗号歌詞を一掃（リザルトに居座るのを防ぐ／#120）。
+        // ただしこれは「発火時点で存在するもの」しか消せない。終局後も生成が続くと
+        // 残るため、生成側も _completeFired でガードしている（update内のspawn）。
         this._clearRemainingTargets();
 
         // 0) 静止/吸気: 解読済みの全タイルを一斉にシアンで満たす（タメ）
@@ -2210,23 +2348,35 @@ export class SongTakeover extends BaseSong {
         // サビ(isClimax)で少し速く・強く、解読率に応じてシアン→赤へ寄せる。
         if (this.mikuAnchorSprite && this.mikuAnchorMat) {
             if (this._mikuReclaim) {
-                // ── 完走: ミクが奥から実体化（シアン固定・前進・逆光発光） ──
-                this._reclaimT = Math.min(1, this._reclaimT + 0.012);
+                // ── 完走: ミクが背後のシアン光の中から実体化（3D VRM） ──
+                // クリア演出の発火は曲終わり約3秒前なので、中央へ到達する前に曲が
+                // 終わらないよう、ランプを速めて素早く画面中央へ収束させる。
+                this._reclaimT = Math.min(1, this._reclaimT + 0.018);
                 const ease = 1 - Math.pow(1 - this._reclaimT, 3); // easeOutCubic
                 this._mikuAnchorPhase += 0.04;
                 const breathe = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
-                this.mikuAnchorMat.color.copy(this._mikuColorCyan); // シアン固定（赤寄せを上書き）
-                this.mikuAnchorMat.opacity = Math.min(1, (0.16 + ease * 0.84) - breathe * 0.05 * ease);
-                const s = 7 + ease * 6; // 7 → 13
-                this.mikuAnchorSprite.scale.set(s, s, 1);
-                this.mikuAnchorSprite.position.z = -4 + ease * 2;   // -4 → -2 前進
-                this.mikuAnchorSprite.position.y = 0.5 + ease * 0.4;
+
+                // 背後のシアン逆光グロー＝ミクが現れる「光」。完走で強く灯す。
                 if (this.mikuGlowMat && this.mikuGlowSprite) {
-                    this.mikuGlowMat.opacity = ease * (0.4 + breathe * 0.18);
-                    const gs = 8 + ease * 11; // シルエットより一回り大きい逆光
+                    this.mikuGlowMat.color.copy(this._mikuColorCyan);
+                    this.mikuGlowMat.opacity = ease * (0.55 + breathe * 0.2);
+                    const gs = 9 + ease * 13;
                     this.mikuGlowSprite.scale.set(gs, gs, 1);
-                    this.mikuGlowSprite.position.y = this.mikuAnchorSprite.position.y;
-                    this.mikuGlowSprite.position.z = this.mikuAnchorSprite.position.z - 0.2;
+                    this.mikuGlowSprite.position.set(0, 0.4, this._mikuVrmBaseZ - 0.6);
+                }
+
+                if (this.currentVRM) {
+                    // フラットなシルエットは退場し、光の中の3Dミクへバトンタッチ
+                    this.mikuAnchorMat.opacity = Math.max(0, 0.16 * (1 - ease * 1.6));
+                    this._updateMikuReclaimVRM(ease, breathe);
+                } else {
+                    // フォールバック: VRM未ロード時は従来のシルエット実体化
+                    this.mikuAnchorMat.color.copy(this._mikuColorCyan); // シアン固定（赤寄せを上書き）
+                    this.mikuAnchorMat.opacity = Math.min(1, (0.16 + ease * 0.84) - breathe * 0.05 * ease);
+                    const s = 7 + ease * 6; // 7 → 13
+                    this.mikuAnchorSprite.scale.set(s, s, 1);
+                    this.mikuAnchorSprite.position.z = -4 + ease * 2;   // -4 → -2 前進
+                    this.mikuAnchorSprite.position.y = 0.5 + ease * 0.4;
                 }
             } else {
                 const speed = this.isClimax ? 0.085 : 0.05;
@@ -2358,6 +2508,18 @@ export class SongTakeover extends BaseSong {
         }
         if (this.mikuGlowMat)     { this.mikuGlowMat.dispose();     this.mikuGlowMat = null; }
         if (this.mikuGlowTexture) { this.mikuGlowTexture.dispose(); this.mikuGlowTexture = null; }
+
+        // 3DミクVRM・専用ライトを除去・解放
+        if (this.currentVRM) {
+            this.scene.remove(this.currentVRM.scene);
+            this.disposeVRM(this.currentVRM);
+            this.currentVRM = null;
+        }
+        this.mikuVrmReady = false;
+        [this.mikuAmbient, this.mikuKeyLight, this.mikuRimLight].forEach((l) => {
+            if (l && this.scene) this.scene.remove(l);
+        });
+        this.mikuAmbient = this.mikuKeyLight = this.mikuRimLight = null;
 
         const styleEl = document.getElementById('takeover-style');
         if (styleEl) styleEl.parentNode.removeChild(styleEl);
