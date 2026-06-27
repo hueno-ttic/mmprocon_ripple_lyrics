@@ -81,6 +81,8 @@ export class SongAfter extends BaseSong {
         // 残光システム
         this.kindledCount = 0;              // 照らし切った歌詞の累計
         this.litThreshold = 2200;           // 照らし切り判定に必要な累計照射時間(ms)(しっかり当てないと弾けない)
+        this.pressBoostMs = 360;            // タップ(押下)1回ごとに上乗せする照射量 — 押す毎に段階的に膨らむ手応え
+        this._pressBoostFrames = 0;         // 押下直後、spotOnの立ち上がりを待つ猶予フレーム(当たった時点で一度だけ消費)
         this.maxSeatLights = this.isMobile ? 60 : 100;
 
         // バラ
@@ -160,6 +162,11 @@ export class SongAfter extends BaseSong {
 
         this.renderer.shadowMap.enabled = quality.useShadows;
         this.renderer.shadowMap.type = THREE.PCFShadowMap;
+        // 影マップは毎フレーム再計算しない。ミクの動きは緩やかで隔フレーム更新でも差は出ず、
+        // VRMスキンメッシュのシャドウパス再描画(=実質もう1回のシーン描画)を約半減できる。
+        // render()側で needsUpdate を1フレームおきに立てて運用する。
+        this.renderer.shadowMap.autoUpdate = false;
+        this._shadowTick = 0;
 
         // タッチドラッグでスポットライトを動かせるよう、ブラウザ既定のスクロール/ズームを無効化
         this.renderer.domElement.style.touchAction = 'none';
@@ -230,7 +237,7 @@ export class SongAfter extends BaseSong {
         this.rimLight.decay = 1.3;
         this.rimLight.distance = 28;
         this.rimLight.castShadow = !this.isMobile; // ミクの影をカメラ手前へ長く伸ばす
-        if (this.rimLight.shadow) { this.rimLight.shadow.mapSize.set(1024, 1024); this.rimLight.shadow.bias = -0.0005; }
+        if (this.rimLight.shadow) { this.rimLight.shadow.mapSize.set(512, 512); this.rimLight.shadow.bias = -0.0005; }
         this.rimLight.target.position.set(0, 1.2, -2);
         this.scene.add(this.rimLight);
         this.scene.add(this.rimLight.target);
@@ -743,6 +750,8 @@ export class SongAfter extends BaseSong {
 
         // 押下開始: ここから照射が点灯し、ドラッグで追尾する
         this.isPointerDown = true;
+        // この押下を「一段ぶんの膨らみ」として消費させる(spotOn立ち上がりを待つ猶予つき)
+        this._pressBoostFrames = 8;
         if (event.pointerId != null && this.songWrapper.setPointerCapture) {
             try { this.songWrapper.setPointerCapture(event.pointerId); } catch (e) { /* noop */ }
         }
@@ -1020,6 +1029,7 @@ export class SongAfter extends BaseSong {
             life: 14000,        // 安全上限(通常は発話後フェードで消える)
             hoverProgress: 0,
             litTime: 0,        // 累計照射時間(ms)
+            swell: 0,          // 膨らみ量(照らすほど増え、しぼまない=ratchet)
             kindled: false,    // 照らし切り済みフラグ
             kindleFlash: 0,
             baseY: mesh.position.y,
@@ -1400,6 +1410,10 @@ export class SongAfter extends BaseSong {
         // 2. Update Interactive 3D Lyrics
         let focusW = 0; // このフレームで最も強く照らされている歌詞の照射度(ミクの注視対象選び)
         let softW = 0, newestBirth = -Infinity; // 照らしていないとき、出たばかりの歌詞へ送る視線
+        // タップ1回ぶんの照射上乗せ。押下からspotOnが立ち上がるまで数フレーム待ち、
+        // ビーム内の歌詞に当たった最初のフレームで一度だけ消費する(押す毎に段階的に膨らむ)。
+        const pressBoost = this._pressBoostFrames > 0 ? this.pressBoostMs : 0;
+        let pressBoostUsed = false;
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const mesh = this.activeSprites[i];
             const ud = mesh.userData;
@@ -1424,11 +1438,13 @@ export class SongAfter extends BaseSong {
             // 自動的に弾けない(自分で照らした歌詞だけが紙吹雪になる)。
             if (litBySpot && f < 0.3) {
                 ud.litTime += dtMs;
+                if (pressBoost > 0) { ud.litTime += pressBoost; pressBoostUsed = true; } // 押下1回ぶんの段階的な膨らみ
                 if (!ud.kindled && ud.litTime >= this.litThreshold) {
                     ud.kindled = true;
                     ud.kindleFlash = 1.0;
                     ud.bursting = true;
                     ud.burstT = 0;
+                    ud.preBurstScale = mesh.scale.x;   // 膨らみ切った大きさから続けて弾けさせる(破裂直前の縮みを防ぐ)
                     this.burstLyricToConfetti(mesh.position.clone(), ud.wordCount);
                     this.spawnSeatLight(mesh.position.clone());
                 }
@@ -1439,7 +1455,7 @@ export class SongAfter extends BaseSong {
             if (ud.bursting) {
                 ud.burstT += dt;
                 const bt = Math.min(1, ud.burstT / 0.35);
-                const bs = 1 + bt * 1.8;
+                const bs = (ud.preBurstScale || 1) * (1 + bt * 1.6);
                 mesh.scale.set(bs, bs, 1);
                 mesh.material.opacity = Math.max(0, 1 - bt);
                 mesh.material.emissive.setHSL(0.12, 0.9, Math.min(0.95, 0.4 + 0.55 * (1 - bt)));
@@ -1469,12 +1485,18 @@ export class SongAfter extends BaseSong {
             ud.pulseProgress += ((isWordActive ? 1 : 0) - ud.pulseProgress) * 0.2;
             const pulse = ud.pulseProgress;
             const fit = ud.fitScale || 1;
-            const s = fit * (1.0 + p * 0.35) * (1.0 + pulse * 0.25) * (1.0 + ud.kindleFlash * 0.15);
+            // ── 膨らみ(照らす手応え) ──
+            // 照らした瞬間にはっきり一段(hoverBump)、さらに照射を重ねるほど(litRatio)進行的に膨らみ、
+            // 照らし切る寸前まで膨らみ続けてそのまま破裂へ繋ぐ。いちど膨らんだらしぼまない(ratchet)。
+            const litRatio = Math.min(1, ud.litTime / this.litThreshold);
+            const hoverBump = isIlluminated ? 0.16 : 0;       // 照射中のはっきりした膨らみ
+            const targetSwell = hoverBump + litRatio * 0.62;  // 破裂へ向けた段階的な増大
+            ud.swell = Math.max(ud.swell || 0, targetSwell);  // 一度膨らんだ段階からしぼまない
+            const s = fit * (1.0 + ud.swell) * (1.0 + pulse * 0.20) * (1.0 + ud.kindleFlash * 0.15);
             mesh.scale.set(s, s, 1);
 
             // 発光: 暗いステージでも黒くつぶれないよう常にほのかに自己発光。
             // 照らし切るほど暖色へ寄り、スポット/歌唱で強く光る。
-            const litRatio = Math.min(1, ud.litTime / this.litThreshold);
             const hue = 0.46 + pulse * 0.05 - litRatio * 0.38; // 緑 → 暖色
             const baseGlow = 0.26;                              // 常時のほのかな白光(発話後も黒くならない)
             let lum = Math.min(0.92, baseGlow + 0.5 * p + pulse * 0.4 + ud.kindleFlash * 0.5 + (ud.kindled ? 0.15 : 0));
@@ -1503,6 +1525,10 @@ export class SongAfter extends BaseSong {
                 this.activeSprites.splice(i, 1);
             }
         }
+        // 押下の猶予フレームを消化。ビーム内の歌詞に当たって消費したら即打ち切り、
+        // 当たらないまま(空タップ)なら時間切れで自然に失効させる。
+        if (this._pressBoostFrames > 0) this._pressBoostFrames = pressBoostUsed ? 0 : this._pressBoostFrames - 1;
+
         // 照らされた歌詞があればそれを強く注視。無ければ最新の歌詞へ控えめに視線を送る。
         // どちらも無ければ重み0 → ミクは正面へ戻る。
         if (focusW > 0.12) {
@@ -1625,6 +1651,10 @@ export class SongAfter extends BaseSong {
 
     render() {
         if (this.renderer && this.scene && this.camera) {
+            // 影マップ更新は1フレームおき。終演で舞台が暗転(finaleP>0.5)してからは
+            // 床の影が見えなくなるので更新を止め、無駄なシャドウパスを完全に省く。
+            this.renderer.shadowMap.needsUpdate =
+                this.finaleP < 0.5 && (this._shadowTick++ & 1) === 0;
             this.renderer.render(this.scene, this.camera);
         }
     }
