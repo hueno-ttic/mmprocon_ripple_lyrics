@@ -52,6 +52,28 @@ export class SongTakeover extends BaseSong {
         this._bgColorFrom = new THREE.Color(0x2a0008);
         this._bgColorTo = new THREE.Color(0x001712);
 
+        // ── 陣取り（緑の制圧領域 vs 赤の侵食）リアルタイムモデル ──
+        // 旧実装は takenCount/totalCount の単調増加で侵食率が決まる静的モデルだった。
+        // ここでは「制圧率 greenCoverage(0〜1)」を主指標にし、タップで広げ・無操作で
+        // じわじわ赤に押し戻される綱引きにする。曲終わりに 0.5 以上なら CLEAR。
+        this.greenCoverage = 0.12;       // 開幕は赤優勢（敵に支配された状態）
+        this.territoryEl = null;         // 緑（奪還）領域オーバーレイ（下からせり上がる）
+        this._lastFrameAt = 0;           // 制圧率の時間減衰用 dt 計測（performance.now）
+        this._lastSummaryAt = 0;         // 成果サマリー更新の間引き用
+        this._outcome = null;            // 'clear' | 'failed'（終局演出の分岐）
+        // チューニング（実機で踊らせて調整しやすいよう定数化）
+        this._coverageGainBase = 0.075;     // 1解読あたりの制圧獲得
+        this._coverageGainClimax = 0.055;   // サビは的が多いので一手の重みを下げる
+        this._coverageComboBonus = 0.02;    // コンボ中の上乗せ
+        this._coverageDecayBase = 0.020;    // 無操作時の毎秒減衰（赤の再侵食）
+        this._coverageDecayClimax = 0.034;  // サビは侵食が速い＝疾走感
+        this._clearThreshold = 0.5;         // 画面の半分以上が緑なら CLEAR
+
+        // ── スタート時の WARNING 警告演出 ──
+        this.warningEl = null;
+        this._warningShown = false;      // WARNING は一度だけ（カーテンが開く瞬間に出す）
+        this._introTimers = [];          // WARNING のタイマー群
+
         // ── ミクの視覚アンカー（軽量ツインテール・シルエット） ──
         // 他5曲はVRMミクが登場するが、TAKEOVERだけ不在で密度差が出るため、
         // 中央に「ミクがそこにいる」象徴を1つだけ常設し、リズムで淡く脈動させる。
@@ -100,6 +122,10 @@ export class SongTakeover extends BaseSong {
             if (!r.width && !r.height) return null;
             return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }, { label: 'タップして復号' });
+
+        // ※ WARNING は init では出さない。ここで出すと選曲→曲ロードのカーテン裏で
+        //   2.4秒が経過し、幕が開く頃には消えてしまう。実際にシーンが公開される
+        //   タイミング（タイマー準備完了）で update() 側から一度だけ起動する。
     }
 
     initThree() {
@@ -128,9 +154,11 @@ export class SongTakeover extends BaseSong {
             const m = new THREE.LineSegments(this._debrisEdgesGeo, this._debrisMat);
             m.position.set((Math.random()-0.5)*45, (Math.random()-0.5)*28, -8 - Math.random()*32);
             m.rotation.set(Math.random()*Math.PI*2, Math.random()*Math.PI*2, Math.random()*Math.PI*2);
+            // 疾走感: 回転を速め＋カメラ手前へ流れる前進速度を持たせる
             m.userData.rot = new THREE.Vector3(
-                (Math.random()-0.5)*0.009, (Math.random()-0.5)*0.009, (Math.random()-0.5)*0.009
+                (Math.random()-0.5)*0.018, (Math.random()-0.5)*0.018, (Math.random()-0.5)*0.018
             );
+            m.userData.vz = 0.05 + Math.random()*0.09; // 奥→手前へ流れる速度
             this.scene.add(m);
             this.debris.push(m);
         }
@@ -414,21 +442,45 @@ export class SongTakeover extends BaseSong {
                     }
                 }
 
-                /* ── 侵食オーバーレイ（解読率に応じてJSがopacityを制御） ── */
+                /* ── 陣取りオーバーレイ: 上から赤(敵)、下から緑(奪還)がせめぎ合う ── */
+                /* 高さは JS が制圧率(greenCoverage)から毎フレーム制御する。 */
                 .to-erosion-overlay {
                     position: absolute;
                     top: 0; left: 0;
-                    width: 100%; height: 100%;
+                    width: 100%; height: 50%;   /* JSが (1 - greenCoverage) を反映 */
                     background:
-                        linear-gradient(rgba(0, 255, 170, 0) 50%, rgba(0, 80, 56, 0.16) 50%),
-                        radial-gradient(circle at 50% 50%, rgba(0, 255, 170, 0.10) 0%, rgba(0, 80, 56, 0.30) 100%);
-                    background-size: 100% 4px, 100% 100%;
+                        linear-gradient(to top,
+                            rgba(255, 40, 48, 0) 0%,
+                            rgba(180, 20, 40, 0.30) 55%,
+                            rgba(255, 58, 58, 0.46) 100%);
+                    border-bottom: 2px solid rgba(255, 58, 58, 0.85);
+                    box-shadow: 0 6px 26px rgba(255, 58, 58, 0.5);
                     mix-blend-mode: screen;
-                    opacity: 0;
-                    transition: opacity 0.8s ease;
+                    transition: height 0.22s linear;
                     pointer-events: none;
                     z-index: 6;
                 }
+                .to-territory-overlay {
+                    position: absolute;
+                    bottom: 0; left: 0;
+                    width: 100%; height: 12%;   /* JSが greenCoverage を反映 */
+                    background:
+                        linear-gradient(to bottom,
+                            rgba(0, 255, 170, 0) 0%,
+                            rgba(0, 200, 140, 0.28) 50%,
+                            rgba(0, 255, 170, 0.52) 100%);
+                    border-top: 2px solid rgba(0, 255, 170, 0.9);
+                    box-shadow: 0 -6px 30px rgba(0, 255, 170, 0.55);
+                    mix-blend-mode: screen;
+                    transition: height 0.22s linear, filter 0.4s ease;
+                    pointer-events: none;
+                    z-index: 6;
+                }
+                @keyframes toTerritoryPulse {
+                    0%   { filter: brightness(2.4) saturate(1.5); }
+                    100% { filter: brightness(1)   saturate(1);   }
+                }
+                .to-territory-overlay.pulse { animation: toTerritoryPulse 0.45s ease-out; }
                 /* ── 奪還段階: ターミナル枠・ヘッダ・走査線が 赤(敵) → 緑(奪還) へ ── */
                 .to-erode-1 .to-monitor { border-color: #b0562a; box-shadow: 0 0 25px rgba(190, 100, 40, 0.5), inset 0 0 40px rgba(170, 90, 40, 0.4); }
                 .to-erode-1 .to-monitor-header { color: #e08a4a; border-bottom-color: rgba(190, 100, 40, 0.4); background: rgba(150, 80, 30, 0.16); }
@@ -561,6 +613,79 @@ export class SongTakeover extends BaseSong {
                 /* 奪還版: ログをシアンに */
                 .to-reboot-overlay.reclaim .to-reboot-lines { color: #00ffaa; text-shadow: 0 0 10px #00ffaa; }
                 .to-reboot-overlay.reclaim .to-reboot-line.final { text-shadow: 0 0 20px #00ffaa, 0 0 50px #00ffaa; }
+                /* 失敗版: ログは赤のまま、FAILED を強く光らせる */
+                .to-reboot-overlay.failed .to-reboot-line.final {
+                    color: #ff2a2a;
+                    text-shadow: 0 0 20px #ff2a2a, 0 0 55px #ff2a2a;
+                    animation: toWarnShake 0.32s steps(2) 3;
+                }
+
+                /* ── スタート時 WARNING（システム侵略アラート） ── */
+                @keyframes toWarnFlash {
+                    0%, 100% { opacity: 1; }
+                    50%      { opacity: 0.45; }
+                }
+                @keyframes toWarnShake {
+                    0%   { transform: translate(-50%, -50%) translate(0, 0); }
+                    25%  { transform: translate(-50%, -50%) translate(-3px, 2px); }
+                    50%  { transform: translate(-50%, -50%) translate(3px, -2px); }
+                    75%  { transform: translate(-50%, -50%) translate(-2px, -3px); }
+                    100% { transform: translate(-50%, -50%) translate(0, 0); }
+                }
+                @keyframes toWarnStripes {
+                    0%   { background-position: 0 0; }
+                    100% { background-position: 56px 0; }
+                }
+                .to-warning-overlay {
+                    position: absolute;
+                    top: 0; left: 0;
+                    width: 100%; height: 100%;
+                    z-index: 70;
+                    pointer-events: none;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    background:
+                        repeating-linear-gradient(45deg,
+                            rgba(255, 40, 40, 0.14) 0px, rgba(255, 40, 40, 0.14) 20px,
+                            rgba(0, 0, 0, 0) 20px, rgba(0, 0, 0, 0) 40px),
+                        radial-gradient(circle at 50% 50%, rgba(120, 0, 0, 0.5) 0%, rgba(20, 0, 0, 0.85) 100%);
+                    animation: toWarnStripes 0.6s linear infinite, toWarnFlash 0.5s steps(2) infinite;
+                    transition: opacity 0.5s ease;
+                }
+                .to-warning-overlay.out { opacity: 0; }
+                .to-warning-core {
+                    position: absolute;
+                    top: 50%; left: 50%;
+                    transform: translate(-50%, -50%);
+                    text-align: center;
+                    font-family: "Courier New", monospace;
+                    animation: toWarnShake 0.3s steps(2) infinite;
+                }
+                .to-warning-title {
+                    font-size: clamp(34px, 11vw, 92px);
+                    font-weight: bold;
+                    letter-spacing: 10px;
+                    color: #ff2a2a;
+                    text-shadow: 0 0 18px #ff2a2a, 0 0 44px #ff0000, 4px 0 0 #00e0ff, -4px 0 0 #ff00a0;
+                }
+                .to-warning-sub {
+                    margin-top: 14px;
+                    font-size: clamp(11px, 3.4vw, 18px);
+                    letter-spacing: 5px;
+                    color: #ffd0d0;
+                    text-shadow: 0 0 10px #ff3a3a;
+                }
+                .to-warning-bar {
+                    margin-top: 10px;
+                    font-size: clamp(9px, 2.6vw, 13px);
+                    letter-spacing: 3px;
+                    color: #ff7070;
+                }
+                @media (max-width: 768px) {
+                    .to-warning-title { letter-spacing: 6px; }
+                    .to-warning-sub { letter-spacing: 3px; }
+                }
             `;
             document.head.appendChild(style);
         }
@@ -590,10 +715,15 @@ export class SongTakeover extends BaseSong {
         `;
         this.songWrapper.appendChild(this.monitorEl);
 
-        // 赤侵食オーバーレイ（解読率に応じてopacityが上がる）
+        // 上から押し寄せる赤(敵)領域。高さ=制圧率の裏返し(1 - greenCoverage)。
         this.erosionEl = document.createElement('div');
         this.erosionEl.className = 'to-erosion-overlay';
         this.songWrapper.appendChild(this.erosionEl);
+
+        // 下からせり上がる緑(奪還)領域。高さ=greenCoverage。タップで広がる。
+        this.territoryEl = document.createElement('div');
+        this.territoryEl.className = 'to-territory-overlay';
+        this.songWrapper.appendChild(this.territoryEl);
 
         // コンボ表示
         this.comboEl = document.createElement('div');
@@ -615,49 +745,71 @@ export class SongTakeover extends BaseSong {
     }
 
     updateScore() {
-        if (!this.scoreEl) return;
-        this.scoreEl.textContent = `TAKEOVER: ${this.takenCount} / ${this.totalCount}`;
-        const ratio = this.totalCount > 0 ? this.takenCount / this.totalCount : 0;
-        // 解読率に応じて 赤(敵) → 緑(奪還) へ
-        const cr = Math.round(255 - ratio * 235);
-        const cg = Math.round(40 + ratio * 215);
-        const cb = Math.round(40 + ratio * 120);
-        const shadow = ratio < 0.5 ? '#ff3a3a' : '#00ffaa';
-        this.scoreEl.style.color = `rgb(${cr},${cg},${cb})`;
-        this.scoreEl.style.textShadow = `0 0 ${5 + ratio*18}px ${shadow}`;
-
-        this._applyErosion(ratio);
-
-        // 成果サマリー（曲終了オーバーレイ用、何度でも上書き可）
-        // COMPLETE後は _triggerComplete が登録した最終成果を保持する
-        if (!this._completeFired) {
-            this.setResultSummary({
-                lines: [`解読率 ${Math.round(ratio * 100)}% ・ 最大コンボ ${this.maxCombo}`],
-                accentColor: '#00FFAA',
-                swatch: '#00FFAA'
-            });
-        }
-
-        // 完走演出は曲終わりの約8秒前に update() 側で起動する（解読率には依らない）。
+        // 主指標は制圧率(greenCoverage)。陣取りオーバーレイとゲージを同期する。
+        this._applyTerritory();
+        this._updateGauge();
     }
 
-    // ── 奪還演出: 解読率に応じて画面が赤(敵)→緑(奪還)へ段階的に染まる ──────
-    _applyErosion(ratio) {
-        // ミクのアンカー色補間用に解読率を保持（実際の色付けは毎フレームのupdateで）
-        this._mikuTakeRatio = ratio;
+    // ── ゲージ表示: 制圧率(%)を上部に表示し、終了サマリーも更新する ────────
+    _updateGauge() {
+        if (!this.scoreEl) return;
+        const cov = this.greenCoverage;
+        const pct = Math.round(cov * 100);
+        this.scoreEl.textContent = `RECLAIMED AREA: ${pct}%`;
+        // 制圧率に応じて 赤(敵) → 緑(奪還) へ
+        const cr = Math.round(255 - cov * 235);
+        const cg = Math.round(40 + cov * 215);
+        const cb = Math.round(40 + cov * 120);
+        const shadow = cov < this._clearThreshold ? '#ff3a3a' : '#00ffaa';
+        this.scoreEl.style.color = `rgb(${cr},${cg},${cb})`;
+        this.scoreEl.style.textShadow = `0 0 ${5 + cov*18}px ${shadow}`;
 
-        // オーバーレイ不透明度（軽量: CSS opacityのみ、モバイルは控えめに）
-        if (this.erosionEl) {
-            const isMobile = window.innerWidth < 768;
-            const maxOpacity = isMobile ? 0.55 : 0.75;
-            this.erosionEl.style.opacity = (ratio * maxOpacity).toFixed(3);
+        // 成果サマリー（曲終了オーバーレイ用、終局演出が出るまで何度でも上書き可）
+        // 減衰で毎フレーム呼ばれるため ~250ms に間引く。
+        if (!this._completeFired) {
+            const now = performance.now();
+            if (now - this._lastSummaryAt > 250) {
+                this._lastSummaryAt = now;
+                this.setResultSummary({
+                    lines: [`制圧率 ${pct}% ・ 最大コンボ ${this.maxCombo}`],
+                    accentColor: '#00FFAA',
+                    swatch: '#00FFAA'
+                });
+            }
         }
+    }
 
-        // 段階クラス切替（0%=赤い敵領域 → 100%=緑に奪還）
-        const stage = this._completeFired ? 4
-            : ratio >= 0.75 ? 3
-            : ratio >= 0.5  ? 2
-            : ratio >= 0.25 ? 1
+    // ── タップで緑領域を広げる（無操作減衰の対抗手段） ──────────────────
+    _gainTerritory(comboBoost) {
+        const gain = (this.isClimax ? this._coverageGainClimax : this._coverageGainBase)
+                   + (comboBoost ? this._coverageComboBonus : 0);
+        this.greenCoverage = Math.min(1, this.greenCoverage + gain);
+        this._applyTerritory();
+        this._updateGauge();
+        // 緑領域が一気に広がる手応え（パルス）
+        if (this.territoryEl) {
+            this.territoryEl.classList.remove('pulse');
+            void this.territoryEl.offsetWidth; // reflow でアニメ再トリガー
+            this.territoryEl.classList.add('pulse');
+        }
+    }
+
+    // ── 陣取り反映: 制圧率に応じて赤/緑の領域・端末枠・背景・デブリを染める ──
+    _applyTerritory() {
+        const cov = this.greenCoverage;
+        // ミクのアンカー色補間用に制圧率を保持（実際の色付けは毎フレームのupdateで）
+        this._mikuTakeRatio = cov;
+
+        // 上=赤(敵) / 下=緑(奪還) の高さで綱引きを可視化する
+        if (this.erosionEl)   this.erosionEl.style.height   = `${((1 - cov) * 100).toFixed(2)}%`;
+        if (this.territoryEl) this.territoryEl.style.height = `${(cov * 100).toFixed(2)}%`;
+
+        // 段階クラス切替（端末フレームの色: 赤い敵領域 → 緑に奪還）
+        // 終局演出が出た後は固定（_triggerComplete/_triggerFailed 側で制御）
+        const stage = this._completeFired ? this._erosionStage
+            : cov >= 0.75 ? 3
+            : cov >= 0.5  ? 2
+            : cov >= 0.25 ? 1
             : 0;
         if (stage !== this._erosionStage) {
             this._erosionStage = stage;
@@ -669,12 +821,12 @@ export class SongTakeover extends BaseSong {
 
         // Three.js 背景・フォグ: 赤(敵) → シアン(奪還)へ補間
         if (this.scene && this.scene.background && this.scene.background.isColor) {
-            this.scene.background.lerpColors(this._bgColorFrom, this._bgColorTo, ratio);
+            this.scene.background.lerpColors(this._bgColorFrom, this._bgColorTo, cov);
             if (this.scene.fog) this.scene.fog.color.copy(this.scene.background);
         }
         // デブリのワイヤーフレームも 赤 → 緑 へ
         if (this._debrisMat) {
-            this._debrisMat.color.setHex(0x8c1430).lerp(new THREE.Color(0x00ffaa), ratio);
+            this._debrisMat.color.setHex(0x8c1430).lerp(new THREE.Color(0x00ffaa), cov);
         }
     }
 
@@ -868,6 +1020,7 @@ export class SongTakeover extends BaseSong {
 
         el.addEventListener('click', async () => {
             if (target.state !== 'scrambled') return;
+            if (this._completeFired) return; // 終局演出後は操作を受け付けない
             target.state = 'decrypting'; // guard against double-click
             clearInterval(target.scrambleTimer);
             try {
@@ -906,6 +1059,9 @@ export class SongTakeover extends BaseSong {
         if (comboBoost) {
             target.el.classList.add('to-combo-boost');
         }
+
+        // タップ成功 → 緑(奪還)領域を広げる。これが無操作減衰への対抗手段。
+        this._gainTerritory(comboBoost);
 
         const tile = this.bgTiles[target.groupIndex];
         if (!tile) {
@@ -958,10 +1114,38 @@ export class SongTakeover extends BaseSong {
         this.updateScore();
     }
 
+    // ── スタート時 WARNING: 赤いグリッチ警告を数秒出して本編へ ───────────
+    _showWarning() {
+        if (this.warningEl) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'to-warning-overlay';
+        overlay.innerHTML = `
+            <div class="to-warning-core">
+                <div class="to-warning-title">⚠ WARNING ⚠</div>
+                <div class="to-warning-sub">SYSTEM TAKEOVER DETECTED</div>
+                <div class="to-warning-bar">[ DECRYPT THE LYRICS — RECLAIM THE SIGNAL ]</div>
+            </div>
+        `;
+        this.songWrapper.appendChild(overlay);
+        this.warningEl = overlay;
+        sfx.play('takeover_warning');
+
+        const schedule = (fn, ms) => {
+            this._introTimers.push(setTimeout(() => { if (this.isActive) fn(); }, ms));
+        };
+        // 約2.4秒で退場し、本編へ（フェードアウト→DOM除去）
+        schedule(() => { if (overlay.parentNode) overlay.classList.add('out'); }, 2400);
+        schedule(() => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (this.warningEl === overlay) this.warningEl = null;
+        }, 3000);
+    }
+
     // ── TAKEOVER COMPLETE: ブラックアウト→再起動風シーケンス→赤一色 ────
     _triggerComplete() {
         if (this._completeFired) return;
         this._completeFired = true;
+        this._outcome = 'clear';
 
         // 0) 静止/吸気: 解読済みの全タイルを一斉にシアンで満たす（タメ）
         Object.values(this.bgTiles).forEach(tile => {
@@ -1075,9 +1259,80 @@ export class SongTakeover extends BaseSong {
 
         // 最終成果を登録
         this.setResultSummary({
-            lines: [`解読率 100% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER RECLAIMED'],
+            lines: [`制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER CLEAR'],
             accentColor: '#00FFAA',
             swatch: '#00FFAA'
+        });
+    }
+
+    // ── TAKEOVER FAILED: 制圧率が半分に届かず終局 → 赤い敗北シーケンス ────
+    _triggerFailed() {
+        if (this._completeFired) return;
+        this._completeFired = true;
+        this._outcome = 'failed';
+        this._erosionStage = 0;
+        sfx.play('takeover_fail');
+
+        // 端末フレームを完全な赤(敵支配)に固定し、世界を赤一色へ寄せる
+        this.songWrapper.classList.remove('to-erode-1', 'to-erode-2', 'to-erode-3', 'to-reclaim');
+        this.songWrapper.classList.add('to-complete');
+        if (this.scene && this.scene.background && this.scene.background.isColor) {
+            this.scene.background.setHex(0x2a0008);
+            if (this.scene.fog) this.scene.fog.color.setHex(0x2a0008);
+        }
+        if (this._debrisMat) this._debrisMat.color.setHex(0xff3a3a);
+        // 赤を画面いっぱいに、緑領域は潰す
+        if (this.erosionEl)   this.erosionEl.style.height = '100%';
+        if (this.territoryEl) this.territoryEl.style.height = '0%';
+
+        const overlay = document.createElement('div');
+        overlay.className = 'to-reboot-overlay failed';
+        const linesWrap = document.createElement('div');
+        linesWrap.className = 'to-reboot-lines';
+
+        const lostPct = Math.round((1 - this.greenCoverage) * 100);
+        const bootLines = [
+            '> DECRYPTION INCOMPLETE',
+            `> SECTORS LOST :: ${lostPct}%`,
+            '> SIGNAL #00FFAA SUPPRESSED',
+            '> OWNERSHIP RETAINED BY INTRUDER',
+            'TAKEOVER FAILED'
+        ];
+        const lineEls = bootLines.map((text, i) => {
+            const line = document.createElement('div');
+            line.className = 'to-reboot-line' + (i === bootLines.length - 1 ? ' final' : '');
+            line.textContent = text;
+            linesWrap.appendChild(line);
+            return line;
+        });
+        overlay.appendChild(linesWrap);
+        this.songWrapper.appendChild(overlay);
+        this.rebootEl = overlay;
+
+        const schedule = (fn, ms) => {
+            this._rebootTimers.push(setTimeout(() => { if (this.isActive) fn(); }, ms));
+        };
+
+        // 1) ブラックアウト
+        schedule(() => { if (overlay.parentNode) overlay.classList.add('on'); }, 300);
+        // 2) 敗北ログを順次表示
+        const lineBase = 600;
+        lineEls.forEach((line, i) => {
+            schedule(() => line.classList.add('shown'), lineBase + i * 520);
+        });
+        // 3) 失敗ゲージ表示
+        schedule(() => {
+            if (this.scoreEl) {
+                this.scoreEl.textContent = 'TAKEOVER: FAILED';
+                this.scoreEl.style.color = '#ff3a3a';
+                this.scoreEl.style.textShadow = '0 0 24px #ff3a3a, 0 0 48px #ff3a3a';
+            }
+        }, lineBase + bootLines.length * 520);
+
+        this.setResultSummary({
+            lines: [`制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER FAILED'],
+            accentColor: '#FF3A3A',
+            swatch: '#FF3A3A'
         });
     }
 
@@ -1168,6 +1423,13 @@ export class SongTakeover extends BaseSong {
             this.buildLyricCard();
         }
 
+        // 開幕の赤い WARNING（システム侵略アラート）。選曲→曲ロードのカーテンが
+        // 開く＝タイマー準備完了の瞬間に一度だけ起動する（幕裏で消えるのを防ぐ）。
+        if (!this._warningShown && playerManager.isTimerReady) {
+            this._warningShown = true;
+            this._showWarning();
+        }
+
         // TextAlive公式タイマー(player.timer.position)に完全同期（先行調整を排除）
         const position = (playerManager.player && playerManager.player.timer)
                          ? playerManager.player.timer.position
@@ -1176,12 +1438,17 @@ export class SongTakeover extends BaseSong {
             ? playerManager.player.findChorus(position) : null;
         this.isClimax = !!chorus;
 
-        // ── 完走演出の起動: 曲終わりの約8秒前に発火（解読率に依らず必ず出す） ──
+        // ── 終局演出の起動: 曲終わりの約8秒前に発火し、制圧率で勝敗を分ける ──
         // 演出(約6.5s)を songEnd の黒幕(通常 duration-50ms)より前に出し切るためのリード。
+        // 画面の半分以上が緑(greenCoverage >= 0.5)なら CLEAR、届かなければ FAILED。
         if (!this._completeFired) {
             const duration = playerManager.player.video.duration;
             if (duration > 0 && position >= duration - this._completeLeadMs) {
-                this._triggerComplete();
+                if (this.greenCoverage >= this._clearThreshold) {
+                    this._triggerComplete();
+                } else {
+                    this._triggerFailed();
+                }
             }
         }
 
@@ -1191,12 +1458,43 @@ export class SongTakeover extends BaseSong {
             this.prevIsClimax = this.isClimax;
         }
 
-        // Background debris rotation
+        // ── 制圧率の時間減衰（無操作だと赤がじわじわ再侵食する綱引き） ──
+        // 終局演出が出るまで、かつ歌詞カード構築後のみ進行させる。
+        if (!this._completeFired && this.lyricCardBuilt) {
+            const now = performance.now();
+            const dt = this._lastFrameAt ? Math.min(0.1, (now - this._lastFrameAt) / 1000) : 0;
+            this._lastFrameAt = now;
+            if (dt > 0) {
+                const decay = this.isClimax ? this._coverageDecayClimax : this._coverageDecayBase;
+                const next = Math.max(0, this.greenCoverage - decay * dt);
+                if (next !== this.greenCoverage) {
+                    this.greenCoverage = next;
+                    this._applyTerritory();
+                    this._updateGauge();
+                }
+            }
+        }
+
+        // Background debris rotation ＋ 疾走感: 奥→手前へ流れ、近づいたら奥へ回帰
+        const driftMul = this.isClimax ? 1.8 : 1;
         this.debris.forEach(m => {
             m.rotation.x += m.userData.rot.x;
             m.rotation.y += m.userData.rot.y;
             m.rotation.z += m.userData.rot.z;
+            m.position.z += (m.userData.vz || 0) * driftMul;
+            if (m.position.z > 12) {
+                m.position.set((Math.random()-0.5)*45, (Math.random()-0.5)*28, -40);
+            }
         });
+
+        // 疾走感: カメラを微振動させる（サビで強く）
+        if (this.camera) {
+            const t = performance.now() * 0.001;
+            const amp = this.isClimax ? 0.16 : 0.06;
+            this.camera.position.x = Math.sin(t * 13.0) * amp + Math.sin(t * 7.3) * amp * 0.5;
+            this.camera.position.y = Math.cos(t * 11.0) * amp * 0.7;
+            this.camera.lookAt(0, 0.5, -4);
+        }
 
         // ── ミクの視覚アンカー: リズムに合わせて淡く脈動 ──
         // サビ(isClimax)で少し速く・強く、解読率に応じてシアン→赤へ寄せる。
@@ -1286,10 +1584,21 @@ export class SongTakeover extends BaseSong {
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
 
-        // コンボ・再起動シーケンスのタイマーを全停止
+        // コンボ・再起動シーケンス・WARNING のタイマーを全停止
         clearTimeout(this._comboHideTimer);
         this._rebootTimers.forEach(t => clearTimeout(t));
         this._rebootTimers = [];
+        this._introTimers.forEach(t => clearTimeout(t));
+        this._introTimers = [];
+
+        if (this.warningEl && this.warningEl.parentNode) {
+            this.warningEl.parentNode.removeChild(this.warningEl);
+            this.warningEl = null;
+        }
+        if (this.territoryEl && this.territoryEl.parentNode) {
+            this.territoryEl.parentNode.removeChild(this.territoryEl);
+            this.territoryEl = null;
+        }
 
         if (this.rebootEl && this.rebootEl.parentNode) {
             this.rebootEl.parentNode.removeChild(this.rebootEl);
