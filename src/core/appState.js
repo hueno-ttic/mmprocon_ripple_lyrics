@@ -1,5 +1,5 @@
 import { eventBus } from './eventBus.js';
-import { SONGS } from '../config/songs.js';
+import { NORMAL_SONGS, areNormalSongsComplete, isSecretSong } from '../config/songs.js';
 import { PHASES } from '../config/constants.js';
 
 class AppState {
@@ -29,7 +29,9 @@ class AppState {
             localStorage.setItem('completedSongs', JSON.stringify(this.completedSongs));
             eventBus.emit('songComplete', songId);
             eventBus.emit('phaseChange', { from: this._previousPhase, to: this.getPhase() });
-            if (this.completedSongs.length >= SONGS.length) {
+            // 通常曲(5曲)を全て終えた瞬間に「水の循環、完成」エンディングを流す。
+            // シークレット曲(こたえて)はエンディング後の隠し体験なので再発火させない。
+            if (!isSecretSong(songId) && areNormalSongsComplete(this.completedSongs)) {
                 setTimeout(() => eventBus.emit('allSongsComplete'), 1000);
             }
         }
@@ -39,13 +41,16 @@ class AppState {
         return this.completedSongs.includes(songId);
     }
 
-    // 全曲(6/6)クリア済みかどうか。エンディング誘導の判定に使う
+    // 通常曲(5曲)を全てクリア済みかどうか。エンディング誘導とシークレット解放の判定に使う。
+    // シークレット曲(こたえて)はこの判定に含めない。
     areAllSongsComplete() {
-        return this.completedSongs.length >= SONGS.length;
+        return areNormalSongsComplete(this.completedSongs);
     }
 
     getPhase() {
-        return Math.min(this.completedSongs.length, PHASES.length - 1);
+        // 天候フェーズは通常曲(5曲)のクリア数で進む。シークレット曲は進行に影響しない。
+        const normalDone = NORMAL_SONGS.filter(s => this.completedSongs.includes(s.id)).length;
+        return Math.min(normalDone, PHASES.length - 1);
     }
 
     getPhaseName() {

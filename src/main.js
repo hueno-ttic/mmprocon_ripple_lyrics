@@ -313,7 +313,7 @@ class Application {
             transition: color 1s ease 0.3s;
         `;
 
-        const phaseNames = ['晴れた空', '雲の下', '雨の中', '水たまりのそば', '小川のほとり', '川のほとり', '湖面'];
+        const phaseNames = ['晴れた空', '雲の下', '雨の中', '水たまりのそば', '小川のほとり', '湖面'];
         const phaseName = phaseNames[appState.getPhase()] || '湖面';
         const hint = document.createElement('div');
         hint.textContent = `${phaseName}へ戻ります…`;

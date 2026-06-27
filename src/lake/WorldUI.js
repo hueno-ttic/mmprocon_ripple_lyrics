@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { eventBus } from '../core/eventBus.js';
-import { SONGS } from '../config/songs.js';
+import { NORMAL_SONGS, getSelectableSongs } from '../config/songs.js';
 import { PHASES } from '../config/constants.js';
 import { appState } from '../core/appState.js';
 import { PHASE_CLASSES } from './phases/index.js';
@@ -47,6 +47,9 @@ export class WorldUI {
         }
         this.composer.setSize(window.innerWidth, window.innerHeight);
 
+        // 選曲画面に並べる曲。通常曲5曲は常時表示し、シークレット曲(こたえて)は
+        // 通常曲を全クリアした後にのみ末尾へ加わる。表示数が変わったら show() で作り直す。
+        this.songs = getSelectableSongs(appState.completedSongs);
         this.selectedIndex = 0;
         this.currentPhase = null;
         this.currentPhaseIndex = appState.getPhase();
@@ -248,7 +251,7 @@ export class WorldUI {
         this.currentPhase = new PhaseClass(this.scene, this.camera, this.renderer);
         this.currentPhase.enter(null);
         this._applyPhaseGrading(this.currentPhase);
-        this.currentPhase.createSongMarkers(SONGS);
+        this.currentPhase.createSongMarkers(this.songs);
         this.currentPhaseIndex = phaseIndex;
         // Markers are freshly created — re-apply the selection highlight
         this.currentPhase.onHover(this.selectedIndex);
@@ -273,7 +276,7 @@ export class WorldUI {
         });
         this.labels = [];
 
-        SONGS.forEach((song, i) => {
+        this.songs.forEach((song, i) => {
             const isCompleted = appState.isSongComplete(song.id);
             const completeMark = isCompleted
                 ? `<span class="complete-mark" style="color:#D4AF37;margin-left:5px;filter:drop-shadow(0 0 4px #D4AF37)">✓</span>`
@@ -380,18 +383,21 @@ export class WorldUI {
         `;
         this.container.appendChild(this.selectionPanel);
 
-        const N = SONGS.length;
+        // 表示曲数(this.songs.length)はシークレット解放で変わりうるので、
+        // 巡回は固定値ではなくハンドラ実行時の現在の曲数を参照する。
         this.selectionPanel.querySelector('.world-nav-prev').addEventListener('click', (e) => {
             e.stopPropagation();
+            const N = this.songs.length;
             this._setSelected((this.selectedIndex - 1 + N) % N);
         });
         this.selectionPanel.querySelector('.world-nav-next').addEventListener('click', (e) => {
             e.stopPropagation();
+            const N = this.songs.length;
             this._setSelected((this.selectedIndex + 1) % N);
         });
         this.selectionPanel.querySelector('.world-selection-start').addEventListener('click', (e) => {
             e.stopPropagation();
-            this.selectSong(SONGS[this.selectedIndex], this.selectedIndex);
+            this.selectSong(this.songs[this.selectedIndex], this.selectedIndex);
         });
 
         // タッチ環境向け: 「どこを押せば良いか」の最初の手がかりを一度だけ提示。
@@ -421,7 +427,7 @@ export class WorldUI {
         const titleEl = this.selectionPanel.querySelector('.world-selection-title');
         const artistEl = this.selectionPanel.querySelector('.world-selection-artist');
         let maxWidth = 0;
-        SONGS.forEach((song) => {
+        this.songs.forEach((song) => {
             titleEl.innerHTML = `${song.title} <span>✓</span>`;
             artistEl.textContent = song.artist;
             maxWidth = Math.max(maxWidth, this.selectionPanel.offsetWidth);
@@ -431,7 +437,7 @@ export class WorldUI {
 
     _updateSelectionPanel() {
         if (!this.selectionPanel) return;
-        const song = SONGS[this.selectedIndex];
+        const song = this.songs[this.selectedIndex];
         if (!song) return;
         const titleEl = this.selectionPanel.querySelector('.world-selection-title');
         const artistEl = this.selectionPanel.querySelector('.world-selection-artist');
@@ -472,7 +478,7 @@ export class WorldUI {
         overlay.innerHTML = `
             <div class="world-onboarding-card">
                 <div class="world-onboarding-icon">✦</div>
-                <p class="world-onboarding-main">浮かんでいる光は、6つの楽曲です</p>
+                <p class="world-onboarding-main">浮かんでいる光は、5つの楽曲です</p>
                 <p class="world-onboarding-sub">光にふれて選び、「この曲をはじめる ▶」で旅がはじまります</p>
                 <p class="world-onboarding-cycle">曲をクリアするたび、晴れた空に雲が集まり、雨が降り──やがて湖がうまれます</p>
                 <p class="world-onboarding-dismiss">タップして閉じる</p>
@@ -538,8 +544,10 @@ export class WorldUI {
 
     _updateProgressCounter() {
         if (!this.progressCounter) return;
-        const completed = SONGS.filter(s => appState.isSongComplete(s.id)).length;
-        const total = SONGS.length;
+        // 進捗カウンタは「水の循環」の旅=通常曲5曲を対象にする。
+        // シークレット曲(こたえて)はエンディング後の隠し体験なので数えない。
+        const completed = NORMAL_SONGS.filter(s => appState.isSongComplete(s.id)).length;
+        const total = NORMAL_SONGS.length;
         this.progressCounter.textContent = `クリア ${completed} / ${total}`;
 
         if (this.phaseIndicator) {
@@ -598,9 +606,17 @@ export class WorldUI {
         if (playerControls) playerControls.style.display = 'none';
         if (backBtn) backBtn.style.display = 'none';
 
+        // シークレット曲(こたえて)の解放など、表示する曲が変わっていたら作り直す。
+        const listChanged = this._refreshSongList();
+
         const newPhase = appState.getPhase();
         if (newPhase !== this.currentPhaseIndex) {
+            // フェーズ遷移側で this.songs を使ってマーカーを作り直すので、ここでは何もしない。
             this._transitionToPhase(newPhase);
+        } else if (listChanged && this.currentPhase) {
+            // フェーズは据え置きだが曲数が変わった場合はマーカーだけ作り直す。
+            this.currentPhase.createSongMarkers(this.songs);
+            this.currentPhase.onHover(this.selectedIndex);
         }
 
         this._refreshLabels();
@@ -609,8 +625,61 @@ export class WorldUI {
         this._maybeShowEnding();
     }
 
+    // 選曲リストを現在の解放状況に同期する。表示曲数が変わったらラベルを作り直し、
+    // 選択位置を補正する(マーカーの再生成は呼び出し側 show() に委ねる)。
+    // 表示曲数が変化したとき true を返す。
+    _refreshSongList() {
+        const next = getSelectableSongs(appState.completedSongs);
+        if (next.length === this.songs.length) return false;
+
+        const hadSecret = this.songs.some(s => s.secret);
+        this.songs = next;
+        if (this.selectedIndex >= this.songs.length) this.selectedIndex = 0;
+        this._createLabels();
+
+        // 今まさにシークレット曲が加わったなら、湖に静かに告知する(一度だけ)。
+        const hasSecret = this.songs.some(s => s.secret);
+        if (hasSecret && !hadSecret) this._maybeRevealSecret();
+
+        return true;
+    }
+
+    // 通常曲5曲を全てクリアし、湖にシークレット曲(こたえて)が現れた時の静かな告知。
+    // エンディング(CompletionScreen)の後ろにそっと残る控えめなテキスト。一度だけ表示。
+    _maybeRevealSecret() {
+        if (localStorage.getItem('kotaeteRevealed')) return;
+        try { localStorage.setItem('kotaeteRevealed', '1'); } catch (e) { /* storage失敗は致命的でない */ }
+
+        const toast = document.createElement('div');
+        toast.className = 'world-secret-reveal';
+        toast.style.cssText = `
+            position: absolute; left: 50%; top: 108px; transform: translateX(-50%);
+            color: rgba(255,255,255,0.92); z-index: 470; pointer-events: none;
+            font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
+            font-size: clamp(12px, 1.4cqw, 16px); font-weight: 300; letter-spacing: 0.16em;
+            text-align: center; white-space: nowrap;
+            text-shadow: 0 0 6px rgba(0,0,0,0.85), 0 0 18px rgba(127,119,221,0.6);
+            opacity: 0; transition: opacity 1.4s ease;
+        `;
+        toast.textContent = 'ひとつ、こたえを待つ歌が湖に浮かんでいる──';
+        this.container.appendChild(toast);
+        this._secretToast = toast;
+
+        // エンディング演出と重ならないよう、少し遅れて静かに浮かび上がらせる。
+        this._secretRevealTimeout = setTimeout(() => {
+            toast.style.opacity = '1';
+            this._secretRevealHideTimeout = setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => {
+                    if (toast.parentNode) toast.parentNode.removeChild(toast);
+                    if (this._secretToast === toast) this._secretToast = null;
+                }, 1400);
+            }, 6000);
+        }, 2600);
+    }
+
     _refreshLabels() {
-        SONGS.forEach((song, i) => {
+        this.songs.forEach((song, i) => {
             const isCompleted = appState.isSongComplete(song.id);
             const titleEl = this.labels[i].element.querySelector('.song-title');
             if (isCompleted && titleEl && !titleEl.querySelector('.complete-mark')) {
@@ -722,7 +791,7 @@ export class WorldUI {
         if (picked === -1) return;
 
         if (picked === this.selectedIndex) {
-            this.selectSong(SONGS[picked], picked);
+            this.selectSong(this.songs[picked], picked);
         } else {
             this._setSelected(picked);
         }
@@ -737,7 +806,7 @@ export class WorldUI {
 
         let best = -1;
         let bestDist = Infinity;
-        SONGS.forEach((song, i) => {
+        this.songs.forEach((song, i) => {
             const worldPos = this.currentPhase.getSongPosition(i);
             const projected = worldPos.clone().project(this.camera);
             if (projected.z >= 1) return;
@@ -754,7 +823,7 @@ export class WorldUI {
 
     onKeyDown(e) {
         if (appState.currentSongId !== null || this.renderer.domElement.style.display === 'none') return;
-        const N = SONGS.length;
+        const N = this.songs.length;
         if (e.code === 'ArrowRight') {
             e.preventDefault();
             this._setSelected((this.selectedIndex + 1) % N);
@@ -763,7 +832,7 @@ export class WorldUI {
             this._setSelected((this.selectedIndex - 1 + N) % N);
         } else if (e.code === 'Enter' || e.code === 'Space') {
             e.preventDefault();
-            this.selectSong(SONGS[this.selectedIndex], this.selectedIndex);
+            this.selectSong(this.songs[this.selectedIndex], this.selectedIndex);
         }
     }
 
@@ -799,7 +868,7 @@ export class WorldUI {
 
             // For PhaseLake, handle carousel rotation
             if (this.currentPhase.targetRotation !== undefined) {
-                const N = SONGS.length;
+                const N = this.songs.length;
                 this.currentPhase.targetRotation = Math.PI / 2 - this.selectedIndex * (2 * Math.PI / N);
             }
         }
@@ -943,7 +1012,7 @@ export class WorldUI {
     _blendLabelWithBackground(p, haze, atmStyle) {
         const titleEl = p.labelData.titleEl;
         if (!titleEl) return;
-        const song = SONGS[p.i];
+        const song = this.songs[p.i];
 
         if (p.isSelected) {
             if (p.labelData._styleKey === 'sel') return;
@@ -1015,6 +1084,11 @@ export class WorldUI {
         if (this._endingRemoveTimeout) clearTimeout(this._endingRemoveTimeout);
         if (this.ending?.parentNode) {
             this.ending.parentNode.removeChild(this.ending);
+        }
+        if (this._secretRevealTimeout) clearTimeout(this._secretRevealTimeout);
+        if (this._secretRevealHideTimeout) clearTimeout(this._secretRevealHideTimeout);
+        if (this._secretToast?.parentNode) {
+            this._secretToast.parentNode.removeChild(this._secretToast);
         }
     }
 }
