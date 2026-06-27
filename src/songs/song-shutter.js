@@ -102,6 +102,14 @@ const ARM_GESTURES = {
     },
 };
 
+// 待機モーション(ARM_GESTURES + applySubjectGroove)が制御しないボーン。
+// キメポーズ解除後に値が残って待機姿勢が壊れるのを防ぐため、idle時に中立(0)へ戻す対象。
+// (肩=grooveがzのみ制御/手首・首・足首=未制御/脚=grooveがx,zのみ制御でyが残る)
+const RELAX_IDLE_BONES = [
+    'neck', 'leftShoulder', 'rightShoulder', 'leftHand', 'rightHand',
+    'leftFoot', 'rightFoot', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg',
+];
+
 // 「かわいいポーズ」ボタン用プリセット（ミク/リン共通。ボタンを押すと数秒ホールド）。
 // 既存の ARM_GESTURES を土台に、頭の傾きや胴のひねりを足してキメ顔ポーズへ仕上げた6種。
 // 各 pose の値は ARM_GESTURES と同じ規約（leftUpperArm/rightUpperArm は適用時に±0.5補正される）。
@@ -116,8 +124,8 @@ const SHUTTER_CUTE_POSES = [
     { id: 'banzai', label: 'バンザイ', emoji: '🙌', pose: { spine: { x: -0.01, y: 0, z: 0 }, leftShoulder: { x: -1.49, y: 0.5, z: 0.12 }, leftUpperArm: { x: -1.94, y: 0.95, z: 0.55 }, leftLowerArm: { x: 1.24, y: -0.94, z: 0.07 }, leftHand: { x: 0.71, y: -0.27, z: 0.7 }, rightShoulder: { x: -1.46, y: 0.01, z: -0.79 }, rightUpperArm: { x: -0.5, y: 0.53, z: 0.08 }, rightLowerArm: { x: 0.19, y: -0.09, z: 0 }, rightHand: { x: 0.17, y: 0.3, z: -0.56 }, leftLowerLeg: { x: 0.56, y: 0.01, z: 0 }, rightLowerLeg: { x: 1.47, y: 0.23, z: 0 }, rightFoot: { x: 0, y: -0.35, z: 0 } } },
     // 両手ハート（上腕x負で前へ、z負で内へ寄せ、前腕を折って胸の前中央で両手をぎりぎりまで合わせる）
     { id: 'heart', label: 'ハート', emoji: '💞', pose: { leftUpperArm: { x: -0.5, y: 0.1, z: -1 }, rightUpperArm: { x: -0.5, y: -0.1, z: 1 }, leftLowerArm: { x: 0.05, y: 0.2, z: -1.6 }, rightLowerArm: { x: 0.05, y: -0.2, z: 1.6 }, head: { x: 0.03, y: 0, z: 0.12 }, neck: { x: 0.03, y: 0, z: 0.06 }, spine: { x: 0.04, y: 0, z: 0 } } },
-    // お祈り
-    { id: 'pray', label: 'お祈り', emoji: '🙏', pose: { leftUpperArm: { x: -0.45, y: 0, z: 0.18 }, rightUpperArm: { x: -0.45, y: 0, z: -0.18 }, leftLowerArm: { x: 0, y: 0.3, z: -1.95 }, rightLowerArm: { x: 0, y: -0.3, z: 1.95 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0 }, head: { x: 0.16, y: 0, z: 0.14 }, neck: { x: 0.08, y: 0, z: 0.06 }, chest: { x: 0.05, y: 0, z: 0 }, spine: { x: 0.08, y: 0, z: 0 }, hips: { x: 0, y: 0, z: 0 } } },
+    // お願い（複数モーフのキメ顔つき）
+    { id: 'pray', label: 'お願い', emoji: '🙏', pose: { spine: { x: 0.91, y: 0.19, z: 0 }, neck: { x: -0.99, y: 0.07, z: 0 }, leftShoulder: { x: -2.33, y: -0.19, z: -0.95 }, leftLowerArm: { x: -0.07, y: -1.1, z: 0 }, leftHand: { x: -0.66, y: -0.57, z: 0.07 }, rightShoulder: { x: -2.27, y: -0.33, z: 0.91 }, rightUpperArm: { x: 0, y: -0.14, z: -0.5 }, rightLowerArm: { x: 0, y: 1.77, z: 0 }, rightHand: { x: -0.53, y: -0.08, z: 0.21 }, expr: { 'ウィンク': 1, 'びっくり': 0.2, '照れ': 1, 'う': 0.45 } } },
     // かんがえ中
     { id: 'thinking', label: 'かんがえ', emoji: '🤔', pose: { leftUpperArm: { x: -0.4, y: 0, z: 0.62 }, rightUpperArm: { x: -0.45, y: 0, z: -0.42 }, leftLowerArm: { x: 0, y: 0.2, z: -1.95 }, rightLowerArm: { x: -0.1, y: 0, z: 2.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.1 }, head: { x: -0.08, y: 0.16, z: 0.3 }, neck: { x: -0.04, y: 0.08, z: 0.14 }, chest: { x: 0, y: 0.06, z: 0.05 }, spine: { x: 0.02, y: 0.04, z: 0.04 }, hips: { x: 0, y: 0, z: 0 } } },
     // てふり
@@ -965,6 +973,21 @@ export class SongShutter extends BaseSong {
     // ビート同期グルーヴ: 腰の体重移動・拍の沈み込み・膝バウンス・頭ノリ・腕振りを
     // 腕の型(armStyle)の上に重ねて踊らせる。毎フレーム絶対値で代入し累積を防ぐ。
     // （song-kotaete.js の applyGroove を被写体1体構成向けに移植・調整）
+    // 待機モーション(ARM_GESTURES + applySubjectGroove)が制御しないボーンを中立(0)へ戻す。
+    // groove は腕・胴・頭・脚の主要軸を絶対値で上書きするが、肩のx/y・手首・首・足首・脚のyは
+    // 触らないため、それらを動かすキメポーズ(お願い/きゅるん/バンザイ等)の解除後に値が残って
+    // 待機姿勢が破綻する。idleブランチで groove の前にこれらを中立へイージングして根絶する。
+    // groove が扱う軸(肩z・脚x/z 等)はこの後 groove が上書きするので 0 へ寄せても安全。
+    relaxIdleBones(subject, t) {
+        for (const name of RELAX_IDLE_BONES) {
+            const bone = this.getMMDBone(subject, name);
+            if (!bone) continue;
+            bone.rotation.x += (0 - bone.rotation.x) * t;
+            bone.rotation.y += (0 - bone.rotation.y) * t;
+            bone.rotation.z += (0 - bone.rotation.z) * t;
+        }
+    }
+
     applySubjectGroove(subject, t, deltaSec, beatPulse) {
         if (!subject.mesh) return;
         const cfg = this.grooveConfig;
@@ -2632,8 +2655,12 @@ export class SongShutter extends BaseSong {
                     const calmStyles = ['relaxed', 'faceHands', 'handsOnHips'];
                     const gestureName = (this.isClimax && calmStyles.includes(this.armStyle)) ? 'cheer' : this.armStyle;
                     const gesture = ARM_GESTURES[gestureName] || ARM_GESTURES.cheer;
-                    // 腕の型へ補間 → その上にビートグルーヴを重ねて踊らせる
+                    // 腕の型へ補間 → 待機が扱わないボーンを中立へ戻す → その上にビートグルーヴ
                     this.lerpSubjectPose(subject, gesture, 0.08);
+                    // キメポーズ(お願い等)が動かした「gesture/groove 管理外」のボーン
+                    // (肩のx/y・手首・首・足首・脚のy)を待機姿勢へ戻す。これが無いと
+                    // ポーズ解除後にそれらが残って待機モーションが破綻する。
+                    this.relaxIdleBones(subject, 0.18);
                     if (isShown) this.applySubjectGroove(subject, floatT, deltaTime, beatPulse);
                 }
 
