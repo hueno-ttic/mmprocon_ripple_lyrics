@@ -89,27 +89,18 @@ export class SongTakeover extends BaseSong {
         this._warningShown = false;      // WARNING は一度だけ（カーテンが開く瞬間に出す）
         this._introTimers = [];          // WARNING のタイマー群
 
-        // ── ミクの視覚アンカー（軽量ツインテール・シルエット） ──
-        // 他5曲はVRMミクが登場するが、TAKEOVERだけ不在で密度差が出るため、
-        // 中央に「ミクがそこにいる」象徴を1つだけ常設し、リズムで淡く脈動させる。
-        this.mikuAnchorSprite = null;       // CanvasTextureのスプライト
-        this.mikuAnchorTexture = null;
-        this.mikuAnchorMat = null;
-        this._mikuAnchorPhase = 0;          // 脈動位相
+        // ── ミクの状態演出: 暗号化シルエット → 完走で復号され彩色で出現 ──
+        this._mikuAnchorPhase = 0;          // 呼吸位相（シルエット/グロー/VRMの脈動に使用）
         this._mikuColorCyan = new THREE.Color(0x00ffaa); // 解読色（シアン）
-        this._mikuColorRed = new THREE.Color(0xff3a3a);  // 侵食色（赤）
-        this._mikuAnchorColor = new THREE.Color(0x00ffaa);
-        this._mikuTakeRatio = 0;            // 直近の解読率（脈動の色補間に使用）
-        // ── 完走演出: 歌詞爆散 → シアン逆転 → ミク実体化 ──
-        this._mikuReclaim = false;          // 完走時にtrue: アンカーをヒーロー化（シアン固定）
-        this._reclaimT = 0;                 // 実体化ランプ進捗 0→1
+        this._mikuReclaim = false;          // 完走時にtrue: 復号して光を浴びる
+        this._reclaimT = 0;                 // 復号ランプ進捗 0→1
         this.mikuGlowSprite = null;         // 背後のシアン逆光グロー
         this.mikuGlowMat = null;
         this.mikuGlowTexture = null;
 
-        // ── 完走で光の中から実体化する3DミクVRM ──
-        // 旧実装は完走時にフラットなツインテール・シルエットを拡大して「実体化」していたが、
-        // 他5曲と同じ本物のVRMミクを、背後のシアン光からせり上がらせて登場させる。
+        // ── 3DミクVRM ──
+        // ゲーム中は「暗号化された姿」＝ダークなシルエット（影）として中央に佇み、
+        // 完走で復号されると本来の彩色マテリアルへ戻り、背後の光を浴びて姿を現す。
         this.currentVRM = null;
         this.mikuVrmReady = false;
         this.isMobile = window.innerWidth < 768;
@@ -118,7 +109,12 @@ export class SongTakeover extends BaseSong {
         this.mikuRimLight = null;
         this._vrmT0 = performance.now();
         this._vrmLastRel = 0;
-        // 実体化の基準姿勢（光の下から浮上 → 画面中央へ収束）
+        // 暗号化シルエット用のダーク材質と、適用中フラグ
+        this.mikuSilhouetteMat = null;
+        this._silhouetteOn = false;
+        this._silColorEnemy = new THREE.Color(0x8a2233);    // 敵支配色の暗赤（加算で淡く発光）
+        this._silColorFreed = new THREE.Color(0x105a49);    // 奪還色の暗シアン
+        // ミクの基準姿勢（中央に佇む。完走でもほぼこの位置で復号される）
         this._mikuVrmBaseY = -1.5;
         this._mikuVrmBaseZ = -2.2;
         this._mikuVrmScale = 4.2;
@@ -129,7 +125,7 @@ export class SongTakeover extends BaseSong {
     init() {
         this.initThree();
         this.initDebris();
-        this.initMikuAnchor();
+        this.initMikuGlow();
         this.initMikuLights();
         this.loadMiku();
         this.initUI();
@@ -202,63 +198,9 @@ export class SongTakeover extends BaseSong {
         }
     }
 
-    // ── ミクの視覚アンカー: ツインテール風シルエットを canvas で描画し、
-    //    中央奥に常設する軽量スプライト（VRM不使用で密度差を埋める） ──
-    initMikuAnchor() {
-        const size = 256;
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        const cx = size / 2;
-
-        // 白でシルエットを塗り、色付けはスプライトのcolorで行う（=色補間が軽い）
-        ctx.fillStyle = 'rgba(255,255,255,1)';
-
-        // 頭部
-        ctx.beginPath();
-        ctx.arc(cx, 96, 34, 0, Math.PI * 2);
-        ctx.fill();
-
-        // 肩〜体（台形）
-        ctx.beginPath();
-        ctx.moveTo(cx - 30, 124);
-        ctx.lineTo(cx + 30, 124);
-        ctx.lineTo(cx + 50, 220);
-        ctx.lineTo(cx - 50, 220);
-        ctx.closePath();
-        ctx.fill();
-
-        // 左右のツインテール（頭の左右から外へ大きく流れる曲線シルエット）
-        const tail = (dir) => {
-            ctx.beginPath();
-            ctx.moveTo(cx + dir * 26, 80);
-            ctx.quadraticCurveTo(cx + dir * 96, 96, cx + dir * 86, 188);
-            ctx.quadraticCurveTo(cx + dir * 80, 224, cx + dir * 58, 220);
-            ctx.quadraticCurveTo(cx + dir * 70, 150, cx + dir * 22, 104);
-            ctx.closePath();
-            ctx.fill();
-        };
-        tail(-1);
-        tail(1);
-
-        this.mikuAnchorTexture = new THREE.CanvasTexture(canvas);
-
-        this.mikuAnchorMat = new THREE.SpriteMaterial({
-            map: this.mikuAnchorTexture,
-            color: this._mikuColorCyan.clone(),
-            transparent: true,
-            opacity: 0.16,                 // 主張しすぎない淡い存在感
-            depthWrite: false,
-            blending: THREE.AdditiveBlending
-        });
-
-        this.mikuAnchorSprite = new THREE.Sprite(this.mikuAnchorMat);
-        this.mikuAnchorSprite.scale.set(7, 7, 1);
-        // 画面中央付近・デブリ層より少し手前の奥行き
-        this.mikuAnchorSprite.position.set(0, 0.5, -4);
-        this.scene.add(this.mikuAnchorSprite);
-
+    // ── 完走でミクが現れる「光」: 背後のシアン逆光グロー ──
+    // （ゲーム中のミク表現は完走時の3D VRMが担うため、常設シルエットは置かない）
+    initMikuGlow() {
         // 背後のシアン逆光グロー（完走の実体化でだけ点灯。普段は不可視）
         const gsize = 256;
         const gcanvas = document.createElement('canvas');
@@ -305,7 +247,7 @@ export class SongTakeover extends BaseSong {
         this.scene.add(this.mikuRimLight);
     }
 
-    // ── ミクVRMの読み込み。完走まで不可視で待機させる ──
+    // ── ミクVRMの読み込み。ゲーム中は暗号化シルエット（影）として中央に佇ませる ──
     loadMiku() {
         const loader = new GLTFLoader();
         loader.register((parser) => new VRMLoaderPlugin(parser));
@@ -315,8 +257,6 @@ export class SongTakeover extends BaseSong {
                 if (!this.isActive) { this.disposeVRM(gltf.userData.vrm); return; }
                 const vrm = gltf.userData.vrm;
                 this.currentVRM = vrm;
-                // 完走の瞬間に光の中から現れるまで隠しておく
-                vrm.scene.visible = false;
                 vrm.scene.position.set(0, this._mikuVrmBaseY, this._mikuVrmBaseZ);
                 vrm.scene.rotation.y = Math.PI; // y=0だと背中向き → π回して正面
                 vrm.scene.scale.setScalar(this._mikuVrmScale);
@@ -324,7 +264,21 @@ export class SongTakeover extends BaseSong {
                     if (obj.isMesh) { obj.castShadow = false; obj.frustumCulled = false; }
                 });
                 this.setupReclaimPose(vrm);
-                settleSpringBones(vrm); // 出現時にツインテールが逆立たないよう静止状態へ
+                settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
+
+                // 暗号化された姿＝ライティング無視のダークな単色シルエット。
+                // 実マテリアル（顔の重ね描画含む）は各メッシュの userData に退避し、
+                // 完走時に復号＝そのまま戻すので顔の描画順は壊れない。
+                // 加算合成で淡く発光させ、暗い背景でも輪郭が読める「暗号化ファントム」に。
+                this.mikuSilhouetteMat = new THREE.MeshBasicMaterial({
+                    color: this._silColorEnemy.clone(),
+                    transparent: true,
+                    opacity: 0.55,
+                    depthWrite: false,
+                    blending: THREE.AdditiveBlending
+                });
+                this._applyMikuSilhouette(vrm);
+
                 this.scene.add(vrm.scene);
                 this.mikuVrmReady = true;
                 console.log('[TAKEOVER] Miku VRM loaded.');
@@ -332,6 +286,40 @@ export class SongTakeover extends BaseSong {
             undefined,
             (error) => { console.error('[TAKEOVER] Failed to load Miku VRM:', error); }
         );
+    }
+
+    // 全メッシュの材質を暗号化シルエット（ダーク単色）へ差し替え、実材質は退避
+    _applyMikuSilhouette(vrm) {
+        if (!vrm || this._silhouetteOn || !this.mikuSilhouetteMat) return;
+        vrm.scene.traverse((o) => {
+            if (o.isMesh || o.isSkinnedMesh) {
+                if (o.userData._origMat === undefined) o.userData._origMat = o.material;
+                o.material = this.mikuSilhouetteMat;
+            }
+        });
+        this._silhouetteOn = true;
+    }
+
+    // 復号: 退避してあった本来の彩色マテリアルへ戻す
+    _restoreMikuMaterials(vrm) {
+        if (!vrm || !this._silhouetteOn) return;
+        vrm.scene.traverse((o) => {
+            if ((o.isMesh || o.isSkinnedMesh) && o.userData._origMat !== undefined) {
+                o.material = o.userData._origMat;
+            }
+        });
+        this._silhouetteOn = false;
+    }
+
+    // スプリングボーン更新（ツインテールが自然に揺れる）用の dt 計測ヘルパ
+    _tickVrm() {
+        const vrm = this.currentVRM;
+        if (!vrm || typeof vrm.update !== 'function') return;
+        const rel = (performance.now() - this._vrmT0) / 1000;
+        let dt = this._vrmLastRel ? Math.min(0.05, rel - this._vrmLastRel) : 0.016;
+        if (dt <= 0) dt = 0.016;
+        this._vrmLastRel = rel;
+        vrm.update(dt);
     }
 
     // 凱旋らしい落ち着いた立ち姿（腕は軽く下ろし、脚を僅かに開く）
@@ -349,45 +337,42 @@ export class SongTakeover extends BaseSong {
         if (rUl) rUl.rotation.z = -Math.PI / 32;
     }
 
-    // 完走中の毎フレーム: 光からせり上がり、フェードイン＋拡大＋前進する
+    // 完走中の毎フレーム: 暗号化シルエットを復号して彩色へ戻し、光を浴びて姿を現す
     _updateMikuReclaimVRM(ease, breathe) {
         const vrm = this.currentVRM;
         if (!vrm) return;
         if (!vrm.scene.visible) vrm.scene.visible = true;
 
-        // 光の中からせり上がり、画面中央の定位置へ収束（出現時から中央寄りに）
-        const y = (this._mikuVrmBaseY - 0.4) + ease * 0.4 + breathe * 0.02;
-        const z = (this._mikuVrmBaseZ - 0.7) + ease * 0.7;
-        const sc = this._mikuVrmScale * (0.92 + ease * 0.08);
+        // 復号: シルエット材質 → 本来の彩色マテリアルへ戻す（顔の重ね描画はそのまま）。
+        // 暗→明の切替わりは背後グローのブルームが覆い隠すので、その瞬間に行う。
+        if (this._silhouetteOn && ease > 0.12) this._restoreMikuMaterials(vrm);
+
+        // 既に中央に佇んでいるので、わずかに前へ歩み出て光を浴びる（大きな移動はしない）
+        const y = this._mikuVrmBaseY + breathe * 0.02;
+        const z = this._mikuVrmBaseZ - ease * 0.3;
+        const sc = this._mikuVrmScale * (1 + ease * 0.04);
         vrm.scene.position.set(0, y, z);
         vrm.scene.scale.setScalar(sc);
-
-        // マテリアルには一切触れない。
-        // このVRMの顔は「不透明の肌」の上に「半透明の目・眉・まつ毛・口」を
-        // renderOrderで重ねて描いており、ここで全マテリアルを transparent 化すると
-        // 不透明の肌が透明パスへ移って描画順が崩れ、上乗せの目鼻が肌に覆われて
-        // 「顔が消える」。出現の演出は終局オーバーレイの暗転明け＋背後グロー＋
-        // せり上がりで担い、顔の重ね描画はそのまま保つ。
 
         // 軽い呼吸
         const spine = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('spine');
         if (spine) spine.rotation.x = breathe * 0.03 - 0.015;
 
-        // スプリングボーン更新（ツインテールが自然に揺れる）
-        const rel = (performance.now() - this._vrmT0) / 1000;
-        let dt = this._vrmLastRel ? Math.min(0.05, rel - this._vrmLastRel) : 0.016;
-        if (dt <= 0) dt = 0.016;
-        this._vrmLastRel = rel;
-        if (typeof vrm.update === 'function') vrm.update(dt);
+        this._tickVrm();
     }
 
     disposeVRM(vrm) {
         if (!vrm) return;
         vrm.scene.traverse((obj) => {
             if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                mats.forEach((m) => {
+            // シルエット表示中は obj.material が共有のダーク材質なので、退避してある
+            // 本来のマテリアルも併せて解放する（取りこぼし防止）。
+            const all = [];
+            if (obj.material) all.push(...(Array.isArray(obj.material) ? obj.material : [obj.material]));
+            if (obj.userData && obj.userData._origMat) all.push(...(Array.isArray(obj.userData._origMat) ? obj.userData._origMat : [obj.userData._origMat]));
+            if (all.length) {
+                all.forEach((m) => {
+                    if (!m || m === this.mikuSilhouetteMat) return; // 共有材質は destroy 側で解放
                     if (m.map) m.map.dispose();
                     if (m.normalMap) m.normalMap.dispose();
                     if (m.emissiveMap) m.emissiveMap.dispose();
@@ -1357,8 +1342,6 @@ export class SongTakeover extends BaseSong {
     // ── 陣取り反映: 制圧率に応じて赤/緑の領域・端末枠・背景・デブリを染める ──
     _applyTerritory() {
         const cov = this.greenCoverage;
-        // ミクのアンカー色補間用に制圧率を保持（実際の色付けは毎フレームのupdateで）
-        this._mikuTakeRatio = cov;
 
         // 上=赤(敵) / 下=緑(奪還) の高さで綱引きを可視化する
         if (this.erosionEl)   this.erosionEl.style.height   = `${((1 - cov) * 100).toFixed(2)}%`;
@@ -2344,57 +2327,41 @@ export class SongTakeover extends BaseSong {
             this.camera.lookAt(0, 0.5, -4);
         }
 
-        // ── ミクの視覚アンカー: リズムに合わせて淡く脈動 ──
-        // サビ(isClimax)で少し速く・強く、解読率に応じてシアン→赤へ寄せる。
-        if (this.mikuAnchorSprite && this.mikuAnchorMat) {
-            if (this._mikuReclaim) {
-                // ── 完走: ミクが背後のシアン光の中から実体化（3D VRM） ──
-                // クリア演出の発火は曲終わり約3秒前なので、中央へ到達する前に曲が
-                // 終わらないよう、ランプを速めて素早く画面中央へ収束させる。
-                this._reclaimT = Math.min(1, this._reclaimT + 0.018);
-                const ease = 1 - Math.pow(1 - this._reclaimT, 3); // easeOutCubic
-                this._mikuAnchorPhase += 0.04;
-                const breathe = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
+        // ── ミク: ゲーム中は暗号化シルエット → 完走で復号され光を浴びる（3D VRM） ──
+        if (this._mikuReclaim) {
+            // クリア演出の発火は曲終わり約3秒前なので、復号が間に合うようランプを速める。
+            this._reclaimT = Math.min(1, this._reclaimT + 0.018);
+            const ease = 1 - Math.pow(1 - this._reclaimT, 3); // easeOutCubic
+            this._mikuAnchorPhase += 0.04;
+            const breathe = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
 
-                // 背後のシアン逆光グロー＝ミクが現れる「光」。完走で強く灯す。
-                if (this.mikuGlowMat && this.mikuGlowSprite) {
-                    this.mikuGlowMat.color.copy(this._mikuColorCyan);
-                    this.mikuGlowMat.opacity = ease * (0.55 + breathe * 0.2);
-                    const gs = 9 + ease * 13;
-                    this.mikuGlowSprite.scale.set(gs, gs, 1);
-                    this.mikuGlowSprite.position.set(0, 0.4, this._mikuVrmBaseZ - 0.6);
-                }
-
-                if (this.currentVRM) {
-                    // フラットなシルエットは退場し、光の中の3Dミクへバトンタッチ
-                    this.mikuAnchorMat.opacity = Math.max(0, 0.16 * (1 - ease * 1.6));
-                    this._updateMikuReclaimVRM(ease, breathe);
-                } else {
-                    // フォールバック: VRM未ロード時は従来のシルエット実体化
-                    this.mikuAnchorMat.color.copy(this._mikuColorCyan); // シアン固定（赤寄せを上書き）
-                    this.mikuAnchorMat.opacity = Math.min(1, (0.16 + ease * 0.84) - breathe * 0.05 * ease);
-                    const s = 7 + ease * 6; // 7 → 13
-                    this.mikuAnchorSprite.scale.set(s, s, 1);
-                    this.mikuAnchorSprite.position.z = -4 + ease * 2;   // -4 → -2 前進
-                    this.mikuAnchorSprite.position.y = 0.5 + ease * 0.4;
-                }
-            } else {
-                const speed = this.isClimax ? 0.085 : 0.05;
-                this._mikuAnchorPhase += speed;
-                const pulse = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
-                // 透明度は過剰にしない（サビでわずかに底上げ）
-                const base = this.isClimax ? 0.18 : 0.13;
-                const amp = this.isClimax ? 0.16 : 0.09;
-                this.mikuAnchorMat.opacity = base + pulse * amp;
-                // ごく僅かにスケールも呼吸させる
-                const s = 7 + pulse * (this.isClimax ? 0.5 : 0.25);
-                this.mikuAnchorSprite.scale.set(s, s, 1);
-                // 奪還が進むほど 赤(敵) → 緑(ミク) へ
-                this._mikuAnchorColor.lerpColors(
-                    this._mikuColorRed, this._mikuColorCyan, this._mikuTakeRatio
-                );
-                this.mikuAnchorMat.color.copy(this._mikuAnchorColor);
+            // 背後のシアン逆光グロー＝復号で浴びる「光」。完走で強く灯す。
+            if (this.mikuGlowMat && this.mikuGlowSprite) {
+                this.mikuGlowMat.color.copy(this._mikuColorCyan);
+                this.mikuGlowMat.opacity = ease * (0.55 + breathe * 0.2);
+                const gs = 9 + ease * 13;
+                this.mikuGlowSprite.scale.set(gs, gs, 1);
+                this.mikuGlowSprite.position.set(0, 0.4, this._mikuVrmBaseZ - 0.6);
             }
+
+            if (this.currentVRM) this._updateMikuReclaimVRM(ease, breathe);
+        } else if (this.currentVRM && this.mikuVrmReady) {
+            // ── ゲーム中: 暗号化された姿＝ダークなシルエットが中央に佇む ──
+            // 解読が進む(greenCoverage↑)ほど、敵支配の赤ダーク→奪還のシアンダークへ寄せる。
+            this._mikuAnchorPhase += this.isClimax ? 0.05 : 0.03;
+            const breathe = (Math.sin(this._mikuAnchorPhase) + 1) * 0.5; // 0〜1
+            const vrm = this.currentVRM;
+            vrm.scene.position.set(0, this._mikuVrmBaseY + breathe * 0.02, this._mikuVrmBaseZ);
+            vrm.scene.scale.setScalar(this._mikuVrmScale);
+            if (this.mikuSilhouetteMat) {
+                this.mikuSilhouetteMat.opacity = 0.5 + breathe * 0.16; // 淡く脈動
+                this.mikuSilhouetteMat.color
+                    .copy(this._silColorEnemy)
+                    .lerp(this._silColorFreed, Math.min(1, this.greenCoverage));
+            }
+            const spine = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('spine');
+            if (spine) spine.rotation.x = breathe * 0.02 - 0.01;
+            this._tickVrm(); // ツインテールがゆっくり揺れる
         }
 
         // At phrase boundary: expire remaining scrambled targets after a 2-second delay
@@ -2493,15 +2460,7 @@ export class SongTakeover extends BaseSong {
         if (this._debrisEdgesGeo) { this._debrisEdgesGeo.dispose(); this._debrisEdgesGeo = null; }
         if (this._debrisMat)      { this._debrisMat.dispose();      this._debrisMat = null; }
 
-        // ミクの視覚アンカーを除去・解放
-        if (this.mikuAnchorSprite) {
-            this.scene.remove(this.mikuAnchorSprite);
-            this.mikuAnchorSprite = null;
-        }
-        if (this.mikuAnchorMat)     { this.mikuAnchorMat.dispose();     this.mikuAnchorMat = null; }
-        if (this.mikuAnchorTexture) { this.mikuAnchorTexture.dispose(); this.mikuAnchorTexture = null; }
-
-        // 背後グローも除去・解放
+        // 背後グローを除去・解放
         if (this.mikuGlowSprite) {
             this.scene.remove(this.mikuGlowSprite);
             this.mikuGlowSprite = null;
@@ -2509,13 +2468,15 @@ export class SongTakeover extends BaseSong {
         if (this.mikuGlowMat)     { this.mikuGlowMat.dispose();     this.mikuGlowMat = null; }
         if (this.mikuGlowTexture) { this.mikuGlowTexture.dispose(); this.mikuGlowTexture = null; }
 
-        // 3DミクVRM・専用ライトを除去・解放
+        // 3DミクVRM・専用ライト・シルエット材質を除去・解放
         if (this.currentVRM) {
             this.scene.remove(this.currentVRM.scene);
             this.disposeVRM(this.currentVRM);
             this.currentVRM = null;
         }
         this.mikuVrmReady = false;
+        this._silhouetteOn = false;
+        if (this.mikuSilhouetteMat) { this.mikuSilhouetteMat.dispose(); this.mikuSilhouetteMat = null; }
         [this.mikuAmbient, this.mikuKeyLight, this.mikuRimLight].forEach((l) => {
             if (l && this.scene) this.scene.remove(l);
         });
