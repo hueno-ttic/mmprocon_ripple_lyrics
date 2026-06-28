@@ -60,16 +60,15 @@ window.addEventListener('unhandledrejection', (event) => {
 // 再デプロイで内容ハッシュが変わると、古い index.html/main.js が参照する曲チャンク
 // (例: song-takeover-xxxx.js)はサーバーから消えており、その曲を選んだ瞬間に
 // 動的 import() が 404 になる(= "Failed to fetch dynamically imported module")。
-// 一度フルリロードすれば新しい index.html→新ハッシュを取り直して必ず復旧するので、
-// stale chunk を検知したら自動リロードする。曲チャンクは曲選択時(load より遥か後)に
-// 遅延ロードされるため、ガードは時刻ベースにする。直近に一度リロードしたばかりなら
-// 再発を「別要因」とみなして再リロードせず諦める(=無限ループ防止)。
-const RELOAD_GUARD_KEY = 'mm_chunk_reloaded_at';
+// 復旧にはフルリロードで新しい index.html→新ハッシュを取り直す必要があるが、
+// 「勝手にリロード」するとポーズ作成中など没入中の操作が一瞬で吹き飛ぶため、
+// 自動リロードは一切行わない。stale chunk を検知したら、リロードのタイミングは
+// ユーザーが任意に押せる「更新」バナー(showManualUpdatePrompt)に完全に委ねる。
+// 実際に location.reload() が走るのはユーザーがバナーをタップした瞬間だけ。
 // リロードで復旧した直後だけ立つフラグ。これが立っていれば、リロード後の起動で
 // タイトル/プロローグを飛ばして選曲画面へ直帰する(=「選曲したらタイトルに
-// 飛ばされた」という断絶した体験を避ける)。
+// 飛ばされた」という断絶した体験を避ける)。ユーザーが「更新」を押したときだけ立てる。
 const RELOAD_RECOVER_KEY = 'mm_chunk_recovering';
-const RELOAD_GUARD_WINDOW_MS = 30 * 1000;
 
 function isStaleChunkError(err) {
     const msg = (err && (err.message || err.toString())) || '';
@@ -78,29 +77,61 @@ function isStaleChunkError(err) {
         || msg.includes('Importing a module script failed'); // Safari の同等メッセージ
 }
 
-function reloadOnceForStaleChunk() {
+// stale chunk を検知したときに一度だけ出す「更新」バナー。リロードは決して自動では
+// 行わず、ユーザーがこのバナーをタップした瞬間にだけ走る(=任意のタイミングで更新)。
+let manualUpdatePromptShown = false;
+function showManualUpdatePrompt() {
+    if (manualUpdatePromptShown) return;
+    manualUpdatePromptShown = true;
+    console.warn('[Ripple Lyrics] 古い曲チャンクを検出。更新バナーを表示します(自動リロードはしません)。');
     try {
-        const last = Number(sessionStorage.getItem(RELOAD_GUARD_KEY) || 0);
-        if (last && (Date.now() - last) < RELOAD_GUARD_WINDOW_MS) {
-            // ついさっきリロードしたのにまだ失敗する = 別要因。ループを避けて諦める。
-            console.error('[Ripple Lyrics] チャンク再取得後も失敗。自動リロードを中止します。');
-            return false;
-        }
-        sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
-        // リロード後はタイトルへ落とさず選曲画面へ直帰させる
-        sessionStorage.setItem(RELOAD_RECOVER_KEY, '1');
-    } catch (_) { /* sessionStorage 不可環境でもリロードは試みる */ }
-    console.warn('[Ripple Lyrics] 古い曲チャンクを検出。最新版を取り直すため再読み込みします。');
-    location.reload();
-    return true;
+        const bar = document.createElement('div');
+        bar.style.cssText = `
+            position: fixed; left: 50%;
+            bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+            transform: translateX(-50%) translateY(8px);
+            display: flex; align-items: center; gap: 14px;
+            padding: 10px 14px 10px 22px; border-radius: 24px;
+            font-family: 'Noto Sans JP', 'Inter', sans-serif;
+            font-size: 13px; letter-spacing: 0.06em; white-space: nowrap;
+            color: rgba(255,255,255,0.92); background: rgba(20,40,60,0.78);
+            border: 1px solid rgba(255,255,255,0.22);
+            -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+            z-index: 3000; opacity: 0;
+            transition: opacity 0.5s ease, transform 0.5s ease;
+        `;
+        const msg = document.createElement('span');
+        msg.textContent = '新しいバージョンがあります';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '更新';
+        btn.style.cssText = `
+            font-family: inherit; font-size: 13px; font-weight: 700;
+            letter-spacing: 0.08em; color: #0b1a26;
+            padding: 7px 18px; border-radius: 18px; border: none;
+            background: rgba(255,255,255,0.92); cursor: pointer;
+            touch-action: manipulation;
+        `;
+        // ここだけがアプリ内で location.reload() を呼ぶ唯一の経路。必ずユーザー操作起点。
+        btn.addEventListener('click', () => {
+            try { sessionStorage.setItem(RELOAD_RECOVER_KEY, '1'); } catch (_) { /* storage不可でもリロードは試みる */ }
+            location.reload();
+        });
+        bar.appendChild(msg);
+        bar.appendChild(btn);
+        document.body.appendChild(bar);
+        requestAnimationFrame(() => {
+            bar.style.opacity = '1';
+            bar.style.transform = 'translateX(-50%) translateY(0)';
+        });
+    } catch (_) { /* バナー生成失敗は致命的でない */ }
 }
 
 // Vite が dynamic import を変換した際の標準プリロード失敗イベント。
-// プリロードはユーザーが曲を選ぶ前にバックグラウンドで走るため、ここで即リロード
-// すると「選曲画面を眺めているだけ」で勝手に再読み込みされ、タイトルへ飛ばされた
-// ように見える。ここでは Vite 既定の throw を抑止するだけに留め、実際の復旧は
-// 曲を選んだ瞬間の import() 失敗(switchToSongScene)側でリトライ→必要時のみ
-// リロード、という制御された一本道に集約する。
+// プリロードはユーザーが曲を選ぶ前にバックグラウンドで走るため、ここで何かすると
+// 「選曲画面を眺めているだけ」で勝手に挙動が変わって見える。ここでは Vite 既定の
+// throw を抑止するだけに留め、実際の対応は曲を選んだ瞬間の import() 失敗
+// (switchToSongScene)側でリトライ→必要時のみ「更新」バナー、に集約する。
 window.addEventListener('vite:preloadError', (event) => {
     if (isStaleChunkError(event.payload)) {
         event.preventDefault();
@@ -161,9 +192,9 @@ class Application {
         const seenIntro = localStorage.getItem('mm_seen_intro') === '1';
         const skipParam = new URLSearchParams(location.search).get('skipIntro') === '1';
 
-        // 古いチャンク検知でフルリロードして戻ってきた直後か?(reloadOnceForStaleChunk が
-        // 立てたフラグ)。その場合はタイトル/プロローグを一切挟まず選曲画面へ直帰し、
-        // 「選曲した瞬間にタイトルへ飛ばされた」という断絶を感じさせない。
+        // ユーザーが「更新」バナーをタップしてリロードし、戻ってきた直後か?
+        // (showManualUpdatePrompt のタップ時に立てたフラグ)。その場合はタイトル/
+        // プロローグを一切挟まず選曲画面へ直帰し、再開の断絶を感じさせない。
         let recovering = false;
         try {
             recovering = sessionStorage.getItem(RELOAD_RECOVER_KEY) === '1';
@@ -467,8 +498,6 @@ class Application {
         const loader = SONG_LOADERS[songConfig.id];
         if (loader) {
             SongClass = await this._loadSongClass(loader, songConfig.id);
-            // 復旧リロードを開始した場合は SongClass=null。生成せず中断する。
-            if (SongClass === null) return;
         }
         // ロード中に別の曲へ切り替わっていたら、この結果は捨てる
         if (token !== this._sceneToken) return;
@@ -478,10 +507,9 @@ class Application {
     }
 
     // 曲チャンクを動的ロードする。電波の瞬断など一過性の取得失敗は数回リトライ
-    // すれば回復し、リロードは起きない=ユーザーは中断に気づかない。リトライしても
-    // 駄目で「古いチャンク(再デプロイで404)」と判定できる時だけ、最後の手段として
-    // フルリロードで最新版を取り直す(その場合は null を返して呼び出し側を止める)。
-    // stale 以外のエラーはリトライ無意味なので即 BaseSong フォールバック。
+    // すれば回復し、ユーザーは中断に気づかない。リトライしても駄目で「古いチャンク
+    // (再デプロイで404)」と判定できる時だけ「更新」バナーを出す(自動リロードは
+    // しない)。いずれの失敗時も BaseSong で繋ぎ、画面は飛ばさない。
     async _loadSongClass(loader, songId) {
         const MAX_ATTEMPTS = 3;
         const RETRY_BASE_MS = 500;
@@ -499,9 +527,10 @@ class Application {
             }
         }
         console.error(`[Ripple Lyrics] 曲チャンクのロードに失敗: ${songId}`, lastErr);
-        // 再デプロイでハッシュが切れた古いチャンクなら、一度リロードすれば復旧する。
-        // (BaseSong フォールバックで無言に壊すより、最新版で正しく遊ばせる)
-        if (isStaleChunkError(lastErr) && reloadOnceForStaleChunk()) return null;
+        // 再デプロイでハッシュが切れた古いチャンクなら、フルリロードで最新版を取り直せば
+        // 復旧する。ただし没入中の自動リロードは絶対にしない(ポーズ作成などが吹き飛ぶ)。
+        // 「更新」バナーを出してリロードのタイミングをユーザーに委ね、今は BaseSong で繋ぐ。
+        if (isStaleChunkError(lastErr)) showManualUpdatePrompt();
         return BaseSong;
     }
 
