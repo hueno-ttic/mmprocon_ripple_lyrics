@@ -52,6 +52,12 @@ const SPAM_BURST_MAX = 3;       // 連打加速時に1クリックで足す葉�
 const LEAF_GREEN = '#3f8f4a';
 const LEAF_GREEN_D = '#2c6b37';
 
+// === カラオケ発光(歌詞葉が歌唱に合わせて1文字ずつ点灯) ==========================
+// 歌詞葉のラベルを「暗い下地＋歌った分だけ白＋琥珀グローで光る上層」の2層描画にし、
+// TextAlive の再生位置に合わせて左から1文字ずつ点灯させる。
+// false にすると従来どおり「文節をまるごと白で一度に表示」へ即座に戻る(完全リバート)。
+const KARAOKE_GLOW = true;
+
 // フィナーレの満開ひまわり: 画面を覆う「巨大な大輪」にするための全体倍率。
 // goalLeaf.group のポップ(0→1)の内側で bloomRoot をこの倍率に保ち、
 // 咲き切ると画面いっぱいの大輪になる(外周花弁が視野をわずかに超える程度=フレーム占有)。
@@ -106,6 +112,7 @@ export class SongKotaete extends BaseSong {
         // ---- 進行/補助 ----
         this.answeredCount = 0;        // タッチで確定した葉の数
         this.builtCount = 0;           // プレイヤーが生やした葉の数
+        this._landingPoints = 0;       // 金の葉(歌詞葉)にうまく着地できた回数=着地ポイント
         this._lastWordStart = -1;
         this._lastLeafAt = -Infinity;  // 葉の生成レート制限(実時間ms)
         this._lastLyricLeaf = null;    // 直近の歌詞葉(助詞・助動詞はここへ追記=文節結合)
@@ -161,10 +168,8 @@ export class SongKotaete extends BaseSong {
 
         this._ensureHud(); // 高度HUDを常設(オチの伏線)
 
-        this.highlightFirstInteractable(() => {
-            if (this.answeredCount > 0 || this.builtCount > 0) return null;
-            return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.62 };
-        }, { label: 'クリック連打で葉を伸ばせ！ミクを空へ', autoDismissMs: 9000 });
+        // 「クリック連打で〜」の常設ヒント(highlightFirstInteractable)は廃止。
+        // 操作説明はBaseSongのチュートリアルに一本化する。
     }
 
     initThree() {
@@ -294,6 +299,7 @@ export class SongKotaete extends BaseSong {
         geo.translate(-0.42, 0, 0);
         this._leafGeo = geo;
         this._leafVeinTex = this._leafVeinTexture();
+        this._leafGoldTex = this._leafGoldTexture(); // 歌詞葉(金の葉)用
     }
 
     _leafVeinTexture() {
@@ -322,13 +328,45 @@ export class SongKotaete extends BaseSong {
         return t;
     }
 
+    // 歌詞葉(金の葉)のテクスチャ。緑葉と同じ葉脈構造のまま、金〜琥珀のグラデにする。
+    _leafGoldTexture() {
+        const W = 256, H = 168;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const x = c.getContext('2d');
+        const g = x.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, '#8a5a12'); g.addColorStop(0.5, '#f6c64b'); g.addColorStop(1, '#9a6a16');
+        x.fillStyle = g; x.fillRect(0, 0, W, H);
+        // 主脈
+        x.strokeStyle = 'rgba(110,70,10,0.55)'; x.lineWidth = 4;
+        x.beginPath(); x.moveTo(8, H / 2); x.lineTo(W - 8, H / 2); x.stroke();
+        // 側脈
+        x.strokeStyle = 'rgba(110,70,10,0.35)'; x.lineWidth = 2;
+        for (let i = 1; i <= 6; i++) {
+            const u = 14 + (W - 30) * (i / 7);
+            x.beginPath(); x.moveTo(u, H / 2); x.lineTo(u + 22, 14); x.stroke();
+            x.beginPath(); x.moveTo(u, H / 2); x.lineTo(u + 22, H - 14); x.stroke();
+        }
+        // 金属的なハイライト
+        const hl = x.createRadialGradient(W * 0.32, H * 0.38, 4, W * 0.32, H * 0.38, 80);
+        hl.addColorStop(0, 'rgba(255,250,210,0.6)'); hl.addColorStop(1, 'rgba(255,250,210,0)');
+        x.fillStyle = hl; x.fillRect(0, 0, W, H);
+        const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+        return t;
+    }
+
     // 一枚の葉メッシュ(side: -1左/+1右, scale)。テキストは持たない純粋な3D葉。
-    _buildFoliage(side, scale = 1) {
+    // gold=true で歌詞葉(金の葉)。金は艶を強め、わずかに自発光させて目立たせる。
+    _buildFoliage(side, scale = 1, gold = false) {
         this._ensureLeafAssets();
-        const mat = new THREE.MeshStandardMaterial({
-            map: this._leafVeinTex, side: THREE.DoubleSide, roughness: 0.62, metalness: 0.0,
-            emissive: 0x000000,
-        });
+        const mat = gold
+            ? new THREE.MeshStandardMaterial({
+                map: this._leafGoldTex, side: THREE.DoubleSide, roughness: 0.34, metalness: 0.65,
+                emissive: 0x5a3d00, emissiveIntensity: 0.35,
+            })
+            : new THREE.MeshStandardMaterial({
+                map: this._leafVeinTex, side: THREE.DoubleSide, roughness: 0.62, metalness: 0.0,
+                emissive: 0x000000,
+            });
         const mesh = new THREE.Mesh(this._leafGeo, mat);
         mesh.scale.set(side * scale, scale, scale); // 左は x 反転
         return mesh;
@@ -337,11 +375,16 @@ export class SongKotaete extends BaseSong {
     // カメラへ正対する可読テキスト札(歌詞)。葉の上に重ねる。
     // フォントサイズは一定に保ち、文字数ぶんキャンバスを横長にして可読性を保つ。
     // sizeFactor: 文字数に応じた葉全体の倍率(札もこの倍率で大きくする)。
-    _makeTextLabel(text, sizeFactor = 1) {
+    // sungCount: 発声済みの文字数(左からこの数だけ白＋琥珀グローで点灯)。
+    //   null = 全文字を点灯(=従来表示)。KARAOKE_GLOW=false 時は常に null を渡す。
+    _makeTextLabel(text, sizeFactor = 1, sungCount = null) {
         const fs = 60, H = 130;
+        const font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`;
         const meas = document.createElement('canvas').getContext('2d');
-        meas.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`;
-        const tw = Math.ceil(meas.measureText(text).width);
+        meas.font = font;
+        const chars = [...text];
+        const widths = chars.map((ch) => meas.measureText(ch).width);
+        const tw = Math.ceil(widths.reduce((a, b) => a + b, 0));
         const padX = 46;
         const W = Math.max(180, tw + padX * 2);
         const c = document.createElement('canvas'); c.width = W; c.height = H;
@@ -353,10 +396,29 @@ export class SongKotaete extends BaseSong {
         x.roundRect(pad, pad, W - pad * 2, H - pad * 2, r);
         x.fill();
         x.strokeStyle = 'rgba(255,236,150,0.5)'; x.lineWidth = 3; x.stroke();
-        x.textAlign = 'center'; x.textBaseline = 'middle';
-        x.font = `bold ${fs}px "Inter","Noto Sans JP",sans-serif`;
-        x.lineWidth = 6; x.strokeStyle = 'rgba(8,24,8,0.95)'; x.strokeText(text, W / 2, H / 2 + 2);
-        x.fillStyle = '#ffffff'; x.fillText(text, W / 2, H / 2 + 2);
+        // 文字を1つずつ描く。発声済み(< sung)は白＋琥珀グロー、未発声は暗く沈める。
+        x.textAlign = 'left'; x.textBaseline = 'middle';
+        x.font = font;
+        const sung = (sungCount == null) ? chars.length : sungCount;
+        let cx = W / 2 - tw / 2;
+        const by = H / 2 + 2;
+        for (let i = 0; i < chars.length; i++) {
+            const ch = chars[i];
+            // 縁取り(可読性): グローを乗せずに黒縁を先に置く
+            x.shadowColor = 'rgba(0,0,0,0)'; x.shadowBlur = 0;
+            x.lineWidth = 6; x.strokeStyle = 'rgba(8,24,8,0.95)';
+            x.strokeText(ch, cx, by);
+            if (i < sung) {
+                x.shadowColor = 'rgba(255,225,76,0.9)'; x.shadowBlur = 12; // 琥珀の発光
+                x.fillStyle = '#ffffff';
+            } else {
+                x.shadowColor = 'rgba(0,0,0,0)'; x.shadowBlur = 0;
+                x.fillStyle = 'rgba(208,224,202,0.42)'; // 未発声=暗い下地
+            }
+            x.fillText(ch, cx, by);
+            cx += widths[i];
+        }
+        x.shadowBlur = 0;
         const tex = new THREE.CanvasTexture(c);
         const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true }));
         const h = 0.6 * sizeFactor;            // 文字の高さ(=葉サイズに連動)
@@ -454,7 +516,8 @@ export class SongKotaete extends BaseSong {
         group.position.set(x, y, 0);
 
         // 歌詞葉は文字数で大きさが変わる(opts.lyric && text)。それ以外は等倍の足場。
-        const sizeFactor = (opts.lyric && text) ? this._lyricSizeFactor(text) : 1.0;
+        const isLyric = !!(opts.lyric && text);
+        const sizeFactor = isLyric ? this._lyricSizeFactor(text) : 1.0;
 
         let foliage = null, label = null;
         if (!opts.isGoal) {
@@ -465,14 +528,16 @@ export class SongKotaete extends BaseSong {
             stalk.position.set(-x / 2, 0, -0.02); stalk.rotation.z = Math.PI / 2;
             group.add(stalk);
 
-            // 3Dの葉(卵形＋葉脈＋カップ)。歌詞の文字数ぶん大きく。
-            foliage = this._buildFoliage(side, 2.15 * sizeFactor);
+            // 3Dの葉(卵形＋葉脈＋カップ)。歌詞の文字数ぶん大きく。歌詞葉は「金の葉」。
+            foliage = this._buildFoliage(side, 2.15 * sizeFactor, isLyric);
             foliage.rotation.z = side * 0.14;
             group.add(foliage);
 
             // 歌詞は葉に記載する(文節ごと)。連打/超ジャンプの足場はラベル無し。
             if (opts.lyric && text) {
-                label = this._makeTextLabel(text, sizeFactor);
+                // カラオケ発光ON時は未点灯(0)から始め、再生位置で左から点灯させる。
+                const sc = KARAOKE_GLOW ? 0 : null;
+                label = this._makeTextLabel(text, sizeFactor, sc);
                 label.position.set(0, 0.05 * sizeFactor, 0.45);
                 group.add(label);
             }
@@ -483,6 +548,10 @@ export class SongKotaete extends BaseSong {
             group, foliage, label, y, x, side, text: text || '', sizeFactor,
             born: 0, openT: 0, confirmed: false, landed: false, glow: 0,
             index: idx, isGoal: !!opts.isGoal,
+            // 歌詞葉(金の葉)か。着地ポイント加点の対象判定に使う。pointCounted=加点済み。
+            isLyric, pointCounted: false, gold: isLyric ? 1 : 0,
+            // カラオケ発光: 発声済み文字数と、歌唱タイミングのセグメント([{start,end,count}])。
+            segments: [], lyricSungCount: (isLyric && KARAOKE_GLOW) ? 0 : null,
         };
         // 生え際は小さく → ポップして開く
         group.scale.setScalar(0.01);
@@ -505,24 +574,26 @@ export class SongKotaete extends BaseSong {
         const canAttach = attach && prev && !prev.isGoal && this.leaves.includes(prev)
             && (now - this._lastLyricAt) < 5000;
         if (canAttach) {
-            this._appendLyric(prev, text); // 前の文節に連結し、葉を文字数ぶん大きくする
+            this._appendLyric(prev, text, w); // 前の文節に連結し、葉を文字数ぶん大きくする
             this._lastLyricAt = now;
             return;
         }
-        const leaf = this._spawnLyricLeaf(text);
+        const leaf = this._spawnLyricLeaf(text, w);
         if (leaf) { this._lastLyricLeaf = leaf; this._lastLyricAt = now; }
     }
 
     // 歌詞葉を生やす。最上段の上へ一段積んで読みやすいラダーにする。
-    _spawnLyricLeaf(text) {
+    _spawnLyricLeaf(text, w) {
         const highestY = this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y;
         const y = Math.max(highestY + LEAF_SPACING, this.climbY + LEAF_SPACING);
         this._lastLeafAt = performance.now();
-        return this.spawnLeaf(text, { lyric: true, y });
+        const leaf = this.spawnLeaf(text, { lyric: true, y });
+        this._registerLyricSegment(leaf, text, w);
+        return leaf;
     }
 
     // 既存の歌詞葉に文字を連結し、札を作り直して葉・札を文字数ぶん大きくする。
-    _appendLyric(item, extra) {
+    _appendLyric(item, extra, w) {
         item.text = `${item.text}${extra}`;
         const sizeFactor = this._lyricSizeFactor(item.text);
         item.sizeFactor = sizeFactor;
@@ -530,15 +601,63 @@ export class SongKotaete extends BaseSong {
             const s = 2.15 * sizeFactor;
             item.foliage.scale.set(item.side * s, s, s);
         }
+        this._registerLyricSegment(item, extra, w); // 連結ぶんの歌唱タイミングを追加
+        this._redrawLabel(item);                     // 現在の発声済み数で札を作り直す
+    }
+
+    // カラオケ発光: 葉に「文字列の塊＝歌唱タイミング」のセグメントを記録する。
+    // start/end は TextAlive(ms)。時刻不明の場合は即時点灯(start=null)扱い。
+    _registerLyricSegment(leaf, text, w) {
+        if (!KARAOKE_GLOW || !leaf) return;
+        if (!leaf.segments) leaf.segments = [];
+        const count = [...(text || '')].length;
+        if (!count) return;
+        let start = (w && w.startTime != null) ? w.startTime : null;
+        let end = (w && w.endTime != null) ? w.endTime : null;
+        if (start != null && (end == null || end <= start)) end = start + 360; // フォールバック
+        leaf.segments.push({ start, end, count });
+    }
+
+    // 再生位置 pos(ms) における発声済み文字数。セグメントごとに左から線形で進める。
+    _computeSungCount(leaf, pos) {
+        let n = 0;
+        for (const seg of leaf.segments) {
+            if (seg.start == null) { n += seg.count; continue; } // 時刻不明は常時点灯
+            if (pos >= seg.end) { n += seg.count; continue; }
+            if (pos <= seg.start) continue;
+            const f = (pos - seg.start) / (seg.end - seg.start);
+            n += Math.min(seg.count, Math.ceil(f * seg.count)); // 今歌っている文字も点灯
+        }
+        return n;
+    }
+
+    // 葉のラベルを現在の発声済み数で作り直す(テクスチャ/マテリアルは差し替え)。
+    _redrawLabel(item) {
         if (item.label) {
             if (item.label.userData.tex) item.label.userData.tex.dispose();
             item.label.material.dispose();
             item.group.remove(item.label);
         }
-        const label = this._makeTextLabel(item.text, sizeFactor);
-        label.position.set(0, 0.05 * sizeFactor, 0.45);
+        const label = this._makeTextLabel(item.text, item.sizeFactor, item.lyricSungCount);
+        label.position.set(0, 0.05 * item.sizeFactor, 0.45);
         item.group.add(label);
         item.label = label;
+    }
+
+    // 毎フレーム: 歌詞葉の発声済み文字数を再生位置に同期し、変化した葉だけ描き直す。
+    _updateKaraoke() {
+        if (!KARAOKE_GLOW) return;
+        const p = playerManager.player;
+        if (!p || !p.video) return;
+        const pos = p.timer ? p.timer.position : this.currentTime;
+        for (const l of this.leaves) {
+            if (!l.label || !l.segments || !l.segments.length) continue;
+            const want = this._computeSungCount(l, pos);
+            if (want !== l.lyricSungCount) {
+                l.lyricSungCount = want;
+                this._redrawLabel(l);
+            }
+        }
     }
 
     updateLeaves(dt) {
@@ -550,7 +669,15 @@ export class SongKotaete extends BaseSong {
             // 確定/着地でほのかに光る(葉は発光、札は不透明度UP)
             const targetGlow = (l.confirmed ? 0.55 : 0) + (l.landed ? 0.25 : 0);
             l.glow += (targetGlow - l.glow) * Math.min(1, dt * 6);
-            if (l.foliage) l.foliage.material.emissive.setRGB(l.glow * 0.45, l.glow * 0.55, l.glow * 0.18);
+            if (l.foliage) {
+                if (l.gold) {
+                    // 金葉(歌詞葉): 常に琥珀の自発光ベース + 着地/確定で強く光る
+                    const e = 0.22 + l.glow * 0.6;
+                    l.foliage.material.emissive.setRGB(e * 0.9, e * 0.62, e * 0.12);
+                } else {
+                    l.foliage.material.emissive.setRGB(l.glow * 0.45, l.glow * 0.55, l.glow * 0.18);
+                }
+            }
             if (l.label) l.label.material.opacity = Math.min(1, 0.9 + l.glow * 0.1);
             // そよ風で群ごと軽く揺れる
             l.group.rotation.z = Math.sin(l.born * 1.2 + l.index) * 0.03;
@@ -600,7 +727,10 @@ export class SongKotaete extends BaseSong {
                 // 着地。落下なし方針: 必ず目標の葉に乗る。
                 this.climbX = j.toX; this.climbY = j.toY; this._jumpArc = 0;
                 this.currentLeafIndex = j.toLeaf ? j.toLeaf.index : this.currentLeafIndex;
-                if (j.toLeaf) { j.toLeaf.landed = true; }
+                if (j.toLeaf) {
+                    j.toLeaf.landed = true;
+                    this._awardLanding(j.toLeaf); // 金の葉にうまく着地できたら加点
+                }
                 this.climbState = 'idle';
                 this.jump = null;
                 this._jumpCooldown = this.finishing ? 0 : JUMP_MIN_INTERVAL;
@@ -815,10 +945,33 @@ export class SongKotaete extends BaseSong {
                 top:calc(104px + env(safe-area-inset-top, 0px));
                 z-index:55; pointer-events:none;
                 font-family:"Courier New",monospace; font-weight:bold; text-align:right;
-                color:#2c6b37; text-shadow:0 1px 4px rgba(255,255,255,.6);
+                color:#2c6b37; line-height:1;
+                /* 空・大輪の上でも視認できるよう白縁＋琥珀グローで強く出す */
+                text-shadow:0 2px 10px rgba(255,255,255,.85), 0 0 22px rgba(255,213,74,.55);
             }
-            .mada-hud .alt { font-size:clamp(18px,4.4vw,30px); color:#3f8f4a; }
-            .mada-hud .unit { font-size:11px; letter-spacing:2px; opacity:.8; }
+            .mada-hud .alt { font-size:clamp(40px,11vw,84px); color:#3f8f4a; }
+            .mada-hud .unit { font-size:clamp(15px,3vw,26px); letter-spacing:2px; opacity:.9; }
+            /* mの下に着地ポイント。金の葉に合わせて金色で出す。 */
+            .mada-hud .row-pt { margin-top:2px; }
+            .mada-hud .pt { font-size:clamp(22px,6vw,46px); color:#FFB300; }
+            .mada-hud .pt-unit { font-size:clamp(11px,2.4vw,18px); letter-spacing:1px; opacity:.95; color:#E59A1C; }
+            .mada-hud .pop { animation:hudPop .45s ease-out; }
+            @keyframes hudPop { 0%{transform:scale(1);} 35%{transform:scale(1.35);} 100%{transform:scale(1);} }
+            /* 最終スコア(曲終了時)。中央上寄りに大きく出す。暗転しないので強い縁取り。 */
+            .mada-finalscore {
+                position:absolute; left:50%; top:34%; transform:translate(-50%,-50%) scale(0.8);
+                z-index:63; pointer-events:none; text-align:center;
+                font-family:"Noto Sans JP",sans-serif; color:#fff;
+                opacity:0; transition:opacity .8s ease, transform .8s cubic-bezier(.2,.9,.3,1.2);
+            }
+            .mada-finalscore.show { opacity:1; transform:translate(-50%,-50%) scale(1); }
+            .mada-finalscore .fs-cap { font-size:clamp(13px,3.4vw,20px); font-weight:700; letter-spacing:3px;
+                color:#FFE082; text-shadow:0 2px 10px rgba(0,0,0,.5),0 0 18px rgba(255,179,0,.7); }
+            .mada-finalscore .fs-val { margin-top:6px; font-family:"Courier New",monospace; font-weight:bold;
+                font-size:clamp(46px,15vw,120px); line-height:1; color:#fff;
+                text-shadow:0 3px 14px rgba(0,0,0,.45),0 0 30px rgba(255,213,74,.85); }
+            .mada-finalscore .fs-break { margin-top:10px; font-size:clamp(12px,3vw,17px); font-weight:600;
+                letter-spacing:1px; color:#fff; text-shadow:0 2px 8px rgba(0,0,0,.5); }
             .mada-finale {
                 position:absolute; inset:0; z-index:62; pointer-events:none;
                 display:flex; flex-direction:column; align-items:center; justify-content:center;
@@ -856,17 +1009,39 @@ export class SongKotaete extends BaseSong {
         this._ensureModeStyles();
         const el = document.createElement('div');
         el.className = 'mada-hud';
-        el.innerHTML = `<span class="alt">0</span><span class="unit"> m</span>`;
+        el.innerHTML = `
+            <div class="row-m"><span class="alt">0</span><span class="unit"> m</span></div>
+            <div class="row-pt"><span class="pt">0</span><span class="pt-unit"> 着地pt</span></div>
+        `;
         this.songWrapper.appendChild(el);
         this._hudEl = el;
         this._hudAltSpan = el.querySelector('.alt');
+        this._hudPtSpan = el.querySelector('.pt');
+    }
+
+    // 高度(m)。1単位=10m換算で水増しして爆発感を出す。最終スコア計算と共通。
+    _metersValue() {
+        return Math.max(0, Math.round((this._altitude - GROUND_Y) * 10));
     }
 
     _updateHud() {
         if (!this._hudEl) this._ensureHud();
-        // 昇った高度。バカっぽく1単位=10m換算で水増しして爆発感を出す(真顔の異常さ)
-        const val = Math.max(0, Math.round((this._altitude - GROUND_Y) * 10));
-        if (this._hudAltSpan) this._hudAltSpan.textContent = val.toLocaleString();
+        if (this._hudAltSpan) this._hudAltSpan.textContent = this._metersValue().toLocaleString();
+        if (this._hudPtSpan) this._hudPtSpan.textContent = this._landingPoints.toLocaleString();
+    }
+
+    // 金の葉(歌詞葉)にうまく着地できたら着地ポイント加算 + HUDをポップさせる。
+    _awardLanding(leaf) {
+        if (!leaf || !leaf.isLyric || leaf.pointCounted) return;
+        leaf.pointCounted = true;
+        this._landingPoints++;
+        leaf.glow = Math.max(leaf.glow || 0, 0.8); // 着地した金葉を一段強く光らせる
+        sfx.play('kotaete_resonance');
+        if (this._hudPtSpan) {
+            this._hudPtSpan.textContent = this._landingPoints.toLocaleString();
+            const row = this._hudEl && this._hudEl.querySelector('.row-pt');
+            if (row) { row.classList.remove('pop'); void row.offsetWidth; row.classList.add('pop'); }
+        }
     }
 
     // 破綻ガード: 葉が増えたら、ミクが通過済み(landed かつ足元より下)の葉を下から回収。
@@ -893,7 +1068,7 @@ export class SongKotaete extends BaseSong {
         l.group.traverse(o => {
             if (o.geometry && o.geometry !== this._leafGeo && o.geometry !== this._petalGeo) o.geometry.dispose();
             if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
-                if (m.map && m.map !== this._leafVeinTex) m.map.dispose();
+                if (m.map && m.map !== this._leafVeinTex && m.map !== this._leafGoldTex) m.map.dispose();
                 m.dispose && m.dispose();
             });
         });
@@ -1169,12 +1344,35 @@ export class SongKotaete extends BaseSong {
         this._victoryPose = true;
         sfx.play('complete');
         this._overflowFinale(); // 太陽へ着いた瞬間、空が一瞬だけ白む(過露光)
-        this._finaleCaption();  // 真顔の一行(テーマへ軽く戻す)
-        const peak = Math.max(0, Math.round((this._altitude - GROUND_Y) * 10));
+        // フィナーレは大輪を見せ続け、締めの一行(_finaleCaption)は出さない。
+        // 代わりに「最終スコア = m × 着地ポイント」を大きく出す。
+        this._showFinalScore();
+        const peak = this._metersValue();
+        const points = this._landingPoints;
+        const finalScore = peak * Math.max(1, points); // 0pt でも m を活かす
         this.setResultSummary({
-            lines: [`まだ行けるよモード クリア`, `到達こたえ高度: ${peak} ・ 生やした葉: ${this.builtCount}枚`],
+            lines: [`最終スコア ${finalScore.toLocaleString()}`, `${peak} m × 着地${points}pt`],
             accentColor: '#FFD54A', swatch: '#FFD54A',
         });
+    }
+
+    // 最終スコア(= m × 着地ポイント)を曲終了時に大きく表示する。
+    _showFinalScore() {
+        if (this._finalScoreEl) return;
+        this._ensureModeStyles();
+        const peak = this._metersValue();
+        const points = this._landingPoints;
+        const finalScore = peak * Math.max(1, points);
+        const el = document.createElement('div');
+        el.className = 'mada-finalscore';
+        el.innerHTML = `
+            <div class="fs-cap">最終スコア</div>
+            <div class="fs-val">${finalScore.toLocaleString()}</div>
+            <div class="fs-break">${peak.toLocaleString()} m × 着地 ${points.toLocaleString()} pt</div>
+        `;
+        this.songWrapper.appendChild(el);
+        this._finalScoreEl = el;
+        requestAnimationFrame(() => el.classList.add('show'));
     }
 
     updateBloom(dt) {
@@ -1200,15 +1398,12 @@ export class SongKotaete extends BaseSong {
 
         if (!this.isTutorialActive) this._trackLyrics();
 
-        // 再生が始まった瞬間に一度だけ「まだ行けるよモード」を提示(チュートリアル後)
-        if (!this._introShown && !this.isTutorialActive
-            && playerManager.player && playerManager.player.isPlaying) {
-            this._introShown = true;
-            this._showModeIntro();
-        }
+        // 説明ポップアップ(_showModeIntro)はチュートリアルと重なるため廃止。
+        // 操作説明はBaseSongのチュートリアルに一本化する。
 
         this.updateStem(dt);
         this.updateLeaves(dt);
+        this._updateKaraoke(); // 歌詞葉を歌唱位置に同期して1文字ずつ点灯
         this.updateClimb(dt);
         this.updateMiku(now, dt);
         this.updateBloom(dt);
@@ -1310,10 +1505,10 @@ export class SongKotaete extends BaseSong {
         eventBus.off('songEnd', this.boundOnSongEnd);
 
         // まだ行けるよモードの後始末(DOMオーバーレイ)
-        [this._hudEl, this._finaleEl].forEach(el => {
+        [this._hudEl, this._finaleEl, this._finalScoreEl].forEach(el => {
             if (el && el.parentNode) el.parentNode.removeChild(el);
         });
-        this._hudEl = this._finaleEl = null;
+        this._hudEl = this._finaleEl = this._finalScoreEl = null;
 
         // 雲・霧散パーティクルの破棄(共有テクスチャ _cloudTex は最後に1回)
         this._clouds.slice().forEach(c => this._disposeCloud(c));
@@ -1329,7 +1524,7 @@ export class SongKotaete extends BaseSong {
             l.group.traverse(o => {
                 if (o.geometry && o.geometry !== this._leafGeo && o.geometry !== this._petalGeo) o.geometry.dispose();
                 if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
-                    if (m.map && m.map !== this._leafVeinTex) m.map.dispose();
+                    if (m.map && m.map !== this._leafVeinTex && m.map !== this._leafGoldTex) m.map.dispose();
                     m.dispose && m.dispose();
                 });
             });
@@ -1339,6 +1534,7 @@ export class SongKotaete extends BaseSong {
         this._leafGeo && this._leafGeo.dispose();
         this._petalGeo && this._petalGeo.dispose();
         this._leafVeinTex && this._leafVeinTex.dispose();
+        this._leafGoldTex && this._leafGoldTex.dispose();
         this._stemTex && this._stemTex.dispose();
 
         if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }

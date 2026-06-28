@@ -298,6 +298,9 @@ class Application {
     _showSongEndOverlay(onDone) {
         const songConfig = SONGS.find(s => s.id === appState.currentSongId);
         const color = songConfig ? songConfig.color : '#ffffff';
+        // こたえて(ひまわり登攀)のフィナーレは暗転させず、満開の大輪を見せ続ける。
+        // 出すのは「楽曲選択画面へ」のボタンだけ(締めの一文・成果カードは出さない)。
+        const isKotaete = appState.currentSongId === 'kotaete';
 
         const overlay = document.createElement('div');
         overlay.style.cssText = `
@@ -349,12 +352,12 @@ class Application {
             backBtn.style.borderColor = 'rgba(255,255,255,0.35)';
         });
 
-        overlay.appendChild(text);
+        if (!isKotaete) overlay.appendChild(text);
 
         // 曲固有の成果サマリー(エンドカード) — setResultSummary登録曲のみ
         let resultEl = null;
         const result = this._lastSongResult;
-        if (result && result.songId === appState.currentSongId && Array.isArray(result.lines)) {
+        if (!isKotaete && result && result.songId === appState.currentSongId && Array.isArray(result.lines)) {
             const accent = result.accentColor || color;
             resultEl = document.createElement('div');
             resultEl.style.cssText = `
@@ -390,8 +393,10 @@ class Application {
         stageRoot().appendChild(overlay);
 
         requestAnimationFrame(() => {
-            overlay.style.background = 'rgba(0,0,0,0.7)';
-            text.style.color = 'rgba(255,255,255,0.9)';
+            if (!isKotaete) {
+                overlay.style.background = 'rgba(0,0,0,0.7)'; // こたえては暗転しない
+                text.style.color = 'rgba(255,255,255,0.9)';
+            }
             backBtn.style.opacity = '1';
             if (resultEl) resultEl.style.color = 'rgba(255,255,255,0.85)';
         });
