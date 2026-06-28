@@ -1498,6 +1498,14 @@ export class SongOrchestra extends BaseSong {
         //  本編では蓄積の手応えをゲージ・花火・発光だけで返し、視界を歌詞と夜空に集中させる。)
     }
 
+    // サビ花火の大きさ(intensity)をゲージの溜まり具合で決める。
+    // ゲージが空に近い=小さな花火 / 満タン(GAUGE_CAPACITY=16)=大輪、と線形に対応させる。
+    // chorusOrbCount はサビ突入時に集めていたオーブ数(=ゲージの高さ)。
+    _chorusFireworkIntensity() {
+        const ratio = Math.min(1, (this.chorusOrbCount || 0) / this.GAUGE_CAPACITY);
+        return 0.4 + ratio * (2.2 - 0.4); // 0.4(小) 〜 2.2(大)
+    }
+
     /**
      * 色彩交響花火の生成。intensity(蓄積オーブ数に比例)で
      * 粒子数・拡散速度・粒子サイズが変化する。
@@ -2088,12 +2096,13 @@ export class SongOrchestra extends BaseSong {
                             }
                         });
 
-                        // 花火の比例: 蓄積オーブ数が多いほど一発あたりの規模が増し、さらに連鎖サブ爆発が加わる
-                        const accumulated = Math.max(this.chorusOrbCount, totalOrbs);
-                        const intensity = Math.min(2.2, 0.6 + accumulated * 0.11);
+                        // 花火の大きさはゲージの溜まり具合に比例（空に近い=小さな花火 / 満タン=大輪）。
+                        const intensity = this._chorusFireworkIntensity();
                         this.spawnCustomColorFirework(orb.userData.color, orb.position, intensity);
 
-                        const extraBursts = accumulated >= 12 ? 2 : (accumulated >= 6 ? 1 : 0);
+                        // ゲージが溜まっているほど連鎖サブ爆発も増やす（満タン付近=2発・中盤=1発・少量=なし）
+                        const gaugeRatio = Math.min(1, (this.chorusOrbCount || 0) / this.GAUGE_CAPACITY);
+                        const extraBursts = gaugeRatio >= 0.75 ? 2 : (gaugeRatio >= 0.4 ? 1 : 0);
                         for (let b = 0; b < extraBursts; b++) {
                             const offset = new THREE.Vector3(
                                 (Math.random() - 0.5) * 6.0,
@@ -2126,8 +2135,7 @@ export class SongOrchestra extends BaseSong {
                 this.hasTriggeredClimaxExplosion = false;
                 // サビ終了までに打ち上げ切れなかったオーブは、ここで必ず花火にしてから片付ける
                 // (「サビが終わるタイミングで全オーブが花火になっている」を保証する)。
-                const accumulated = Math.max(this.chorusOrbCount, this.climaxOrbs.length);
-                const intensity = Math.min(2.2, 0.6 + accumulated * 0.11);
+                const intensity = this._chorusFireworkIntensity();
                 this.climaxOrbs.forEach(orb => {
                     this.spawnCustomColorFirework(orb.userData.color, orb.position, intensity);
                     this.scene.remove(orb);
