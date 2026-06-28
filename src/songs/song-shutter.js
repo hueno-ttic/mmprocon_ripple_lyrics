@@ -102,13 +102,9 @@ const ARM_GESTURES = {
     },
 };
 
-// 待機モーション(ARM_GESTURES + applySubjectGroove)が制御しないボーン。
-// キメポーズ解除後に値が残って待機姿勢が壊れるのを防ぐため、idle時に中立(0)へ戻す対象。
-// (肩=grooveがzのみ制御/手首・首・足首=未制御/脚=grooveがx,zのみ制御でyが残る)
-const RELAX_IDLE_BONES = [
-    'neck', 'leftShoulder', 'rightShoulder', 'leftHand', 'rightHand',
-    'leftFoot', 'rightFoot', 'leftUpperLeg', 'rightUpperLeg', 'leftLowerLeg', 'rightLowerLeg',
-];
+// idle時に中立(0)へ戻すボーン一覧 RELAX_IDLE_BONES は、ヒューマノイド中立ひな型
+// (SHUTTER_BONES_ZERO)とキメポーズ集合(SHUTTER_CUTE_POSES)を土台に「腕以外の全ボーン」を
+// 網羅して構築する。定義は両者の宣言後（下方）にある。
 
 // 「かわいいポーズ」ボタン用プリセット（ミク/リン共通。ボタンを押すと数秒ホールド）。
 // 既存の ARM_GESTURES を土台に、頭の傾きや胴のひねりを足してキメ顔ポーズへ仕上げた6種。
@@ -147,6 +143,29 @@ const SHUTTER_BONES_ZERO = {
     leftUpperLeg: { x: 0, y: 0, z: 0 }, leftLowerLeg: { x: 0, y: 0, z: 0 }, leftFoot: { x: 0, y: 0, z: 0 },
     rightUpperLeg: { x: 0, y: 0, z: 0 }, rightLowerLeg: { x: 0, y: 0, z: 0 }, rightFoot: { x: 0, y: 0, z: 0 },
 };
+
+// 待機の腕の型(ARM_GESTURES)は腕ボーンを「非ゼロのアイドル姿勢」へ駆動するため、idleで0へ
+// 戻してはいけない（戻すと腕が下がって型が崩れる）。それ以外のボーンはすべて中立(0)へ戻す対象。
+const GESTURE_DRIVEN_ARM_BONES = new Set([
+    'leftUpperArm', 'rightUpperArm', 'leftLowerArm', 'rightLowerArm',
+]);
+
+// idle時に中立(0)へ戻すボーン。方針: 「ポーズが触りうる全ボーン − 腕」を網羅する。
+//  - ヒューマノイド中立ひな型(SHUTTER_BONES_ZERO)の全ボーン … 胴/首/頭/肩/手/脚/足
+//  - キメポーズ集合(SHUTTER_CUTE_POSES)が動かす髪等の非ヒューマノイドボーン … 右髪１/左髪１/前髪２ 等
+// これを relaxIdleBones で 0 へ寄せ、その後に applySubjectGroove が踊りの駆動軸を上書きする。
+// 結果、groove が駆動する軸はダンス値・駆動しない軸(hips.x や chest.z、髪、ポーズ編集で動かした
+// 任意の部位)は 0 へ戻る＝待機時に全パラメータが明示的に元へ戻る。腕だけは gesture が別途駆動。
+// プリセットから髪等を自動収集するため、将来ポーズが新しいボーンを足しても idleで自動的に戻る。
+const RELAX_IDLE_BONES = (() => {
+    const set = new Set(
+        Object.keys(SHUTTER_BONES_ZERO).filter((b) => !GESTURE_DRIVEN_ARM_BONES.has(b)),
+    );
+    SHUTTER_CUTE_POSES.forEach((p) => Object.keys(p.pose || {}).forEach((k) => {
+        if (k !== 'expr' && !GESTURE_DRIVEN_ARM_BONES.has(k)) set.add(k);
+    }));
+    return [...set];
+})();
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
 const SHUTTER_VOCAL_MAP = {
@@ -1020,6 +1039,10 @@ export class SongShutter extends BaseSong {
     }
 
     relaxIdleBones(subject, t) {
+        // 腕以外の「ポーズが触りうる全ボーン」を中立(0)へ寄せる(RELAX_IDLE_BONES の構築方針を参照)。
+        // この後 applySubjectGroove が踊りの駆動軸を上書きするため、駆動軸はダンス値・非駆動軸
+        // (hips.x/chest.z/髪/ポーズ編集で動かした任意の部位)は0へ戻る。ツインテールが上を向いたまま
+        // 残る等の「ポーズ解除後にパラメータが戻らない」不具合を一括で解消する。
         for (const name of RELAX_IDLE_BONES) {
             const bone = this.getMMDBone(subject, name);
             if (!bone) continue;
