@@ -323,7 +323,7 @@ export class SongTricktology extends BaseSong {
     // 上世界に発光ワイヤーフレーム、下世界にその歪んだ鏡像
     initAmbientShapes() {
         this.ambientShapes = [];
-        const count = this.isMobile ? 5 : 8;
+        const count = this.isMobile ? 8 : 11;
         const geos = [
             new THREE.IcosahedronGeometry(0.55, 0),
             new THREE.OctahedronGeometry(0.6, 0),
@@ -335,9 +335,10 @@ export class SongTricktology extends BaseSong {
                 color: 0x7fd4ff, wireframe: true, transparent: true, opacity: 0.32,
             });
             const up = new THREE.Mesh(geo, upMat);
-            const x = (Math.random() - 0.5) * 16;
-            const y = 1.6 + Math.random() * 3.4;
-            const z = -6 - Math.random() * 7;
+            // 中央(リン)に固まらないよう左右へ広く散らし、高さ・奥行きもばらけさせる。
+            const x = (Math.random() - 0.5) * 26;
+            const y = 1.2 + Math.random() * 5.2;
+            const z = -6 - Math.random() * 10;
             up.position.set(x, y, z);
             this.upperGroup.add(up);
 
