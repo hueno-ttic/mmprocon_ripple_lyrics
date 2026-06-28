@@ -88,8 +88,10 @@ export class SongTricktology extends BaseSong {
         this.moonGround = null;   // 地上の世界の月
         this.moonWater = null;    // 水面の世界の月
         // カメラを寄せた分、月が画面端で見切れないよう周回半径を内側へ。
-        this.moonR = this.isMobile ? 7 : 12;     // 周回の横半径
-        this.moonArcH = this.isMobile ? 7 : 9;   // 天頂の高さ
+        // 周回をひと回り大きく。最高点(天頂)はリンの頭上を越え、左右の低い点は
+        // リンから遠ざかるため、円周を広げてもリン本体には被らない。
+        this.moonR = this.isMobile ? 9 : 17;      // 周回の横半径
+        this.moonArcH = this.isMobile ? 9.5 : 12; // 天頂の高さ
         this.moonZ = -17;
         this.moonScale = this.isMobile ? 3.2 : 4.0;
         // 現実(ground)と鏡像(water)の月は一つの天秤を奪い合う。
@@ -99,6 +101,14 @@ export class SongTricktology extends BaseSong {
         this.worldFull = { ground: 0.5, water: 0.5 };      // balance から導出（0..1 満ち）
         this.moonPulse = { ground: 0, water: 0 };
         this.invertFlash = 0;
+
+        // ── ビート同期のグルーヴ（リンの横ノリ）──
+        // 拍ごとに1進む連続位相 _groovePhase から、2拍で1往復する横揺れを作る。
+        this.groove = { sway: 0, lean: 0, hit: 0 };
+        this._beatCount = 0;
+        this._groovePhase = 0;
+        this._beatHit = 0;          // 拍頭のアタック（軽い縦のはずみ）
+        this._lastBeatStart = -1;
 
         // ── 世界の差別化エフェクト（タップで増減し、自然減衰）──
         this.grayPulse = 0;   // 現実の反転歌詞タップ → 一時的に世界がグレーアウト
@@ -313,7 +323,7 @@ export class SongTricktology extends BaseSong {
     // 上世界に発光ワイヤーフレーム、下世界にその歪んだ鏡像
     initAmbientShapes() {
         this.ambientShapes = [];
-        const count = this.isMobile ? 5 : 8;
+        const count = this.isMobile ? 8 : 11;
         const geos = [
             new THREE.IcosahedronGeometry(0.55, 0),
             new THREE.OctahedronGeometry(0.6, 0),
@@ -325,9 +335,10 @@ export class SongTricktology extends BaseSong {
                 color: 0x7fd4ff, wireframe: true, transparent: true, opacity: 0.32,
             });
             const up = new THREE.Mesh(geo, upMat);
-            const x = (Math.random() - 0.5) * 16;
-            const y = 1.6 + Math.random() * 3.4;
-            const z = -6 - Math.random() * 7;
+            // 中央(リン)に固まらないよう左右へ広く散らし、高さ・奥行きもばらけさせる。
+            const x = (Math.random() - 0.5) * 26;
+            const y = 1.2 + Math.random() * 5.2;
+            const z = -6 - Math.random() * 10;
             up.position.set(x, y, z);
             this.upperGroup.add(up);
 
@@ -1264,6 +1275,7 @@ export class SongTricktology extends BaseSong {
         if (this.mirrorMatCache.length) this.applyWorldMaterial(this.mirrorMatCache, 'water', Math.max(0.05, waterB * 0.95), collapseT, t);
 
         // ── VRM ──
+        this._updateGroove(position, delta);
         this.updateMikus(t, delta, collapseT);
 
         // ── 歌詞: フレーズ単位で1世界へ ──
@@ -1422,20 +1434,59 @@ export class SongTricktology extends BaseSong {
         }
     }
 
+    // 拍に同期したリンの横ノリを更新する。findBeat から拍の進捗を取り、
+    // 拍ごとに1進む連続位相にする。拍が取れない区間は一定テンポでフォールバック。
+    _updateGroove(position, delta) {
+        const player = playerManager.player;
+        let progress = 0;
+        let haveBeat = false;
+        if (player && typeof player.findBeat === 'function') {
+            const beat = player.findBeat(position);
+            if (beat && beat.endTime > beat.startTime) {
+                haveBeat = true;
+                progress = Math.min(1, Math.max(0, (position - beat.startTime) / (beat.endTime - beat.startTime)));
+                if (this._lastBeatStart !== beat.startTime) {
+                    if (this._lastBeatStart >= 0) this._beatCount++;
+                    this._lastBeatStart = beat.startTime;
+                    this._beatHit = 1; // 拍頭で軽くはずむ
+                }
+            }
+        }
+        this._beatHit *= Math.exp(-delta * 7);
+        if (haveBeat) {
+            this._groovePhase = this._beatCount + progress;
+        } else {
+            this._groovePhase += delta; // ≒1拍/秒でゆるく揺れ続ける
+        }
+        // 2拍で1往復（拍頭で中央を横切り、拍と拍の間で振り切る）
+        const ph = this._groovePhase * Math.PI;
+        const wave = Math.sin(ph);
+        this.groove.sway = wave;
+        this.groove.lean = wave;
+        this.groove.hit = this._beatHit;
+    }
+
     updateMikus(t, delta, collapseT) {
+        // ビートに合わせた横ノリの量。サビ・波の高まりで振りが大きくなる。
+        const g = this.groove;
+        const energy = 0.7 + (this.isClimax ? 0.55 : 0) + Math.min(0.4, this.waveEnergy * 0.25);
+        const swayX = g.sway * 0.22 * energy;   // 左右の体重移動
+        const leanZ = g.lean * 0.07 * energy;   // 体の傾き
+        const dipY = g.hit * 0.06 * energy;     // 拍頭の縦のはずみ
+
         // 地上のリン
         if (this.realVRM) {
             const vrm = this.realVRM;
             const chest = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('chest');
             const spine = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('spine');
             const breath = Math.sin(t * 1.15) * 0.02;
-            if (chest) chest.rotation.x = breath;
-            if (spine) spine.rotation.x = breath * 0.5;
+            if (chest) { chest.rotation.x = breath; chest.rotation.z = leanZ * 0.5; }
+            if (spine) { spine.rotation.x = breath * 0.5; spine.rotation.z = leanZ * 0.35; }
             const rejected = this.worldChosen === 'water';
             const wob = rejected ? collapseT * 0.06 : 0;
-            vrm.scene.position.x = (rejected ? Math.sin(t * 7) * wob : 0);
-            vrm.scene.position.y = Math.sin(t * 0.9) * 0.02;
-            vrm.scene.rotation.z = Math.sin(t * 0.5) * 0.015 + (rejected ? Math.sin(t * 6) * wob : 0);
+            vrm.scene.position.x = swayX + (rejected ? Math.sin(t * 7) * wob : 0);
+            vrm.scene.position.y = Math.sin(t * 0.9) * 0.02 - dipY;
+            vrm.scene.rotation.z = leanZ + Math.sin(t * 0.5) * 0.01 + (rejected ? Math.sin(t * 6) * wob : 0);
             vrm.update(delta);
         }
 
@@ -1447,8 +1498,8 @@ export class SongTricktology extends BaseSong {
             const head = vrm.humanoid && vrm.humanoid.getNormalizedBoneNode('head');
 
             const breath = Math.sin(t * 1.15 + 2.4) * 0.026;
-            if (chest) chest.rotation.x = breath;
-            if (spine) spine.rotation.x = breath * 0.5;
+            if (chest) { chest.rotation.x = breath; chest.rotation.z = -leanZ * 0.5; }
+            if (spine) { spine.rotation.x = breath * 0.5; spine.rotation.z = -leanZ * 0.35; }
 
             if (this.gazeUntil < 0 && t > this.nextGazeAt) {
                 this.gazeUntil = t + 2.4;
@@ -1467,10 +1518,11 @@ export class SongTricktology extends BaseSong {
 
             const rejected = this.worldChosen === 'ground';
             const wob = rejected ? collapseT * 0.06 : 0;
-            vrm.scene.position.x = Math.sin(t * 2.0) * 0.05 * (0.25 + this.waveEnergy)
+            // 水鏡なので横ノリは現実と同じ向き、傾き・縦のはずみは鏡対称に反転。
+            vrm.scene.position.x = swayX
                                  + (rejected ? Math.sin(t * 7) * wob * 3 : 0);
-            vrm.scene.position.y = Math.sin(t * 0.9 + 0.6) * 0.02;
-            vrm.scene.rotation.z = Math.PI + Math.sin(t * 0.6 + 1.2) * 0.02 + (rejected ? Math.sin(t * 6) * wob : 0);
+            vrm.scene.position.y = Math.sin(t * 0.9 + 0.6) * 0.02 + dipY;
+            vrm.scene.rotation.z = Math.PI - leanZ + Math.sin(t * 0.6 + 1.2) * 0.015 + (rejected ? Math.sin(t * 6) * wob : 0);
             vrm.update(delta);
         }
     }
