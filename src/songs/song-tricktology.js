@@ -162,6 +162,9 @@ export class SongTricktology extends BaseSong {
         this.lastRippleSpawnReal = 0;
         this.raycaster = new THREE.Raycaster();
         this.waterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        // 歌詞のおおよその奥行き(z=-6)に立てたカメラ正対面。タップが境界線
+        // (世界y=0)の上下どちら側かを判定するのに使う（歌詞の当たり判定をゆるめる）。
+        this.depthPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 6);
 
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
@@ -722,16 +725,33 @@ export class SongTricktology extends BaseSong {
         if (hits.length) {
             return cand.find(c => c.sprite === hits[0].object) || null;
         }
-        // 画面上の最近傍（指は大まかでも拾える）
-        let best = null, bestD = 90;
+
+        // ゆるい判定: 歌詞そのものに当たらなくても、境界線(世界y=0)の
+        // 上下どちら側をタップしたかでその側の句を拾う。タップ点を歌詞奥行きの
+        // 面に飛ばして世界yの符号で側を決め、同じ側に出ている句の中から
+        // 画面上で最も近いものを選ぶ（距離の上限は設けない＝大まかでも拾える）。
+        const tapPt = new THREE.Vector3();
+        let tapAbove;
+        if (this.raycaster.ray.intersectPlane(this.depthPlane, tapPt)) {
+            tapAbove = tapPt.y >= 0;
+        } else {
+            // 面と平行などで取れない場合は画面の上下中央で代用
+            tapAbove = clientY < window.innerHeight * 0.5;
+        }
+
+        let best = null, bestD = Infinity;
         const v = new THREE.Vector3();
         for (const c of cand) {
-            v.setFromMatrixPosition(c.sprite.matrixWorld).project(this.camera);
+            v.setFromMatrixPosition(c.sprite.matrixWorld);
+            const above = v.y >= 0;               // この句が境界線の上下どちらに居るか（反転も反映）
+            v.project(this.camera);
             const sx = (v.x * 0.5 + 0.5) * window.innerWidth;
             const sy = (-v.y * 0.5 + 0.5) * window.innerHeight;
             const d = Math.hypot(sx - clientX, sy - clientY);
-            if (d < bestD) { bestD = d; best = c; }
+            if (above === tapAbove && d < bestD) { bestD = d; best = c; }
         }
+        // タップした側の句だけを対象にする（その側が空なら拾わない）。
+        // どちらの世界を満たすかはタップした側で決まる、というルールを保つ。
         return best;
     }
 
