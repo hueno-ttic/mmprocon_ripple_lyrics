@@ -35,7 +35,13 @@ const T_CHOICE = 124000;  // 2:04 月が水に沈み、満ちた月の側が「�
 
 // 歌詞の上下ゆらぎの下端クランプ。実測ではシークバー上端は世界座標で
 // 約 y=-9.2(z=-4)〜-11.8(z=-8) のため、十分手前で止めて被りを防ぐ。
-const LYRIC_Y_FLOOR = -6.5;
+// 上下動を大きくしたぶん下げ幅も増やすが、最も手前(z=-4)のシークバー
+// (y≈-9.2)に対しても約1.6の余白を残す。
+const LYRIC_Y_FLOOR = -7.6;
+
+// 歌詞が境界線(y=0)上に居座らないための最低クリアランス。各句はこの値より
+// 内側へは普段入らず、世界をまたぐ瞬間だけ（フェードに包まれて）線を横切る。
+const LYRIC_Y_CLEAR = 1.7;
 
 export class SongTricktology extends BaseSong {
     constructor(container, songId) {
@@ -530,15 +536,16 @@ export class SongTricktology extends BaseSong {
         const entry = this.lyricEntry(position);
         const z = -4 - Math.random() * 4;
 
-        // 最終的な定位置（target）
+        // 最終的な定位置（target）。境界線から LYRIC_Y_CLEAR 以上離して
+        // 線上に張り付かないようにする。
         let tx = (Math.random() - 0.5) * 9 * this.hSpread;
-        let ty = sign * (1.6 + Math.random() * 2.6);
+        let ty = sign * (LYRIC_Y_CLEAR + Math.random() * 2.5);
         // 出現パターンごとの初期オフセット（target からの差分）
         let offX = 0, offY = 0;
         if (entry === 'rise') {
             // 水面ラインからゆっくり浮かぶ（まだ言葉が沈んでいる）。
             // 境界線直上に居座って押しづらくならないよう、定位置は少し離す。
-            ty = sign * (1.8 + Math.random() * 1.8);
+            ty = sign * (LYRIC_Y_CLEAR + 0.2 + Math.random() * 2.0);
             offY = sign * -(2.4 + Math.random() * 1.2);
         } else if (entry === 'side') {
             // 左右から流れ込む（現実と鏡像が引っ張り合う）
@@ -548,11 +555,13 @@ export class SongTricktology extends BaseSong {
         } else if (entry === 'fall') {
             // 上から（逆さ世界は下から）落ちてくる（重力が壊れた）
             offY = sign * (6 + Math.random() * 3);
-        } else { // gather: 中央の水面ラインへ収束していく
+        } else { // gather: 中央寄りへ収束（ただし線上には載らない程度に留める）
             tx = (Math.random() - 0.5) * 3.2 * this.hSpread;
-            ty = sign * (0.5 + Math.random() * 0.9);
+            ty = sign * (LYRIC_Y_CLEAR - 0.5 + Math.random() * 1.1);
             offX = (Math.random() - 0.5) * 12;
-            offY = sign * (3.5 + Math.random() * 2.5);
+            // 収束の初期オフセットは控えめに（深く潜ってシークバー手前で
+            // クランプされるのを避ける）。
+            offY = sign * (2.2 + Math.random() * 1.6);
         }
 
         const mat = new THREE.SpriteMaterial({ map: texture, transparent: true, opacity: 0, depthWrite: false });
@@ -569,11 +578,15 @@ export class SongTricktology extends BaseSong {
         // 時間とともに水面ラインを越えて反対の世界へ渡る縦速度(u/s)。
         // 終盤の収束(gather)句は渡らせない。寿命基準でゆっくり渡らせ、出現した世界・
         // 渡った先の世界のどちらにもタップできる猶予を残す（寿命の半ば過ぎで対岸へ）。
+        // 反対世界の定位置(landY)へ向けて渡る。landY も境界線から
+        // LYRIC_Y_CLEAR 以上離すので、対岸でも線上に張り付かない。横切る時間は
+        // 短めにして線の上で長く漂わせず、着いた先でゆっくり拾える猶予を残す。
+        // vy は寿命いっぱい掛かり続けるため、update 側で landY を越えないよう留める。
         const willCross = entry !== 'gather';
         const lifeSec = life / 1000;
-        const crossSec = Math.max(1.2, lifeSec * (0.62 + Math.random() * 0.12));
-        const crossTravel = Math.abs(ty) + 1.2 + Math.random() * 1.0;
-        const vy = willCross ? (-sign * crossTravel / crossSec) : 0;
+        const crossSec = Math.max(1.0, lifeSec * (0.5 + Math.random() * 0.12));
+        const landY = -sign * (LYRIC_Y_CLEAR + Math.random() * 1.2);
+        const vy = willCross ? ((landY - ty) / crossSec) : 0;
 
         this.lyrics.push({
             sprite, tex: texture, world, mirrored, entry,
@@ -583,11 +596,11 @@ export class SongTricktology extends BaseSong {
             baseScale: scale, aspect,
             baseX: tx, baseY: ty,
             offX0: offX, offY0: offY,   // 初期オフセット
-            vy, crossed: false,         // 世界をまたぐ縦移動と越境フラグ
+            vy, landY, crossed: false,  // 世界をまたぐ縦移動・対岸の定位置・越境フラグ
             entryT: 0, entryDur: entry === 'fall' ? 0.55 : 0.85,
             drift: (Math.random() - 0.5) * 0.004,
             bobPhase: Math.random() * Math.PI * 2,      // 句ごとに上下ゆらぎの位相をずらす
-            bobAmp: 1.2 + Math.random() * 0.6,          // 上下ゆらぎの振幅（旧0.08→0.42を更に拡大。リンの背丈ぶん下がっても可）
+            bobAmp: 1.5 + Math.random() * 0.7,          // 上下ゆらぎの振幅（線から離れる向きへ寄せて適用。リンの背丈ぶん動いても可）
             pulse: 0,
             collected: false, shatter: false, shatterT: 0,
         });
@@ -1349,6 +1362,11 @@ export class SongTricktology extends BaseSong {
             let crossDip = 1;
             if (l.vy && !l.collected) {
                 l.baseY += l.vy * delta;
+                // 対岸の定位置(landY)で止める。vy は寿命いっぱい掛かり続けるので、
+                // ここで越えないよう留めないとシークバー方向へ流れ続けてしまう。
+                if (l.landY !== undefined) {
+                    l.baseY = l.vy < 0 ? Math.max(l.baseY, l.landY) : Math.min(l.baseY, l.landY);
+                }
                 const wSign = l.world === 'ground' ? 1 : -1;
                 if (!l.crossed && l.baseY * wSign <= 0) {
                     this.crossLyricWorld(l);
@@ -1358,9 +1376,13 @@ export class SongTricktology extends BaseSong {
             }
 
             const sway = l.mirrored ? Math.sin(t * 3.0 + l.baseY * 2.0) * wobbleAmp : 0;
-            // 上下のゆらぎを大きく＝境界線上で止まらず拾いやすくする（句ごとに位相・振幅を変える）
-            const bob = Math.sin(t * 0.75 + (l.bobPhase || 0)) * (l.bobAmp || 0.5);
-            let dispY = l.baseY + offY + (l.mirrored ? -bob : bob);
+            // 上下のゆらぎは「境界線から離れる向き」へ寄せる。0..1 の sin を使い、
+            // 句が属する世界の外側（地上=上 / 水面=下）へ baseY からさらに離れて漂う。
+            // これにより線上に張り付かず、はっきり上下に動きつつ拾いやすくなる。
+            const bob01 = Math.sin(t * 0.75 + (l.bobPhase || 0)) * 0.5 + 0.5; // 0..1
+            const away = l.mirrored ? -1 : 1;
+            const bob = away * (0.3 + 0.7 * bob01) * (l.bobAmp || 1.5);
+            let dispY = l.baseY + offY + bob;
             dispY = Math.max(LYRIC_Y_FLOOR, dispY); // 下端はシークバーに被らないようクランプ
             l.sprite.position.set(l.baseX + offX + sway, dispY, l.sprite.position.z);
             l.sprite.scale.set(l.baseScale * l.aspect * pulseScale * shatterScale, l.baseScale * pulseScale * shatterScale, 1);
