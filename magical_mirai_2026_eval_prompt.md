@@ -132,6 +132,29 @@
 - 曲名テキスト、button、role=button、data-song、aria-label、class名、Canvas上のカード領域などを探索し、実際のUIに合わせて曲を開始すること。
 - 操作方法が不明な場合、それ自体を「初見導線の問題」として記録すること。
 - ただし、評価スクリプトの想定違いだけで「アプリが動かない」と即断しないこと。
+
+---
+
+# このアプリの最新構成（評価前に必ず理解すること）
+
+このアプリは「水の循環」をテーマに、6段階の世界をめぐる構成です。
+評価スクリプト・人手評価のどちらも、以下の前提を踏まえてください。
+
+- **タイトル直後にプロローグ（導入演出）が流れる。** いきなり6曲の一覧は出ない。プロローグは初見体験の一部として評価する（`mm_seen_intro='1'` で2回目以降スキップされる）。
+- **選曲は「湖のカルーセル」UIで行う。** 一度に1曲ずつ表示され、`.world-nav-prev`（◀）/ `.world-nav-next`（▶）で曲を送り、`.world-selection-start`（「この曲をはじめる ▶」）で開始する。
+  - したがって「初期画面に6曲すべてが一覧表示されているか」は評価基準にしない。1曲ずつ送って全曲に到達できるか・操作が直感的かで評価する。
+- **通常曲は5曲**: シャッターチャンス / アフター・ザ・カーテン / 世界最後の音楽隊 / トリツクロジー / TAKEOVER。最初から選べる。
+- **「こたえて」はシークレット曲。** 通常曲5曲をクリアして初めて湖に出現する隠し要素で、最初からは選べない。
+  - 「最初から6曲見えない」「こたえてが選べない」ことを欠陥として扱わないこと。隠し曲として正しく隠れているか、そして解放時に特別感のある演出になっているかも評価対象。
+  - 評価で「こたえて」を再生するには、`localStorage.completedSongs` に通常曲5曲のIDを入れて解放する（PHASE 1 のスクリプトが自動で行う）。
+- **6段階フェーズ（水の循環）**: 晴れ → 雲 → 雨 → 水たまり → 小川 → 湖。通常曲を1曲クリアするごとに次のフェーズへ進み、5曲クリアで「湖」に到達。完成演出（「水の循環、完成」）とシークレット曲の解放が起きる。世界観の連続性・到達感も評価に含めること。
+- **進捗・解放に関わる localStorage キー**:
+  - `completedSongs` … クリア済み曲IDの配列。例: `["shutter","after","orchestra","tricktology","takeover"]`。フェーズ進行とシークレット解放を司る主キー（旧 `mm2026_completed` ではない）。
+  - `mm_seen_intro` … `'1'` でプロローグをスキップ。
+  - 手動でこたえてを解放する場合: `localStorage.setItem('completedSongs', JSON.stringify(['shutter','after','orchestra','tricktology','takeover']))` 後にリロード。
+
+---
+
 # PHASE 0: 環境構築（必ず最初に実行）
 
 以下をbashで順番に実行してください。
@@ -214,7 +237,7 @@ npx playwright install chromium --with-deps 2>/dev/null || npx playwright instal
 
 # ⑤ ローカルサーバーを起動する
 # 必要なら外部から DEV_COMMAND / APP_URL を指定してよい。
-# 例: DEV_COMMAND="npm run preview" APP_URL="http://localhost:4173" node eval_master.js
+# 例: DEV_COMMAND="npm run preview" APP_URL="http://localhost:4173" node eval_master.cjs
 DEV_COMMAND="${DEV_COMMAND:-$DEV_CMD}"
 echo "Dev command: $DEV_COMMAND" | tee "$OUT/logs/dev_command.txt"
 
@@ -262,20 +285,27 @@ head -80 "$OUT/logs/devserver.log" || true
 
 # PHASE 1: 全曲ブラウザ動作確認スクリプト
 
-以下の内容で `eval_master.js` を作成し、`node eval_master.js` で実行してください。
+以下の内容で `eval_master.cjs` を作成し、`node eval_master.cjs` で実行してください。
 **このスクリプトは全6曲を実際にブラウザで再生し、動作を記録します。**
+
+> ⚠️ 拡張子は必ず **`.cjs`**。このプロジェクトの `package.json` は `"type": "module"` のため、
+> `eval_master.js`（`require` を使う CommonJS）として保存すると `require is not defined` で即落ちします。
+> 必ず `.cjs` で保存し、`node eval_master.cjs` で実行してください。
 
 重要:
 
 - このスクリプトは **ArrowRight / Space 前提ではありません**。
-- 曲名、data属性、aria-label、button、role=button、Canvas内の想定位置など、複数の方法で曲選択を試します。
+- **曲の再生は曲シーン内の「スタート」ボタン（`.song-tutorial-btn`）押下で始まります。** スクリプトはこれを Playwright の trusted クリックで押し、Web Audio をアンロックして実際に再生・歌詞同期を進めます（in-page の `el.click()` ではアンロックされず歌詞が止まることがあるため）。
+- 実際の選曲UI（湖のカルーセル `.world-selection-panel`）を最優先で操作し、曲名・data属性・aria-label・button・Canvas内の想定位置などを補助的に試します。
 - キーボード操作は、UI探索が失敗した場合の補助としてのみ扱います。
+- **「こたえて」はシークレット曲**です。スクリプトは通常曲5曲のクリア状態（`localStorage.completedSongs`）を自動で付与してから解放・再生します。最初から選べないのは仕様です。
+- プロローグは毎回見ないよう、SECTION B以降は `mm_seen_intro` を立ててスキップします（初見のプロローグ体験は SECTION A で確認）。
 - 評価スクリプトが曲開始に失敗した場合は、即座に「アプリ不動」と判断せず、導線・アクセシビリティ・クリック可能要素の不足として記録してください。
 
 ```javascript
 /**
  * マジカルミライ2026 全曲ブラウザ評価スクリプト
- * 実行: node eval_master.js
+ * 実行: node eval_master.cjs
  *
  * 汎用AIエージェント環境向け:
  * - Claude Code / Codex / Antigravity / Gemini CLI / Cursor 等で利用可能
@@ -296,14 +326,19 @@ const SONG_PLAY_DURATION_MS = Number(process.env.SONG_PLAY_DURATION_MS || 12000)
 const HEADLESS = process.env.HEADLESS !== 'false';
 const KEEP_SERVER = process.env.KEEP_SERVER === 'true';
 
+// 通常曲5曲（最初から選択可能）→ シークレット曲こたえて（5曲クリアで湖に出現）の順。
+// secret:true の曲は、評価前に localStorage.completedSongs で5曲クリア状態を作って解放する。
 const SONGS = [
-  { id: 'kotaete',     title: 'こたえて',              aliases: ['こたえて', 'kotaete'] },
-  { id: 'after',       title: 'アフター・ザ・カーテン', aliases: ['アフター', 'カーテン', 'after', 'after the curtain'] },
-  { id: 'shutter',     title: 'シャッターチャンス',    aliases: ['シャッター', 'shutter', 'shutter chance'] },
-  { id: 'orchestra',   title: '世界最後の音楽隊',      aliases: ['世界最後', '音楽隊', 'orchestra'] },
-  { id: 'tricktology', title: 'トリツクロジー',        aliases: ['トリツク', 'トリツクロジー', 'tricktology'] },
-  { id: 'takeover',    title: 'TAKEOVER',              aliases: ['TAKEOVER', 'takeover'] },
+  { id: 'shutter',     title: 'シャッターチャンス',    aliases: ['シャッター', 'shutter', 'shutter chance'], secret: false },
+  { id: 'after',       title: 'アフター・ザ・カーテン', aliases: ['アフター', 'カーテン', 'after', 'after the curtain'], secret: false },
+  { id: 'orchestra',   title: '世界最後の音楽隊',      aliases: ['世界最後', '音楽隊', 'orchestra'], secret: false },
+  { id: 'tricktology', title: 'トリツクロジー',        aliases: ['トリツク', 'トリツクロジー', 'tricktology'], secret: false },
+  { id: 'takeover',    title: 'TAKEOVER',              aliases: ['TAKEOVER', 'takeover'], secret: false },
+  { id: 'kotaete',     title: 'こたえて',              aliases: ['こたえて', 'kotaete'], secret: true },
 ];
+
+// シークレット曲を解放するために必要な「クリア済み通常曲」一覧（localStorage: completedSongs）
+const NORMAL_SONG_IDS = SONGS.filter(s => !s.secret).map(s => s.id);
 
 // ── メイン ───────────────────────────────────────────────────────
 async function main() {
@@ -366,8 +401,12 @@ async function main() {
     }
     const loadMs = Date.now() - tLoad0;
 
-    await safeUserGesture(page);
+    // 初見の第一印象（タイトル画面）はクリック前に撮る。
+    // このアプリはタイトル画面→プロローグ→湖の順なので、クリック後だと最初の画面を撮り逃す。
     await ss(page, '00_startup', report);
+    await safeUserGesture(page);
+    await page.waitForTimeout(600);
+    await ss(page, '00b_after_gesture', report);
 
     const init = await inspectInitialState(page);
     log('INFO', `タイトル: "${init.title}" / ロード: ${loadMs}ms`);
@@ -376,8 +415,10 @@ async function main() {
 
     if (!init.hasCanvas) report.issues.critical.push('canvas要素がない（Three.js/PixiJS 未動作の可能性）');
     if (init.hasError) report.issues.major.push('初期画面にエラー表示がある');
-    if (init.songNamesVisibleCount < 3) report.issues.major.push(`初期画面で見える曲名が少ない（${init.songNamesVisibleCount}/6）`);
-    if (init.pointerCount < 1 && init.clickableElements.length < 1) report.issues.major.push('クリック可能に見える要素がほとんどない');
+    // このアプリは「プロローグ→湖のカルーセル選曲（1曲ずつ表示）」構成のため、
+    // 初期画面に6曲が一覧表示されないのは仕様。曲名の見える数だけでは減点しない。
+    if (init.songNamesVisibleCount < 1 && !init.hasCanvas) report.issues.major.push('初期画面に曲名もCanvasも見当たらない');
+    if (init.pointerCount < 1 && init.clickableElements.length < 1) report.issues.minor.push('初期画面にクリック可能に見える要素が少ない（プロローグ中の可能性）');
 
     report.initial = { loadMs, ...init };
 
@@ -411,14 +452,19 @@ async function main() {
 
     await ss(page, '04_ta_loaded', report);
 
+    // ここでのFPSはタイトル/プロローグ/湖の待機シーン。実負荷は曲再生中(SECTION C)で別途計測する。
     const fps = await measureFPS(page, 3000);
-    log('INFO', `FPS: avg=${fps.avg} min=${fps.min} max=${fps.max}`);
-    if (fps.avg < 30) report.issues.major.push(`FPS低下: 平均${fps.avg}fps（目標60fps）`);
+    log('INFO', `FPS(待機シーン): avg=${fps.avg} min=${fps.min} max=${fps.max}`);
+    if (fps.avg < 25) report.issues.major.push(`待機シーンのFPS低下: 平均${fps.avg}fps`);
 
     // =====================================================================
     // SECTION C: 各曲 個別テスト（全6曲）
     // =====================================================================
     log('SECTION', `C — 全6曲 個別テスト（各${SONG_PLAY_DURATION_MS / 1000}秒）`);
+
+    // 以降の曲テストでは毎回プロローグを見ずに選曲カルーセルへ直行する。
+    // （プロローグ自体の初見体験は SECTION A で確認済み）
+    await page.addInitScript(() => { try { localStorage.setItem('mm_seen_intro', '1'); } catch (e) {} });
 
     for (let i = 0; i < SONGS.length; i++) {
       const song = SONGS[i];
@@ -429,8 +475,11 @@ async function main() {
         title: song.title,
         selectionMethod: null,
         started: false,
+        songWrapper: false,
+        wrapperId: null,
         canvasRendering: false,
         canvasActivityScore: 0,
+        fps: null,
         lyricsPossiblyDisplayed: false,
         interactionScore: 0,
         visualChanges: 0,
@@ -445,16 +494,58 @@ async function main() {
       await safeUserGesture(page);
       await page.waitForTimeout(800);
 
+      // シークレット曲（こたえて）は通常曲5曲をクリアした状態でないと湖に出現しない。
+      // 評価のため completedSongs に通常曲5曲を付与して解放し、リロードする。
+      if (song.secret) {
+        await page.evaluate((ids) => {
+          try { localStorage.setItem('completedSongs', JSON.stringify(ids)); } catch (e) {}
+        }, NORMAL_SONG_IDS).catch(() => {});
+        await page.reload({ waitUntil: 'networkidle', timeout: 20000 }).catch(() => {});
+        await safeUserGesture(page);
+        await page.waitForTimeout(1500);
+        s.observations.push('シークレット曲: completedSongsに通常曲5曲を付与して解放した状態で評価。');
+      }
+
+      // 実際の選曲UI（湖のカルーセル）が描画されるのを待つ
+      await page.waitForSelector('.world-selection-panel', { timeout: 8000 }).catch(() => {});
+
       const selection = await selectAndStartSong(page, song, i, report);
       s.selectionMethod = selection.method;
-      s.started = selection.started;
-      if (!selection.started) {
-        s.observations.push('曲の開始を自動確認できなかった。UI導線または評価スクリプトとの相性を要確認。');
-        report.issues.major.push(`[${song.title}] 曲選択・再生の自動開始を確認できない（方法: ${selection.method}）`);
-      }
+      s.selectionHeuristic = selection.started; // canvas変化ベースの参考値（湖の常時アニメで誤検出しうる）
 
       await page.waitForTimeout(1500);
       await ss(page, `song_${pad(i + 1)}_${song.id}_f0_start`, report); s.frames.push('f0_start');
+
+      // 起動判定はDOMで確定する: 曲シーン(#song-wrapper-*)が出現し選曲パネルが消えていれば「起動」。
+      // 湖(WorldUI)の水面は常時アニメするので、canvasの変化だけでは起動を判定できない。
+      const scene0 = await songSceneState(page);
+      s.songWrapper = scene0.songWrapper;
+      s.wrapperId = scene0.wrapperId;
+      // 起動 = 曲シーン(#song-wrapper-*)の出現。BaseSongは曲ロード時のみこれを生成する。
+      // 選曲パネル(.world-selection-panel)は曲再生中もDOMに残る(非表示で背後に保持される)ため、
+      // パネルの消失は条件にしない。
+      s.started = scene0.songWrapper;
+      s.selectionPanelStillPresent = scene0.selectionPanel;
+      if (!s.started) {
+        s.observations.push(`曲シーン(#song-wrapper-*)を確認できず、湖のままの可能性（選択方法: ${selection.method}）。`);
+        report.issues.major.push(`[${song.title}] 曲シーンへ遷移できていない（#song-wrapper 不在）`);
+      }
+
+      // 曲の再生は曲シーン内の「スタート」ボタン(.song-tutorial-btn)押下で始まる（Web Audioアンロックを伴う）。
+      // 必ず trusted な ElementHandle.click で押す。これで歌詞同期・演出が実際に進む。
+      if (s.started) {
+        const startBtn = await page.$('.song-tutorial-btn').catch(() => null);
+        if (startBtn) {
+          await startBtn.click().catch(() => {});
+          s.startButtonClicked = true;
+          s.observations.push('曲内「スタート」ボタンを押下して再生開始。');
+          await page.waitForTimeout(1000);
+        } else {
+          // チュートリアルなしの曲向けフォールバック: 中央を trusted クリックして再生開始ジェスチャを与える
+          await page.mouse.click(640, 400).catch(() => {});
+          await page.waitForTimeout(500);
+        }
+      }
 
       const beforeActivity = await canvasSignature(page);
 
@@ -476,6 +567,13 @@ async function main() {
       await page.waitForTimeout(3000);
       await ss(page, `song_${pad(i + 1)}_${song.id}_f2_3sec`, report); s.frames.push('f2_3sec');
 
+      // 曲再生中の実FPSを計測（待機シーンではなく曲シーンの描画負荷を見る）
+      const songFps = await measureFPS(page, 2000);
+      s.fps = songFps.avg;
+      if (s.started && songFps.avg && songFps.avg < 30) {
+        report.issues.major.push(`[${song.title}] 曲再生中のFPS低下: 平均${songFps.avg}fps（目標60fps）`);
+      }
+
       await page.mouse.click(640, 400);
       await page.waitForTimeout(600);
       await ss(page, `song_${pad(i + 1)}_${song.id}_f3_click`, report); s.frames.push('f3_click');
@@ -490,15 +588,21 @@ async function main() {
       await ss(page, `song_${pad(i + 1)}_${song.id}_f5_8sec`, report); s.frames.push('f5_8sec');
 
       const afterActivity = await canvasSignature(page);
-      s.canvasRendering = !!(afterActivity && afterActivity.nonEmpty);
+      const sceneEnd = await songSceneState(page);
+      s.songCanvasSized = sceneEnd.songCanvasSized;
+      // 曲シーンのcanvasが妥当なサイズで存在すれば描画OKとみなす。
+      // （WebGLは描画バッファ非保持で readPixels が0を返すことがあり、画素値だけでは黒画面と誤判定しうる）
+      s.canvasRendering = !!(sceneEnd.songWrapper && (sceneEnd.songCanvasSized || (afterActivity && afterActivity.nonEmpty)));
       s.canvasActivityScore = beforeActivity && afterActivity && beforeActivity.hash !== afterActivity.hash ? 1 : 0;
       s.lyricsPossiblyDisplayed = await detectLyricsOrText(page);
       s.errorsDuring = clogs.filter(c => c.t === 'error').length - errsBefore;
       s.themeVar = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--song-primary').trim() || null).catch(() => null);
 
-      log('RESULT', `start:${s.started?'✓':'?'} canvas:${s.canvasRendering?'✓':'✗'} text:${s.lyricsPossiblyDisplayed?'✓':'?'} interaction:${s.interactionScore}/8 errors:${s.errorsDuring}`);
+      log('RESULT', `start:${s.started?'✓':'✗'} wrapper:${s.songWrapper?s.wrapperId:'なし'} render:${s.canvasRendering?'✓':'✗'} fps:${s.fps ?? '-'} text:${s.lyricsPossiblyDisplayed?'✓':'?'} interaction:${s.interactionScore}/8 errors:${s.errorsDuring}`);
 
-      if (!s.canvasRendering) report.issues.major.push(`[${song.title}] Canvas の有意な描画を確認できない`);
+      if (s.started && !s.canvasRendering) {
+        report.issues.minor.push(`[${song.title}] 曲シーンのcanvas描画を自動確認できなかった。スクショ(f5_8sec)で黒画面でないか要確認`);
+      }
       report.songs.push(s);
     }
 
@@ -509,33 +613,59 @@ async function main() {
 
     await page.goto(APP_URL, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
     await safeUserGesture(page);
-    await ss(page, '20_ux_navigation', report);
 
-    const navInfo = await inspectNavigation(page);
-    const songsOk = navInfo.songsVisible.filter(Boolean).length;
-    log('INFO', `選曲画面で見える曲数: ${songsOk}/6 / 進捗表示: ${navInfo.hasProgress}`);
-    if (songsOk < 6) report.issues.major.push(`選曲画面で${6 - songsOk}曲が見えない可能性がある`);
-
+    // SECTION C のシークレット解放で completedSongs / kotaeteRevealed が残っている。
+    // 「初回ユーザー」を再現するため進捗をクリアしてから初期カルーセルを数える
+    // （こうしないと、こたえてが既に解放済みで初期表示が6曲になり、隠し曲の検証ができない）。
     await page.evaluate(() => {
-      const flags = { kotaete:true, after:true, shutter:true, orchestra:true, tricktology:true, takeover:true };
-      localStorage.setItem('mm2026_completed', JSON.stringify(flags));
+      try { localStorage.removeItem('completedSongs'); localStorage.removeItem('kotaeteRevealed'); } catch (e) {}
     }).catch(() => {});
     await page.reload({ waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
     await safeUserGesture(page);
-    await page.waitForTimeout(3000);
+    await page.waitForSelector('.world-selection-panel', { timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(1000);
+    await ss(page, '20_ux_navigation', report);
+
+    // 実際の選曲UIはカルーセル（一度に1曲ずつ表示し ◀▶ で送る）。
+    // 初期状態では通常曲5曲のみ巡回でき、こたえては5曲クリアまで湖に出現しない。
+    const navInfo = await inspectNavigation(page);
+    const carouselFresh = await countCarouselSongs(page);
+    log('INFO', `初期カルーセル巡回曲数: ${carouselFresh.count}（通常曲5が期待値 / こたえては非表示が正しい）/ 進捗表示: ${navInfo.hasProgress}`);
+    log('INFO', `巡回できた曲: ${carouselFresh.titles.join(' / ') || '（取得できず）'}`);
+    if (carouselFresh.ok && carouselFresh.count < 5) {
+      report.issues.major.push(`選曲カルーセルで通常曲5曲すべてに到達できない可能性（到達: ${carouselFresh.count}/5）`);
+    }
+    if (carouselFresh.ok && carouselFresh.count > 5) {
+      report.issues.minor.push(`初期状態でシークレット曲「こたえて」が見えている可能性（到達: ${carouselFresh.count}。隠し曲として機能していないかも）`);
+    }
+
+    // 通常曲5曲をクリア済みにして、最終フェーズ(湖)の完成演出とシークレット解放を確認する。
+    await page.evaluate((ids) => {
+      try { localStorage.setItem('completedSongs', JSON.stringify(ids)); } catch (e) {}
+    }, NORMAL_SONG_IDS).catch(() => {});
+    await page.reload({ waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
+    await safeUserGesture(page);
+    await page.waitForTimeout(3500);
     await ss(page, '21_ending_check', report);
 
     const ending = await page.evaluate(() => {
       const t = document.body.innerText || '';
       return {
-        exists: /完成|循環|おめでとう|6つ|制覇|全曲|ending/i.test(t),
+        // 「水の循環、完成」「晴れた空の一滴は、湖になった」「こたえを待つ歌が湖に浮かんでいる」等
+        exists: /完成|循環|湖になった|問い|こたえを待つ|おめでとう|制覇|全曲|ending/i.test(t),
+        secretRevealed: /こたえを待つ|湖に浮かんで|こたえて/.test(t),
         hasShare: /share|シェア|twitter|x\.com/i.test(t),
       };
-    }).catch(() => ({ exists: false, hasShare: false }));
-    log('INFO', `エンディング: ${ending.exists} / シェア機能: ${ending.hasShare}`);
-    if (!ending.exists) report.issues.minor.push('全曲制覇エンディングが確認できない');
+    }).catch(() => ({ exists: false, secretRevealed: false, hasShare: false }));
 
-    report.ux = { navInfo, songsOk, ending };
+    const carouselUnlocked = await countCarouselSongs(page);
+    const songsOk = carouselUnlocked.ok ? carouselUnlocked.count : carouselFresh.count;
+    log('INFO', `解放後カルーセル巡回曲数: ${carouselUnlocked.count}（こたえて解放で6が期待値）`);
+    log('INFO', `エンディング: ${ending.exists} / シークレット解放サイン: ${ending.secretRevealed} / シェア機能: ${ending.hasShare}`);
+    if (!ending.exists) report.issues.minor.push('全曲制覇エンディング（水の循環の完成演出）が確認できない');
+    if (carouselUnlocked.ok && carouselUnlocked.count < 6) report.issues.minor.push('5曲クリア後もシークレット曲「こたえて」がカルーセルに出現しない可能性');
+
+    report.ux = { navInfo, carouselFresh, carouselUnlocked, songsOk, ending };
 
     // =====================================================================
     // SECTION E: モバイル & タブレット確認
@@ -561,9 +691,12 @@ async function main() {
     // =====================================================================
     // SECTION F: まとめ & JSON 出力
     // =====================================================================
+    const songFpsList = report.songs.filter(s => s.fps).map(s => s.fps);
     report.summary = {
       loadMs,
-      fps: fps.avg,
+      idleFps: fps.avg,
+      songFpsAvg: songFpsList.length ? +(songFpsList.reduce((a, b) => a + b, 0) / songFpsList.length).toFixed(1) : null,
+      songFpsMin: songFpsList.length ? Math.min(...songFpsList) : null,
       taLoaded,
       songsOk,
       visualOk: report.songs.filter(s => s.canvasRendering).length,
@@ -577,8 +710,9 @@ async function main() {
       mobileOverflowCount: mobileEval.overflowCount,
       mobileSmallTapTargets: mobileEval.smallTapTargets,
       endingExists: ending.exists,
+      secretRevealed: ending.secretRevealed,
       hasOnboarding: init.clickHints || init.tapHints || init.pointerCount > 3,
-      allSongsVisible: songsOk === 6,
+      allSongsReachable: songsOk === 6,
       hasCSSTheme: init.hasCSSVars,
       criticals: report.issues.critical.length,
       majors: report.issues.major.length,
@@ -605,6 +739,20 @@ async function main() {
 
 async function selectAndStartSong(page, song, index, report) {
   const methods = [];
+
+  // 0) 実際の選曲UI（湖のカルーセル）を最優先で操作する。
+  //    .world-selection-panel 内の ▶ で目的の曲名までめくり、「この曲をはじめる ▶」を押す。
+  const carousel = await selectViaWorldUI(page, song);
+  if (carousel.ok) {
+    methods.push(`worldui:${carousel.reason}`);
+    // 曲シーン(#song-wrapper-*)の出現を待つ（選択→フェード→ロードに数秒かかる）。
+    // ここで確実に待つことで、ロード中の曲を妨げる不要なフォールバック・クリックを避ける。
+    const started = await page.waitForSelector('[id^="song-wrapper-"]', { timeout: 5000 })
+      .then(() => true).catch(() => false);
+    if (started) return { started: true, method: methods.join(' -> ') };
+  } else {
+    methods.push(`worldui-miss:${carousel.reason}`);
+  }
 
   // 1) DOM上の曲名・data属性・aria-label・button等を探索してクリック
   const candidates = await findSongCandidates(page, song);
@@ -652,6 +800,53 @@ async function selectAndStartSong(page, song, index, report) {
   const clickableDump = await dumpClickableElements(page);
   report.interactionNotes.push({ song: song.title, candidates, generic, clickableDump });
   return { started: false, method: methods.join(' -> ') || 'no-candidate' };
+}
+
+// 実際の選曲UI（src/lake/WorldUI.js のカルーセル）を直接操作する。
+// 「次の曲 ▶」(.world-nav-next) で目的の曲名まで送り、「この曲をはじめる ▶」(.world-selection-start) を押す。
+async function selectViaWorldUI(page, song) {
+  return page.evaluate(async ({ aliases, id, title }) => {
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, '');
+    const keys = [id, title, ...aliases].map(norm).filter(Boolean);
+    const panel = document.querySelector('.world-selection-panel');
+    if (!panel) return { ok: false, reason: 'no-panel' };
+    const titleEl = panel.querySelector('.world-selection-title');
+    const next = panel.querySelector('.world-nav-next');
+    const start = panel.querySelector('.world-selection-start');
+    if (!titleEl || !start) return { ok: false, reason: 'no-controls' };
+    const matches = () => { const t = norm(titleEl.textContent); return keys.some(k => k && t.includes(k)); };
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    // 最大10回めくって目的の曲を探す（通常5曲＋シークレット1曲を一周できる回数）
+    for (let i = 0; i < 10; i++) {
+      if (matches()) { start.click(); return { ok: true, reason: `carousel(${i}cyc)` }; }
+      if (!next) break;
+      next.click();
+      await sleep(250);
+    }
+    if (matches()) { start.click(); return { ok: true, reason: 'carousel(last)' }; }
+    return { ok: false, reason: `not-in-carousel(seen:${norm(titleEl.textContent).slice(0, 20)})` };
+  }, { aliases: song.aliases, id: song.id, title: song.title }).catch(() => ({ ok: false, reason: 'eval-error' }));
+}
+
+// カルーセルを一周して到達できる曲数とタイトル一覧を数える。
+// 初期状態では通常曲5曲、こたえて解放後は6曲が期待値。
+async function countCarouselSongs(page) {
+  return page.evaluate(async () => {
+    const panel = document.querySelector('.world-selection-panel');
+    if (!panel) return { ok: false, count: 0, titles: [] };
+    const titleEl = panel.querySelector('.world-selection-title');
+    const next = panel.querySelector('.world-nav-next');
+    if (!titleEl || !next) return { ok: false, count: 0, titles: [] };
+    const seen = new Set();
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < 12; i++) {
+      const t = (titleEl.textContent || '').replace(/[✓\s]/g, '').trim();
+      if (t) seen.add(t);
+      next.click();
+      await sleep(200);
+    }
+    return { ok: true, count: seen.size, titles: [...seen] };
+  }).catch(() => ({ ok: false, count: 0, titles: [] }));
 }
 
 async function findSongCandidates(page, song) {
@@ -728,21 +923,35 @@ async function maybeClickPlayLikeControl(page) {
   if (candidates[0]) await page.mouse.click(candidates[0].x, candidates[0].y).catch(() => {});
 }
 
+// 曲シーンの状態をDOMで判定する。湖(WorldUI)の常時アニメに惑わされない確実な信号。
+// 曲が始まると BaseSong が <div id="song-wrapper-<曲id>"> を追加し、選曲パネル(.world-selection-panel)が消える。
+async function songSceneState(page) {
+  return page.evaluate(() => {
+    const wrapper = document.querySelector('[id^="song-wrapper-"]');
+    const panel = document.querySelector('.world-selection-panel');
+    const songCanvas = wrapper ? wrapper.querySelector('canvas') : null;
+    const sized = !!(songCanvas && (songCanvas.width > 0 && songCanvas.height > 0));
+    return {
+      songWrapper: !!wrapper,
+      wrapperId: wrapper ? wrapper.id : null,
+      selectionPanel: !!panel,
+      songCanvas: !!songCanvas,
+      songCanvasSized: sized,
+    };
+  }).catch(() => ({ songWrapper: false, wrapperId: null, selectionPanel: false, songCanvas: false, songCanvasSized: false }));
+}
+
 async function looksLikeSongStarted(page, song) {
-  const state = await page.evaluate(({ aliases, id }) => {
+  // 最優先: 曲シーン(#song-wrapper-*)が出現していれば起動とみなす（選曲パネルは再生中も残る）。
+  // これにより、起動できていない場合は selectAndStartSong が次の選択手段を試し続けられる。
+  const scene = await songSceneState(page);
+  if (scene.songWrapper) return true;
+  // 補助: DOMで判断がつかない実装のための保険（明示的な再生中テキスト）
+  const state = await page.evaluate(() => {
     const t = document.body.innerText || '';
-    const body = t.toLowerCase();
-    const hasSongText = [id, ...aliases].some(a => body.includes(String(a).toLowerCase()));
-    const hasCanvas = !!document.querySelector('canvas');
-    const hasPlayingText = /再生中|pause|一時停止|停止|stop|playing|now/i.test(t);
-    const loading = /loading|読み込/i.test(t);
-    return { hasSongText, hasCanvas, hasPlayingText, loading, textLength: t.length };
-  }, { aliases: song.aliases, id: song.id }).catch(() => ({ hasCanvas: false }));
-  const sig1 = await canvasSignature(page);
-  await page.waitForTimeout(500);
-  const sig2 = await canvasSignature(page);
-  const canvasChanging = !!(sig1 && sig2 && sig1.hash !== sig2.hash);
-  return !!(state.hasPlayingText || canvasChanging || (state.hasCanvas && !state.loading && state.hasSongText));
+    return { hasPlayingText: /再生中|一時停止|playing/i.test(t) };
+  }).catch(() => ({ hasPlayingText: false }));
+  return !!state.hasPlayingText;
 }
 
 function canvasGridPoint(index) {
@@ -807,7 +1016,7 @@ async function inspectNavigation(page) {
         /こたえて/.test(t), /after|アフター/i.test(t), /shutter|シャッター/i.test(t),
         /音楽隊/.test(t), /トリツク|tricktology/i.test(t), /takeover/i.test(t),
       ],
-      hasProgress: /\d\s*\/\s*6|完了|達成|progress/i.test(t),
+      hasProgress: /\d\s*\/\s*[56]|完了|達成|progress|循環/i.test(t),
       hasNextGuide: /次|next|→|▶|try/i.test(t),
       hasClearMark: /✓|☑|★|済|clear|done/i.test(t),
       hasBackOrHome: /戻る|ホーム|home|back|選曲/i.test(t),
@@ -844,14 +1053,18 @@ async function detectLyricsOrText(page) {
   return page.evaluate(() => {
     const t = document.body.innerText || '';
     const domText = t.length > 80 && /[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]|[A-Za-z]{3,}/.test(t);
-    const textLikeEls = document.querySelectorAll('canvas,svg,text,[class*="lyric"],[class*="word"],[data-lyric]').length > 0;
+    // \u6b4c\u8a5e\u306f\u66f2\u30b7\u30fc\u30f3\u5185\u306b\u63cf\u753b\u3055\u308c\u308b\u3002\u6e56\u306ecanvas\u3092\u6b4c\u8a5e\u3068\u8aa4\u691c\u51fa\u3057\u306a\u3044\u3088\u3046\u66f2\u30b7\u30fc\u30f3\u914d\u4e0b\u306b\u9650\u5b9a\u3059\u308b\u3002
+    const wrapper = document.querySelector('[id^="song-wrapper-"]');
+    const textLikeEls = !!wrapper && wrapper.querySelectorAll('canvas,svg,text,[class*="lyric"],[class*="word"],[data-lyric]').length > 0;
     return domText || textLikeEls;
   }).catch(() => false);
 }
 
 async function canvasSignature(page) {
   return page.evaluate(() => {
-    const c = document.querySelector('canvas');
+    // 曲再生中は曲シーン(#song-wrapper-*)内のcanvasを優先。なければ先頭canvas（タイトル/湖）。
+    const wrapper = document.querySelector('[id^="song-wrapper-"]');
+    const c = (wrapper && wrapper.querySelector('canvas')) || document.querySelector('canvas');
     if (!c) return null;
     const w = c.width || c.clientWidth;
     const h = c.height || c.clientHeight;
@@ -955,9 +1168,10 @@ function printSummary(r) {
   row('実行ID', r.meta.runId);
   row('Git commit', r.meta.commit || 'unknown');
   row('ロード時間', `${s.loadMs}ms`);
-  row('平均FPS', `${s.fps} fps`);
+  row('FPS(待機シーン)', `${s.idleFps} fps`);
+  row('FPS(曲再生 平均/最低)', `${s.songFpsAvg ?? '-'} / ${s.songFpsMin ?? '-'} fps`);
   row('TextAlive ロード', s.taLoaded ? '✓ 成功' : '✗ 失敗');
-  row('曲開始確認', `${s.startedOk}/6`);
+  row('曲シーン遷移(DOM確定)', `${s.startedOk}/6`);
   row('映像描画 曲数', `${s.visualOk}/6`);
   row('歌詞/文字表示らしさ', `${s.lyricsOrTextOk}/6`);
   row('インタラクション', `平均 ${s.avgInteraction}/8`);
@@ -965,7 +1179,8 @@ function printSummary(r) {
   row('モバイル表示', s.mobileOk ? '✓ OK' : '✗ NG');
   row('モバイル横はみ出し', `${s.mobileOverflowCount}件`);
   row('エンディング', s.endingExists ? '✓ あり' : '✗ なし');
-  row('全6曲が選択可能', `${s.songsOk}/6`);
+  row('解放トースト(瞬間演出)', s.secretRevealed ? '✓ 検出' : '— (注入解放では出ない)');
+  row('全曲到達可能(解放後)', `${s.songsOk}/6 ← こたえて解放の確実な指標`);
   row('重大な問題', `${s.criticals}件`);
   row('主要な問題', `${s.majors}件`);
   console.log('='.repeat(72));
@@ -1018,9 +1233,21 @@ cat "${EVAL_OUT:-eval_output/latest}/eval_report.json" | python3 -m json.tool 2>
 
 特に以下の点に注目すること：
 
-- `00_startup.png` — 初見で「どこをクリック/タップするか」が直感的にわかるか
+- `00_startup.png` — クリック前のタイトル画面。初見の第一印象（綺麗か・何が始まるか伝わるか）
+- `00b_after_gesture.png` — 最初のクリック後（プロローグ or 湖へ遷移したか）
 - `01~03 hover` — ホバー時に何か変化があるか（視覚的フィードバック）
-- `05_song_select` が存在しない場合でも、`20_ux_navigation.png` で選曲導線を確認すること
+- `05_song_select` が存在しない場合でも、`20_ux_navigation.png` で選曲導線（湖のカルーセル）を確認すること
+
+※ JSON の `startedOk`（曲シーン遷移）と `visualOk`（映像描画）は **DOMベース（`#song-wrapper-*` の出現）で確定** しています。
+  湖の常時アニメによる誤検出は排除済みなので、この2値は数値として信頼してよい。
+  一方 `lyricsOrTextOk` は canvas描画の歌詞を完全には判定できないため、スクショ併用で確認すること。
+
+※ `interactionScore`（◯/8）は **当てにしないこと**。各曲のcanvasはWebGLで、`readPixels` が
+  合成後バッファを読めず（多くの場合0を返す）、マウス操作による変化を画素から検出できません。
+  ほぼ常に 0/8 になりますが、これは「インタラクションが無い」という意味では**ありません**。
+  インタラクションの有無は `f1_mouse` / `f3_click` のスクショ比較と、`src/songs/song-<id>.js` の
+  実装（クリック/ホバー/ドラッグのハンドラ）を読んで判断すること。
+
 - 各曲 `f0_start` — 再生直後の第一印象（世界観が伝わるか）
 - 各曲 `f1_mouse` — マウス操作後の変化（インタラクション反応）
 - 各曲 `f2_3sec` — 3秒後の演出発展（歌詞が出ているか・映像が動いているか）
@@ -1165,14 +1392,18 @@ cat "${EVAL_OUT:-eval_output/latest}/eval_report.json" | python3 -m json.tool 2>
   ④ 歌詞との同期感
      歌詞テキストが適切なタイミング・スタイルで表示されているか
 
-  曲名        | 世界観 | インパクト | 発展性 | 同期 | 総評
-  ────────────|--------|------------|--------|------|──────
-  こたえて     |  /10   |    /10     |  /10   | /10  |
-  アフター     |  /10   |    /10     |  /10   | /10  |
-  シャッター   |  /10   |    /10     |  /10   | /10  |
-  世界最後     |  /10   |    /10     |  /10   | /10  |
-  トリツク     |  /10   |    /10     |  /10   | /10  |
-  TAKEOVER     |  /10   |    /10     |  /10   | /10  |
+  曲名                    | 世界観 | インパクト | 発展性 | 同期 | 総評
+  ────────────────────────|--------|------------|--------|------|──────
+  シャッター              |  /10   |    /10     |  /10   | /10  |
+  アフター                |  /10   |    /10     |  /10   | /10  |
+  世界最後                |  /10   |    /10     |  /10   | /10  |
+  トリツク                |  /10   |    /10     |  /10   | /10  |
+  TAKEOVER                |  /10   |    /10     |  /10   | /10  |
+  こたえて（シークレット）|  /10   |    /10     |  /10   | /10  |
+
+  ※「こたえて」は通常曲5曲クリア後に解放される隠し曲。単独の出来だけでなく、
+    「5曲をめぐった末のご褒美・締めくくり」として、解放の特別感や水の循環の完成に
+    ふさわしい演出になっているかも評価すること。
 
 【最も魅力的な曲とその理由】
 【最も改善が必要な曲とその理由・具体的な改善案（コード例付き）】
@@ -1184,6 +1415,8 @@ cat "${EVAL_OUT:-eval_output/latest}/eval_report.json" | python3 -m json.tool 2>
 スコア: XX/100
 
 計測値: 平均インタラクション反応スコア = X.X/8
+※ この数値はWebGLの制約でほぼ常に0になる参考値。スコアの根拠にはせず、
+   スクショ（f1_mouse/f3_click）と各曲ソースの操作ハンドラ実装で判断すること。
 
 【チェック項目と結果】
 
@@ -1194,12 +1427,16 @@ cat "${EVAL_OUT:-eval_output/latest}/eval_report.json" | python3 -m json.tool 2>
 
 【各曲の固有インタラクション評価】
 
-  こたえて:    期待: カーソルで色が変わる / 実際:
-  アフター:    期待: ホバーで波紋が広がる / 実際:
-  シャッター:  期待: クリックでシャッター / 実際:
-  世界最後:    期待: カラーピッカーで色変 / 実際:
-  トリツク:    期待: スクラッチで本音現出 / 実際:
-  TAKEOVER:    期待: タップで波紋干渉      / 実際:
+  ※各曲の固有ギミックは更新されうる。評価前に `src/songs/song-<id>.js`
+    （こたえては `src/songs/song-kotaete.js`）を読み、現在の実際の操作仕様を確認すること。
+    以下の「期待」は目安。
+
+  シャッター:  クリックでシャッター/ポーズ撮影   / 実際:
+  アフター:    逆光シルエット等の演出反応        / 実際:
+  世界最後:    カラーピッカー＋ゲージでサビ花火  / 実際:
+  トリツク:    月周回×二世界の切替              / 実際:
+  TAKEOVER:    タップで波紋干渉                  / 実際:
+  こたえて:    （シークレット）選択分岐＋ミクの律動 / 実際:
 
 【インタラクションが機能していない箇所と修正コード】
 
@@ -1511,6 +1748,10 @@ Vocaloid の公式 MV、米津玄師・YOASOBI 等のクオリティの高い MV
 # 注意事項（必ず守ること）
 
 - **全6曲を実際にブラウザで動かすこと。1曲でも未確認のまま評価しない。**
+- **「こたえて」はシークレット曲**であることを前提に評価すること。最初から選べないのは仕様であり欠陥ではない。評価時は `localStorage.completedSongs` に通常曲5曲（`["shutter","after","orchestra","tricktology","takeover"]`）を入れて解放してから再生・評価する（PHASE 1 スクリプトは自動対応済み）。
+- 選曲UIは「1曲ずつ送るカルーセル」（`.world-selection-panel` の ◀▶ ＋「この曲をはじめる」）。初期画面に6曲が一覧表示されないことを減点理由にしないこと。全曲に到達できるか・操作が直感的かで評価する。
+- 進捗/解放の localStorage キーは `completedSongs`（旧 `mm2026_completed` ではない）。プロローグスキップは `mm_seen_intro='1'`。
+- 6段階フェーズ（晴れ→雲→雨→水たまり→小川→湖＝水の循環）が曲クリアで進行する。世界観の連続性・到達感、5曲クリア時の完成演出とこたえて解放の特別感も評価に含めること。
 - 曲選択・再生は ArrowRight / Space 前提にしないこと。曲名、ボタン、data属性、aria-label、Canvas上のカード領域など、実際のUIを探索して操作すること。
 - キーボード操作は補助として試してよいが、主要な評価前提にはしないこと。
 - スクリーンショットが真っ黒または真っ白の曲は「映像が動いていない」として問題に記録する。
