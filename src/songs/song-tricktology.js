@@ -33,6 +33,10 @@ const MAX_RIPPLES = 10;
 const T_INVERT = 61000;   // 1:01 月が右へ沈み、世界が上下反転
 const T_CHOICE = 124000;  // 2:04 月が水に沈み、満ちた月の側が「本物」に決まる
 
+// 歌詞の上下ゆらぎの下端クランプ。実測ではシークバー上端は世界座標で
+// 約 y=-9.2(z=-4)〜-11.8(z=-8) のため、十分手前で止めて被りを防ぐ。
+const LYRIC_Y_FLOOR = -6.5;
+
 export class SongTricktology extends BaseSong {
     constructor(container, songId) {
         super(container, songId);
@@ -532,8 +536,9 @@ export class SongTricktology extends BaseSong {
         // 出現パターンごとの初期オフセット（target からの差分）
         let offX = 0, offY = 0;
         if (entry === 'rise') {
-            // 水面ラインからゆっくり浮かぶ（まだ言葉が沈んでいる）
-            ty = sign * (1.2 + Math.random() * 1.8);
+            // 水面ラインからゆっくり浮かぶ（まだ言葉が沈んでいる）。
+            // 境界線直上に居座って押しづらくならないよう、定位置は少し離す。
+            ty = sign * (1.8 + Math.random() * 1.8);
             offY = sign * -(2.4 + Math.random() * 1.2);
         } else if (entry === 'side') {
             // 左右から流れ込む（現実と鏡像が引っ張り合う）
@@ -581,6 +586,8 @@ export class SongTricktology extends BaseSong {
             vy, crossed: false,         // 世界をまたぐ縦移動と越境フラグ
             entryT: 0, entryDur: entry === 'fall' ? 0.55 : 0.85,
             drift: (Math.random() - 0.5) * 0.004,
+            bobPhase: Math.random() * Math.PI * 2,      // 句ごとに上下ゆらぎの位相をずらす
+            bobAmp: 0.42 + Math.random() * 0.22,        // 上下ゆらぎの振幅（旧0.08から拡大）
             pulse: 0,
             collected: false, shatter: false, shatterT: 0,
         });
@@ -1348,8 +1355,11 @@ export class SongTricktology extends BaseSong {
             }
 
             const sway = l.mirrored ? Math.sin(t * 3.0 + l.baseY * 2.0) * wobbleAmp : 0;
-            const bob = Math.sin(t * 0.8 + Math.abs(l.baseY)) * 0.08;
-            l.sprite.position.set(l.baseX + offX + sway, l.baseY + offY + (l.mirrored ? -bob : bob), l.sprite.position.z);
+            // 上下のゆらぎを大きく＝境界線上で止まらず拾いやすくする（句ごとに位相・振幅を変える）
+            const bob = Math.sin(t * 0.75 + (l.bobPhase || 0)) * (l.bobAmp || 0.5);
+            let dispY = l.baseY + offY + (l.mirrored ? -bob : bob);
+            dispY = Math.max(LYRIC_Y_FLOOR, dispY); // 下端はシークバーに被らないようクランプ
+            l.sprite.position.set(l.baseX + offX + sway, dispY, l.sprite.position.z);
             l.sprite.scale.set(l.baseScale * l.aspect * pulseScale * shatterScale, l.baseScale * pulseScale * shatterScale, 1);
 
             // 発光（地上=白／水面=氷シアン）
