@@ -158,36 +158,6 @@ export class CompletionScreen {
         btn.addEventListener('click', () => this.hide());
         this.el.appendChild(btn);
 
-        // SNS Share button
-        const shareText = encodeURIComponent('マジカルミライ2026「Ripple Lyrics - 水の循環 -」で5つの問いすべてに向き合いました！ #マジカルミライ2026 #初音ミク');
-        const shareUrl = encodeURIComponent(location.href);
-        const shareBtn = document.createElement('a');
-        shareBtn.href = `https://twitter.com/intent/tweet?text=${shareText}&url=${shareUrl}`;
-        shareBtn.target = '_blank';
-        shareBtn.rel = 'noopener noreferrer';
-        shareBtn.textContent = 'X（Twitter）でシェア';
-        shareBtn.style.cssText = `
-            display: inline-block;
-            margin-top: 16px;
-            padding: 7px 18px;
-            border: 1px solid rgba(29,161,242,0.6);
-            background: rgba(29,161,242,0.12); color: rgba(29,161,242,0.9);
-            font-size: min(0.92cqw, 10px); letter-spacing: 0.2em; cursor: pointer;
-            border-radius: 2px; text-decoration: none;
-            transition: all 0.25s ease;
-            animation: cs-fadeup 0.7s 1.35s ease both; opacity: 0;
-            font-family: "Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
-        `;
-        shareBtn.addEventListener('mouseenter', () => {
-            shareBtn.style.background = 'rgba(29,161,242,0.25)';
-            shareBtn.style.borderColor = 'rgba(29,161,242,0.9)';
-        });
-        shareBtn.addEventListener('mouseleave', () => {
-            shareBtn.style.background = 'rgba(29,161,242,0.12)';
-            shareBtn.style.borderColor = 'rgba(29,161,242,0.6)';
-        });
-        this.el.appendChild(shareBtn);
-
         const keyHint = document.createElement('p');
         keyHint.textContent = 'Enter / Esc でも閉じられます';
         keyHint.style.cssText = `
