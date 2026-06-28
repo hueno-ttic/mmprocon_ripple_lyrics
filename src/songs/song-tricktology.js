@@ -33,11 +33,10 @@ const MAX_RIPPLES = 10;
 const T_INVERT = 61000;   // 1:01 月が右へ沈み、世界が上下反転
 const T_CHOICE = 124000;  // 2:04 月が水に沈み、満ちた月の側が「本物」に決まる
 
-// 歌詞の上下ゆらぎの下端クランプ。実測ではシークバー上端は世界座標で
-// 約 y=-9.2(z=-4)〜-11.8(z=-8) のため、十分手前で止めて被りを防ぐ。
-// 上下動を大きくしたぶん下げ幅も増やすが、最も手前(z=-4)のシークバー
-// (y≈-9.2)に対しても約1.6の余白を残す。
-const LYRIC_Y_FLOOR = -7.6;
+// 歌詞の上下クランプは ±this.lyricReach（月の天頂基準・画面相対）で対称に行う。
+// 1:01の世界反転で上下が入れ替わるため、上下どちらの向きでもシークバー
+// (実測 y≈-9.2(z=-4)〜-11.8(z=-8)) に被らないよう対称に留める。詳細は
+// constructor の lyricReach 定義を参照。
 
 // 歌詞が境界線(y=0)上に居座らないための最低クリアランス。各句はこの値より
 // 内側へは普段入らず、世界をまたぐ瞬間だけ（フェードに包まれて）線を横切る。
@@ -103,6 +102,16 @@ export class SongTricktology extends BaseSong {
         this.moonR = this.isMobile ? 9 : 17;      // 周回の横半径
         this.moonArcH = this.isMobile ? 9.5 : 12; // 天頂の高さ
         this.moonZ = -17;
+        // 歌詞が届く上限。月の天頂(moonArcH)の約8割まで上げ、「月が登りきった
+        // あたり」まで歌詞が来るようにする。画面サイズに合わせて moonArcH 基準で
+        // 相対化（mobile≈7.6 / desktop≈9.6）。mobileの7.6は従来の実証済み下端
+        // クランプ値と一致し、最も手前 z=-4 のシークバー(y≈-9.2)に対し約1.6の余白。
+        // 1:01で世界が上下反転するため、この値は上下対称のクランプに使い、
+        // どちらの向きでもシークバーに被らせない（desktopはカメラが遠く
+        // シークバーの世界y≈-12.5まで下がるため、9.6でも余白は十分）。
+        this.lyricReach = this.moonArcH * 0.80;
+        // 定位置(target)の上限。残りぶんは上下ゆらぎ(bob)で天頂付近まで届かせる。
+        this.lyricBandMax = this.lyricReach - 2.2;
         this.moonScale = this.isMobile ? 3.2 : 4.0;
         // 現実(ground)と鏡像(water)の月は一つの天秤を奪い合う。
         // balance: 1=現実の月が満月／鏡像は新月、0=その逆。0.5=互いに半月。
@@ -536,17 +545,18 @@ export class SongTricktology extends BaseSong {
         const entry = this.lyricEntry(position);
         const z = -4 - Math.random() * 4;
 
-        // 最終的な定位置（target）。境界線から LYRIC_Y_CLEAR 以上離して
-        // 線上に張り付かないようにする。
+        // 最終的な定位置（target）。境界線から LYRIC_Y_CLEAR 以上離しつつ、
+        // 最大 lyricBandMax まで広く分布させる（上端の句は bob で月の天頂付近へ）。
+        const bandSpan = this.lyricBandMax - LYRIC_Y_CLEAR;
         let tx = (Math.random() - 0.5) * 9 * this.hSpread;
-        let ty = sign * (LYRIC_Y_CLEAR + Math.random() * 2.5);
+        let ty = sign * (LYRIC_Y_CLEAR + Math.random() * bandSpan);
         // 出現パターンごとの初期オフセット（target からの差分）
         let offX = 0, offY = 0;
         if (entry === 'rise') {
-            // 水面ラインからゆっくり浮かぶ（まだ言葉が沈んでいる）。
-            // 境界線直上に居座って押しづらくならないよう、定位置は少し離す。
-            ty = sign * (LYRIC_Y_CLEAR + 0.2 + Math.random() * 2.0);
-            offY = sign * -(2.4 + Math.random() * 1.2);
+            // 水面ラインからゆっくり浮かび上がり、高い所まで昇る（言葉が空へ向かう）。
+            // 境界線直上に居座らないよう少し離し、上端側に寄せて月の方まで届かせる。
+            ty = sign * (LYRIC_Y_CLEAR + (0.45 + Math.random() * 0.55) * bandSpan);
+            offY = sign * -(2.4 + Math.random() * 1.6);
         } else if (entry === 'side') {
             // 左右から流れ込む（現実と鏡像が引っ張り合う）
             const fromLeft = Math.random() < 0.5;
@@ -585,7 +595,9 @@ export class SongTricktology extends BaseSong {
         const willCross = entry !== 'gather';
         const lifeSec = life / 1000;
         const crossSec = Math.max(1.0, lifeSec * (0.5 + Math.random() * 0.12));
-        const landY = -sign * (LYRIC_Y_CLEAR + Math.random() * 1.2);
+        // 対岸の定位置も同じ帯（CLEAR..lyricBandMax）に散らす。上端へ渡る句は
+        // その世界の月の方まで昇っていく。
+        const landY = -sign * (LYRIC_Y_CLEAR + Math.random() * bandSpan);
         const vy = willCross ? ((landY - ty) / crossSec) : 0;
 
         this.lyrics.push({
@@ -1383,7 +1395,9 @@ export class SongTricktology extends BaseSong {
             const away = l.mirrored ? -1 : 1;
             const bob = away * (0.3 + 0.7 * bob01) * (l.bobAmp || 1.5);
             let dispY = l.baseY + offY + bob;
-            dispY = Math.max(LYRIC_Y_FLOOR, dispY); // 下端はシークバーに被らないようクランプ
+            // 上下対称にクランプ。1:01の世界反転で上下が入れ替わっても、
+            // どちらの向きでもシークバーに被らない高さ(±lyricReach)に留める。
+            dispY = THREE.MathUtils.clamp(dispY, -this.lyricReach, this.lyricReach);
             l.sprite.position.set(l.baseX + offX + sway, dispY, l.sprite.position.z);
             l.sprite.scale.set(l.baseScale * l.aspect * pulseScale * shatterScale, l.baseScale * pulseScale * shatterScale, 1);
 
