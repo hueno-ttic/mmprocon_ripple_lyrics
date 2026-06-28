@@ -11,6 +11,7 @@ import { LoadingScreen } from './ui/LoadingScreen.js';
 import { ErrorScreen } from './ui/ErrorScreen.js';
 import './core/sfx.js'; // 全曲共通UIの効果音(eventBus/DOM購読で自己登録)
 import './core/bgm.js'; // 選曲画面のフェーズ別BGM(eventBus購読で自己登録)
+import { DEV_TOOLS_ENABLED } from './core/featureFlags.js'; // デプロイ単位で開発者向け機能を出し分け
 
 // 曲シーンは1曲ずつしか遊ばないので、静的importで全曲(+pixi/three-vrm)を
 // 初回バンドルに同梱するのは無駄。曲ごとに dynamic import() し、選んだ曲の
@@ -173,8 +174,10 @@ class Application {
         });
         titleScreen.start();
 
-        // ── DEBUG MODE(?debug=1 で有効。提出前にこのブロックと src/debug/ を削除)──
-        if (new URLSearchParams(location.search).get('debug') === '1') {
+        // ── DEBUG MODE ──
+        // デプロイで開発者向け機能が有効(DEV_TOOLS_ENABLED)なビルドに限り、?debug=1 で起動。
+        // 公開・提出用ビルド(VITE_DEV_TOOLS 未設定)では ?debug=1 を付けても無効。
+        if (DEV_TOOLS_ENABLED && new URLSearchParams(location.search).get('debug') === '1') {
             import('./debug/DebugPanel.js').then(m => m.initDebugPanel());
         }
         // ──────────────────────────────────────────────────────────────
