@@ -179,6 +179,12 @@ export class VolumeControl {
                 .app-volume-slider::-webkit-slider-thumb { width: 9px; height: 9px; }
                 .app-volume-slider::-moz-range-thumb { width: 9px; height: 9px; }
             }
+            @media (pointer: coarse) {
+                /* タッチ端末(スマホ等)では JS からの音量制御が OS 側で無効化され、
+                   スライダーもミュートも効かないため、音量 UI ごと非表示にする
+                   (音量は端末のハードウェアボタンで調整してもらう) */
+                .app-volume-control { display: none !important; }
+            }
         `;
         document.head.appendChild(style);
     }
