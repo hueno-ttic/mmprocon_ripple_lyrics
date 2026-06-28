@@ -79,7 +79,6 @@ export class WorldUI {
         this._createSelectionPanel();
         this._updateProgressCounter();
         this._setSelected(0);
-        this._maybeShowOnboarding();
         this._maybeShowEnding();
 
         this.bindEvents();
@@ -413,34 +412,6 @@ export class WorldUI {
         // Force reflow so the animation can restart
         void startBtn.offsetWidth;
         startBtn.classList.add('world-selection-start--attention');
-    }
-
-    // One-time guide for first-time visitors: explains that the lights are
-    // songs and how selection works. Dismissed by any tap or after 9s.
-    _maybeShowOnboarding() {
-        if (localStorage.getItem('worldOnboardingShown')) return;
-
-        const overlay = document.createElement('div');
-        overlay.className = 'world-onboarding';
-        overlay.innerHTML = `
-            <div class="world-onboarding-card">
-                <div class="world-onboarding-icon">✦</div>
-                <p class="world-onboarding-main">浮かんでいる光は、5つの楽曲です</p>
-                <p class="world-onboarding-sub">光にふれて選び、「この曲をはじめる ▶」で旅がはじまります</p>
-                <p class="world-onboarding-cycle">曲をクリアするたび、晴れた空に雲が集まり、雨が降り──やがて湖がうまれます</p>
-                <p class="world-onboarding-dismiss">タップして閉じる</p>
-            </div>
-        `;
-        this.container.appendChild(overlay);
-
-        const dismiss = () => {
-            if (!overlay.parentNode) return;
-            localStorage.setItem('worldOnboardingShown', '1');
-            overlay.classList.add('world-onboarding--hide');
-            setTimeout(() => overlay.parentNode?.removeChild(overlay), 600);
-        };
-        overlay.addEventListener('click', (e) => { e.stopPropagation(); dismiss(); });
-        setTimeout(dismiss, 9000);
     }
 
     // 全曲(6/6)制覇したときの控えめな達成テキスト。湖面UIに一度だけ表示する。
