@@ -10,6 +10,9 @@ import { PHASE_CLASSES } from './phases/index.js';
 import { screenFade } from '../ui/ScreenFade.js';
 import { quality } from '../core/quality.js';
 
+// 全曲解放後に背景セレクタで選んだ過去フェーズを保持する localStorage キー。
+const BG_OVERRIDE_KEY = 'bgPhaseOverride';
+
 export class WorldUI {
     constructor(container) {
         this.container = container;
@@ -52,7 +55,10 @@ export class WorldUI {
         this.songs = getSelectableSongs(appState.completedSongs);
         this.selectedIndex = 0;
         this.currentPhase = null;
-        this.currentPhaseIndex = appState.getPhase();
+        // 全曲解放後は、左上の背景セレクタで過去フェーズ(晴れ〜湖)の背景を自由に選べる。
+        // その選択(=自動進行のオーバーライド)を localStorage に保持し、起動時に復元する。
+        this.bgPhaseOverride = this._loadBgOverride();
+        this.currentPhaseIndex = this._desiredPhase();
         this.isTransitioning = false;
         this.hoveredIndex = -1;
 
@@ -77,6 +83,7 @@ export class WorldUI {
         // 背景(湖面)に浮かぶ曲名ラベルは廃止。選曲は中央の選択パネルに一本化したので
         // _createLabels() は呼ばない(this.labels は空のまま=投影/更新処理は自然に no-op)。
         this._createSelectionPanel();
+        this._createBackgroundSelector();
         this._updateProgressCounter();
         this._setSelected(0);
         this._maybeShowEnding();
@@ -90,6 +97,8 @@ export class WorldUI {
 
         // 選曲画面に入った合図 — フェーズ別BGM(bgm.js)が現在フェーズの曲を流す。
         eventBus.emit('lakeEnter');
+        // 背景オーバーライド中は、進行フェーズではなく表示中フェーズのBGMに合わせる。
+        this._syncBgmToDisplayedPhase();
     }
 
     // 「ここを押せる」と一目で分かるアフォーダンスをまとめて注入する。
@@ -479,6 +488,152 @@ export class WorldUI {
         }
     }
 
+    // ── 背景セレクタ(全曲解放後のみ) ──────────────────────────────
+    // 選曲画面の背景は通常、通常曲のクリア数で「晴れ→雲→雨→水たまり→小川→湖」と
+    // 一方向に進む(appState.getPhase)。全曲解放後はこのセレクタで過去フェーズの背景を
+    // 自由に選び直せる。選んだ背景(=自動進行のオーバーライド)は localStorage に保持する。
+
+    _loadBgOverride() {
+        try {
+            const v = localStorage.getItem(BG_OVERRIDE_KEY);
+            if (v === null) return null;
+            const n = parseInt(v, 10);
+            return Number.isInteger(n) && n >= 0 && n < PHASE_CLASSES.length ? n : null;
+        } catch (e) { return null; }
+    }
+
+    _saveBgOverride(index) {
+        try { localStorage.setItem(BG_OVERRIDE_KEY, String(index)); } catch (e) { /* storage失敗は致命的でない */ }
+    }
+
+    // 今表示すべきフェーズ。全曲解放後に手動選択(override)があればそれを、無ければ進行通りの現在フェーズ。
+    _desiredPhase() {
+        if (appState.areAllSongsComplete() && this.bgPhaseOverride != null) return this.bgPhaseOverride;
+        return appState.getPhase();
+    }
+
+    // BGMを表示中フェーズに合わせる。lakeEnter は進行フェーズ(appState.getPhase)で鳴るため、
+    // 背景オーバーライドで別フェーズを表示している時だけ phaseChange でBGMを寄せ直す。
+    _syncBgmToDisplayedPhase(phase = this.currentPhaseIndex) {
+        if (phase !== appState.getPhase()) eventBus.emit('phaseChange', { to: phase });
+    }
+
+    _createBackgroundSelector() {
+        const wrap = document.createElement('div');
+        wrap.className = 'world-bg-select';
+        wrap.innerHTML = `
+            <button class="world-bg-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-label="背景を選ぶ">
+                <span class="world-bg-toggle-ico" aria-hidden="true">❖</span>
+                <span class="world-bg-toggle-label">背景</span>
+                <span class="world-bg-toggle-caret" aria-hidden="true">▾</span>
+            </button>
+            <div class="world-bg-menu" role="menu" hidden></div>
+        `;
+        this.container.appendChild(wrap);
+        this.bgSelectWrap = wrap;
+        this.bgToggleBtn = wrap.querySelector('.world-bg-toggle');
+        this.bgMenu = wrap.querySelector('.world-bg-menu');
+
+        // 6フェーズ分の選択肢をスウォッチ＋名前で並べる。
+        PHASES.forEach((phase, i) => {
+            const item = document.createElement('button');
+            item.className = 'world-bg-item';
+            item.type = 'button';
+            item.setAttribute('role', 'menuitemradio');
+            item.dataset.index = String(i);
+            item.innerHTML = `<span class="world-bg-swatch" style="background:${phase.color}"></span><span class="world-bg-item-name">${phase.name}</span>`;
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._switchBackground(i);
+            });
+            this.bgMenu.appendChild(item);
+        });
+
+        this.bgToggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleBgMenu();
+        });
+
+        // メニュー外のクリック/タップで閉じる。
+        this._boundCloseBgMenu = (e) => {
+            if (this.bgSelectWrap && !this.bgSelectWrap.contains(e.target)) this._closeBgMenu();
+        };
+        document.addEventListener('click', this._boundCloseBgMenu);
+
+        this._updateBackgroundSelector();
+    }
+
+    // 解放状況に応じて表示/非表示、トグルのラベル、選択中フェーズのハイライトを同期する。
+    _updateBackgroundSelector() {
+        if (!this.bgSelectWrap) return;
+        const unlocked = appState.areAllSongsComplete();
+        this.bgSelectWrap.style.display = unlocked ? 'block' : 'none';
+        if (!unlocked) { this._closeBgMenu(); return; }
+
+        const cur = PHASES[this.currentPhaseIndex];
+        const label = this.bgToggleBtn?.querySelector('.world-bg-toggle-label');
+        if (label && cur) label.textContent = cur.name;
+        this.bgMenu.querySelectorAll('.world-bg-item').forEach((el) => {
+            const active = Number(el.dataset.index) === this.currentPhaseIndex;
+            el.classList.toggle('world-bg-item--active', active);
+            el.setAttribute('aria-checked', active ? 'true' : 'false');
+        });
+    }
+
+    _toggleBgMenu() {
+        if (!this.bgMenu) return;
+        if (this.bgMenu.hasAttribute('hidden')) this._openBgMenu();
+        else this._closeBgMenu();
+    }
+
+    _openBgMenu() {
+        if (!this.bgMenu || this.isTransitioning) return;
+        this.bgMenu.removeAttribute('hidden');
+        this.bgToggleBtn?.setAttribute('aria-expanded', 'true');
+        this.bgSelectWrap?.classList.add('world-bg-select--open');
+    }
+
+    _closeBgMenu() {
+        if (!this.bgMenu) return;
+        this.bgMenu.setAttribute('hidden', '');
+        this.bgToggleBtn?.setAttribute('aria-expanded', 'false');
+        this.bgSelectWrap?.classList.remove('world-bg-select--open');
+    }
+
+    // 選んだ過去フェーズの背景へ静かにクロスフェードで切り替える。
+    // 進行(クリア数)は変えず、見た目だけをオーバーライドする。
+    async _switchBackground(index) {
+        this._closeBgMenu();
+        if (this.isTransitioning || index === this.currentPhaseIndex) return;
+        this.isTransitioning = true;
+
+        this.bgPhaseOverride = index;
+        this._saveBgOverride(index);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'world-bg-switch-overlay';
+        overlay.style.cssText = `
+            position: absolute; inset: 0; background: rgba(0,0,0,0);
+            z-index: 500; pointer-events: none; transition: background 0.5s ease;
+        `;
+        this.container.appendChild(overlay);
+
+        requestAnimationFrame(() => { overlay.style.background = 'rgba(0,0,0,0.92)'; });
+        await new Promise(r => setTimeout(r, 520));
+
+        this._initPhase(index);
+        // 背景に合わせてBGMも選んだフェーズへクロスフェードさせる(bgm.jsがphaseChangeを購読)。
+        eventBus.emit('phaseChange', { to: index });
+
+        overlay.style.background = 'rgba(0,0,0,0)';
+        await new Promise(r => setTimeout(r, 520));
+
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        this.isTransitioning = false;
+        this._updateProgressCounter();
+        this._updateBackgroundSelector();
+    }
+
     selectSong(song, index) {
         if (this.isTransitioning) return;
         this.isTransitioning = true;
@@ -527,7 +682,9 @@ export class WorldUI {
         // シークレット曲(こたえて)の解放など、表示する曲が変わっていたら作り直す。
         const listChanged = this._refreshSongList();
 
-        const newPhase = appState.getPhase();
+        // 全曲解放後に背景を手動選択している場合はそのフェーズを維持する
+        // (未解放時は通常どおりクリア数で決まる現在フェーズへ進む)。
+        const newPhase = this._desiredPhase();
         if (newPhase !== this.currentPhaseIndex) {
             // フェーズ遷移側で this.songs を使ってマーカーを作り直すので、ここでは何もしない。
             this._transitionToPhase(newPhase);
@@ -540,6 +697,9 @@ export class WorldUI {
         this._refreshLabels();
         this._updateProgressCounter();
         this._updateSelectionPanel();
+        this._updateBackgroundSelector();
+        // lakeEnter は進行フェーズでBGMを鳴らすため、背景オーバーライド中は表示フェーズへ寄せ直す。
+        this._syncBgmToDisplayedPhase(newPhase);
         this._maybeShowEnding();
     }
 
@@ -660,6 +820,7 @@ export class WorldUI {
         if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
         this.isTransitioning = false;
         this._updateProgressCounter();
+        this._updateBackgroundSelector();
     }
 
     bindEvents() {
@@ -1003,6 +1164,10 @@ export class WorldUI {
         }
         if (this._affordanceStyleEl?.parentNode) {
             this._affordanceStyleEl.parentNode.removeChild(this._affordanceStyleEl);
+        }
+        if (this._boundCloseBgMenu) document.removeEventListener('click', this._boundCloseBgMenu);
+        if (this.bgSelectWrap?.parentNode) {
+            this.bgSelectWrap.parentNode.removeChild(this.bgSelectWrap);
         }
         if (this._endingTimeout) clearTimeout(this._endingTimeout);
         if (this._endingRemoveTimeout) clearTimeout(this._endingRemoveTimeout);
