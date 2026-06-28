@@ -494,31 +494,31 @@ export class ShutterPoseEditor {
          スライダーは appearance:none で大きなツマミに差し替え、行全体を高くして
          当たり判定を広げる(中央に細いトラックを描画)。ボタン類も最小44pxの指タップ域を確保。 */
       @media (pointer: coarse) {
-        .spe-panel { width: min(68%, 360px); }
-        .spe-mode { padding: 12px 0; font-size: 13px; }
-        .spe-tools select { padding: 9px 8px; font-size: 13px; min-height: 40px; }
-        .spe-reset { padding: 10px 14px; font-size: 13px; min-height: 40px; }
-        .spe-grp summary { padding: 12px 10px; font-size: 13px; }
-        .spe-bone-cap { font-size: 12px; }
-        .spe-axis { gap: 9px; padding: 5px 0; }
-        .spe-axis-k { width: 16px; font-size: 12px; }
+        .spe-panel { width: min(72%, 380px); }
+        .spe-mode { padding: 14px 0; font-size: 14px; }
+        .spe-tools select { padding: 11px 10px; font-size: 14px; min-height: 46px; }
+        .spe-reset { padding: 12px 16px; font-size: 14px; min-height: 46px; }
+        .spe-grp summary { padding: 14px 11px; font-size: 14px; }
+        .spe-bone-cap { font-size: 13px; }
+        .spe-axis { gap: 10px; padding: 7px 0; }
+        .spe-axis-k { width: 18px; font-size: 13px; }
         .spe-axis input[type=range] {
-          -webkit-appearance: none; appearance: none; height: 34px; background: transparent;
-          background-image: linear-gradient(to bottom, transparent calc(50% - 2px),
-            rgba(255,255,255,0.28) calc(50% - 2px), rgba(255,255,255,0.28) calc(50% + 2px),
-            transparent calc(50% + 2px));
+          -webkit-appearance: none; appearance: none; height: 42px; background: transparent;
+          background-image: linear-gradient(to bottom, transparent calc(50% - 3px),
+            rgba(255,255,255,0.28) calc(50% - 3px), rgba(255,255,255,0.28) calc(50% + 3px),
+            transparent calc(50% + 3px));
         }
         .spe-axis input[type=range]::-webkit-slider-thumb {
-          -webkit-appearance: none; appearance: none; width: 28px; height: 28px;
+          -webkit-appearance: none; appearance: none; width: 36px; height: 36px;
           border-radius: 50%; background: ${theme}; border: 2px solid #fff;
           box-shadow: 0 0 6px rgba(0,0,0,0.5);
         }
         .spe-axis input[type=range]::-moz-range-thumb {
-          width: 28px; height: 28px; border: 2px solid #fff; border-radius: 50%; background: ${theme};
+          width: 36px; height: 36px; border: 2px solid #fff; border-radius: 50%; background: ${theme};
         }
-        .spe-name { padding: 10px 10px; font-size: 13px; min-height: 40px; }
-        .spe-save, .spe-shoot { padding: 11px 14px; font-size: 13px; min-height: 44px; }
-        .spe-close { font-size: 28px; padding: 0 8px; }
+        .spe-name { padding: 12px 11px; font-size: 14px; min-height: 46px; }
+        .spe-save, .spe-shoot { padding: 13px 16px; font-size: 14px; min-height: 50px; }
+        .spe-close { font-size: 32px; padding: 0 10px; }
       }
     `;
     document.head.appendChild(el);
