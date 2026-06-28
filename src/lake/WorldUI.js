@@ -304,7 +304,29 @@ export class WorldUI {
         this._updateSelectionPanel();
     }
 
+    // 全曲のサムネイルを先読み＆デコードしてキャッシュに常駐させる。
+    // これをやらないと、曲を切り替えて初めて img.src へそのURLを入れた瞬間に
+    // 取得+デコードが走り、矢印を押してから絵が出るまで明確なラグになる。
+    _preloadThumbnails() {
+        // シークレット曲(こたえて)解放で曲が増えると再度呼ばれる。Map のキー(src)で
+        // 重複を弾くので、新しく増えたサムネだけが追加で先読みされる。
+        if (!this._thumbPreload) this._thumbPreload = new Map();   // src -> Image (GC されないよう参照を保持)
+        this.songs.forEach((song) => {
+            if (!song.thumbnail) return;
+            const src = import.meta.env.BASE_URL + song.thumbnail;
+            if (this._thumbPreload.has(src)) return;
+            const img = new Image();
+            img.src = src;
+            // 取得後にデコードまで済ませておくと差し替えが完全に即時になる
+            img.decode?.().catch(() => {});
+            this._thumbPreload.set(src, img);
+        });
+    }
+
     _createSelectionPanel() {
+        // サムネイルは曲ごとに差し替えるので、最初に全部先読みしておく
+        this._preloadThumbnails();
+
         // 選択中の曲のサムネイル(課題曲の公式MVサムネイル)を大きく表示
         this.thumbCard = document.createElement('div');
         this.thumbCard.className = 'world-thumb-card';
