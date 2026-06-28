@@ -449,6 +449,9 @@ export class ShutterPoseEditor {
       /* 編集中はプレイヤーUI(湖面へ戻る・再生/シークバー)をエディタの裏へ隠して誤操作を防ぐ */
       body.spe-editing #back-to-lake,
       body.spe-editing #player-controls { display: none !important; }
+      /* 音量トグルは画面右端に常設されエディタパネルと重なるため、編集中はパネルの裏へ回す
+         (z-index 1200 → 40。.spe-panel の z-index 55 より下=ポーズエディタより下に潜らせる) */
+      body.spe-editing .app-volume-control { z-index: 40; }
       .spe-panel {
         position: absolute; top: 0; right: 0; height: 100%; width: min(42%, 340px);
         z-index: 55; box-sizing: border-box; pointer-events: auto;
