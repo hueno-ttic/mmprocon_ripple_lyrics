@@ -850,14 +850,19 @@ export class SongOrchestra extends BaseSong {
         const textWidth = Math.max(160, Math.ceil(metrics.width) + padding);
         
         // 文字がぼやけないよう実ピクセルを SS 倍で確保し、論理座標(W×H)で描画する。
-        const SS = 2;                 // スーパーサンプリング倍率(解像度向上)
+        // ただしテクスチャ実ピクセル幅に上限を設け、長いフレーズで肥大化(VRAM/アップロード/フィルレート増)
+        // しないようにする。長フレーズは画面でも横長で1グリフあたりの表示解像度は十分なため、上限で
+        // 抑えても見た目は変わらない(短〜中フレーズは SS=2 のまま鮮明)。
         const W = textWidth, H = 128; // 論理サイズ(aspect・レイアウト計算はこの値基準)
+        const MAX_TEX_W = 1600;       // 実ピクセル幅の上限
+        let ss = 2;                   // 既定のスーパーサンプリング倍率
+        if (W * ss > MAX_TEX_W) ss = Math.max(1, MAX_TEX_W / W); // 長フレーズは倍率を下げる
         const canvas = document.createElement('canvas');
-        canvas.width = W * SS;
-        canvas.height = H * SS;
+        canvas.width = Math.round(W * ss);
+        canvas.height = Math.round(H * ss);
 
         const ctx = canvas.getContext('2d');
-        ctx.scale(SS, SS);
+        ctx.scale(ss, ss);
         ctx.clearRect(0, 0, W, H);
 
         // --- Category Background Decorations ---
