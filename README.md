@@ -164,7 +164,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 
 ### 📸 シャッターチャンス（夜未アガリ）— 「この瞬間を永遠にできるか」
 
-<img src="docs/screenshots/select-shutter.png" alt="シャッターチャンスの選択画面" width="560">
+<img src="docs/screenshots/song-shutter.png" alt="シャッターチャンスのアプリ画面（カメラ視点でステージのミクを撮影。AFスコープとポーズプリセットバー）" width="560">
 
 カメラ視点で、ステージを動き回るミク or リンを撮影するデュエット曲です。
 
@@ -181,7 +181,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 
 ### 🎭 アフター・ザ・カーテン（Rulmry）— 「終わりの後に何が残るのか」
 
-<img src="docs/screenshots/select-after.png" alt="アフター・ザ・カーテンの選択画面" width="560">
+<img src="docs/screenshots/song-after.png" alt="アフター・ザ・カーテンのアプリ画面（緞帳の舞台でスポットライトに照らされる逆光のミクと歌詞、床のバラの紙吹雪）" width="560">
 
 暗転した舞台で、スポットライトだけを頼りに闇に隠れた歌詞とミクを照らし出します。
 
@@ -194,7 +194,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 
 ### 🎆 世界最後の音楽隊（夏山よつぎ × ど〜ぱみん）— 「空はどんな色？あなたはどんなカタチ？」
 
-<img src="docs/screenshots/select-orchestra.png" alt="世界最後の音楽隊の選択画面" width="560">
+<img src="docs/screenshots/song-orchestra.png" alt="世界最後の音楽隊のアプリ画面（星空にゼロ重力で漂うミクと、光のスプライトになった歌詞）" width="560">
 
 浮かぶ歌詞に触れ、言葉の意味を色に変えて夜空に打ち上げます。
 
@@ -207,7 +207,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 
 ### 🌗 トリツクロジー（鶴三 / 鏡音リン）— 「水面に立つあたし、水面に映るあたし。どっちが本物なのかな」
 
-<img src="docs/screenshots/select-tricktology.png" alt="トリツクロジーの選択画面" width="560">
+<img src="docs/screenshots/song-tricktology.png" alt="トリツクロジーのアプリ画面（水面ラインを境に、地上のリンと水鏡に映る逆さのリン、月とその反射）" width="560">
 
 画面中央の水面ラインで、上の**地上世界**と下の**水鏡の世界**が同時に進みます。
 
@@ -220,7 +220,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 
 ### 🔓 TAKEOVER（Twinfield）— 「世界を変えるのは誰か」
 
-<img src="docs/screenshots/select-takeover.png" alt="TAKEOVERの選択画面" width="560">
+<img src="docs/screenshots/song-takeover.png" alt="TAKEOVERのアプリ画面（赤く侵食された世界に並ぶAES暗号化された歌詞タイルとコンボ表示）" width="560">
 
 赤く暗号化された歌詞を解読し、侵食された世界を奪還する時間制限つきの認知戦です。
 
@@ -233,7 +233,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 
 ### 🌻 こたえて（imie）— 「あなたが僕ならばどんな答えを出すでしょうか」（シークレット曲）
 
-<img src="docs/screenshots/select-kotaete.png" alt="こたえての選択画面（5曲クリアで湖に出現）" width="560">
+<img src="docs/screenshots/song-kotaete.png" alt="こたえてのアプリ画面（青空の下、伸びるひまわりの茎と歌詞の葉を足場に登るミク、高度HUD）" width="560">
 
 **通常曲5曲をすべてクリアすることで解放される、隠しゲームです。** 5曲クリア後にエンディングを経て、それまで何もなかった湖の静寂に6つ目の波紋として現れます（最初から選ぶことはできません）。他の5曲とは操作も世界観も大きく異なる、到達者だけが遊べる"ごほうび"として設計しています。
 
