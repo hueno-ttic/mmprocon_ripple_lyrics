@@ -726,10 +726,11 @@ export class SongTricktology extends BaseSong {
             return cand.find(c => c.sprite === hits[0].object) || null;
         }
 
-        // ゆるい判定: 歌詞そのものに当たらなくても、境界線(世界y=0)の
-        // 上下どちら側をタップしたかでその側の句を拾う。タップ点を歌詞奥行きの
-        // 面に飛ばして世界yの符号で側を決め、同じ側に出ている句の中から
-        // 画面上で最も近いものを選ぶ（距離の上限は設けない＝大まかでも拾える）。
+        // ゆるい判定: 歌詞そのものに当たらなくても、画面のどこをタップしても
+        // 必ずいずれかの句を拾う。タップ点が境界線(世界y=0)の上下どちら側かを
+        // 見て、できればその側の句を優先する（タップした世界の月が満ちる）。
+        // ただし「タップした側に句が無くても拾えない」を避けるため、空の側を
+        // タップした場合は反対側を含めた最近傍へフォールバックする。
         const tapPt = new THREE.Vector3();
         let tapAbove;
         if (this.raycaster.ray.intersectPlane(this.depthPlane, tapPt)) {
@@ -739,7 +740,8 @@ export class SongTricktology extends BaseSong {
             tapAbove = clientY < window.innerHeight * 0.5;
         }
 
-        let best = null, bestD = Infinity;
+        let best = null, bestD = Infinity;        // タップした側の最近傍
+        let bestAny = null, bestAnyD = Infinity;  // 側を問わない最近傍
         const v = new THREE.Vector3();
         for (const c of cand) {
             v.setFromMatrixPosition(c.sprite.matrixWorld);
@@ -748,11 +750,12 @@ export class SongTricktology extends BaseSong {
             const sx = (v.x * 0.5 + 0.5) * window.innerWidth;
             const sy = (-v.y * 0.5 + 0.5) * window.innerHeight;
             const d = Math.hypot(sx - clientX, sy - clientY);
+            if (d < bestAnyD) { bestAnyD = d; bestAny = c; }
             if (above === tapAbove && d < bestD) { bestD = d; best = c; }
         }
-        // タップした側の句だけを対象にする（その側が空なら拾わない）。
-        // どちらの世界を満たすかはタップした側で決まる、というルールを保つ。
-        return best;
+        // タップした側に句があればそれを、無ければ全体の最近傍を拾う
+        // （＝どこをタップしても、画面に句がある限り必ずタップ判定になる）。
+        return best || bestAny;
     }
 
     collectLyric(l) {
