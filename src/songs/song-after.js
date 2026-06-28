@@ -115,6 +115,7 @@ export class SongAfter extends BaseSong {
         this.boundOnPointerMove = this.onPointerMove.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
         this.boundOnPointerUp = this.onPointerUp.bind(this);
+        this.boundOnContextMenu = (e) => e.preventDefault();
         this.boundOnPlay = () => this.onPlayEvent();
     }
 
@@ -171,6 +172,17 @@ export class SongAfter extends BaseSong {
         // タッチドラッグでスポットライトを動かせるよう、ブラウザ既定のスクロール/ズームを無効化
         this.renderer.domElement.style.touchAction = 'none';
         this.songWrapper.style.touchAction = 'none';
+        // スポットライトは「長押し」で照らし続ける操作。touch-action だけでは
+        // スマホの長押しがテキスト選択・iOSコールアウト・コンテキストメニューを誘発し、
+        // 選択モードに入ると以後のタップが選択解除に吸われてボタンが反応しなくなる。
+        // 選択系の既定動作を canvas/wrapper で明示的に封じる。
+        for (const el of [this.renderer.domElement, this.songWrapper]) {
+            el.style.userSelect = 'none';
+            el.style.webkitUserSelect = 'none';
+            el.style.webkitTouchCallout = 'none';
+        }
+        // 長押しの右クリック/コンテキストメニューも無効化(押下保持を妨げないため)
+        this.songWrapper.addEventListener('contextmenu', this.boundOnContextMenu);
 
         this.songWrapper.appendChild(this.renderer.domElement);
     }
@@ -1683,6 +1695,7 @@ export class SongAfter extends BaseSong {
         if (this.songWrapper) {
             this.songWrapper.removeEventListener('pointermove', this.boundOnPointerMove);
             this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
+            this.songWrapper.removeEventListener('contextmenu', this.boundOnContextMenu);
         }
 
         // 歌詞メッシュ
