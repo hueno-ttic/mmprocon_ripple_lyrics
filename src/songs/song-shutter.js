@@ -125,7 +125,9 @@ const SHUTTER_CUTE_POSES = [
     // 泣き（ポーズエディタ製・全身＋涙/困り顔の複数モーフ）
     { id: 'naki', label: '泣き', emoji: '😭', pose: { neck: { x: 0, y: 0.26, z: 0 }, head: { x: 0.19, y: 0, z: 0 }, leftUpperArm: { x: -0.66, y: -0.25, z: 1.01 }, leftLowerArm: { x: -1.62, y: -0.33, z: -1.54 }, leftHand: { x: -1.95, y: 0.99, z: 0 }, rightShoulder: { x: -0.13, y: 0, z: 0 }, rightUpperArm: { x: -0.46, y: 1.12, z: -0.5 }, rightLowerArm: { x: -0.58, y: 1.82, z: 0 }, rightHand: { x: -2.69, y: -0.14, z: -1.32 }, hips: { x: -0.22, y: -0.08, z: 0 }, leftUpperLeg: { x: 0.17, y: -0.02, z: 0.58 }, leftLowerLeg: { x: 1.12, y: 0.71, z: 0.09 }, leftFoot: { x: 0, y: 0.27, z: 0.54 }, rightUpperLeg: { x: -0.7, y: 0.47, z: -0.01 }, rightLowerLeg: { x: 2.47, y: -0.03, z: 0 }, rightFoot: { x: 0, y: -0.86, z: 0 }, expr: { '涙': 1, 'まばたき': 1, '困る': 1, 'びっくり': 0.45 } } },
     // お願い（複数モーフのキメ顔つき）
-    { id: 'pray', label: 'お願い', emoji: '🙏', pose: { spine: { x: 0.91, y: 0.19, z: 0 }, neck: { x: -0.99, y: 0.07, z: 0 }, leftShoulder: { x: -2.33, y: -0.19, z: -0.95 }, leftLowerArm: { x: -0.07, y: -1.1, z: 0 }, leftHand: { x: -0.66, y: -0.57, z: 0.07 }, rightShoulder: { x: -2.27, y: -0.33, z: 0.91 }, rightUpperArm: { x: 0, y: -0.14, z: -0.5 }, rightLowerArm: { x: 0, y: 1.77, z: 0 }, rightHand: { x: -0.53, y: -0.08, z: 0.21 }, expr: { 'ウィンク': 1, 'びっくり': 0.2, '照れ': 1, 'う': 0.45 } } },
+    // 注: leftUpperArm を明示すること。省くと lerpSubjectPose が左上腕を補間せず、待機グルーヴ/前姿勢の
+    //     値が残って左腕の向きが毎回バラつく（右の rightUpperArm のミラー値で左右を揃える）。
+    { id: 'pray', label: 'お願い', emoji: '🙏', pose: { spine: { x: 0.91, y: 0.19, z: 0 }, neck: { x: -0.99, y: 0.07, z: 0 }, leftShoulder: { x: -2.33, y: -0.19, z: -0.95 }, leftUpperArm: { x: 0, y: 0.14, z: 0.5 }, leftLowerArm: { x: -0.07, y: -1.1, z: 0 }, leftHand: { x: -0.66, y: -0.57, z: 0.07 }, rightShoulder: { x: -2.27, y: -0.33, z: 0.91 }, rightUpperArm: { x: 0, y: -0.14, z: -0.5 }, rightLowerArm: { x: 0, y: 1.77, z: 0 }, rightHand: { x: -0.53, y: -0.08, z: 0.21 }, expr: { 'ウィンク': 1, 'びっくり': 0.2, '照れ': 1, 'う': 0.45 } } },
     // かんがえ中
     { id: 'thinking', label: 'かんがえ', emoji: '🤔', pose: { leftUpperArm: { x: -0.4, y: 0, z: 0.62 }, rightUpperArm: { x: -0.45, y: 0, z: -0.42 }, leftLowerArm: { x: 0, y: 0.2, z: -1.95 }, rightLowerArm: { x: -0.1, y: 0, z: 2.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.1 }, head: { x: -0.08, y: 0.16, z: 0.3 }, neck: { x: -0.04, y: 0.08, z: 0.14 }, chest: { x: 0, y: 0.06, z: 0.05 }, spine: { x: 0.02, y: 0.04, z: 0.04 }, hips: { x: 0, y: 0, z: 0 } } },
     // てふり
@@ -266,6 +268,10 @@ export class SongShutter extends BaseSong {
         // 「かわいいポーズ」ボタンで一時的に指定ポーズをホールドする状態
         this.poseOverride = null;    // { pose, until(performance.now基準のms), id } or null
         this._poseHoldAmt = 0;       // ホールド度の平滑値(0..1。移動抑制に使用)
+        // ポーズ・ホールド開始時のうろつきオフセットを凍結する値（被写体を中心へ寄せず“その場で構えさせる”）。
+        // null=非ホールド。ホールド中は現在のsx/szをこの凍結値へ blend して座標ズレを防ぐ。
+        this._holdSx = null;
+        this._holdSz = null;
         this._poseBtnTimer = null;   // ボタンのハイライト解除タイマー
 
         // --- ユーザー向けポーズ作成エディタ（自作ポーズで撮影） ---
@@ -332,12 +338,12 @@ export class SongShutter extends BaseSong {
         this.vrmUpdateAccum = 0;
 
         // --- オープニングの掴み（曲頭3秒の「構図が決まる」導入演出） ---
-        // 再生開始(position=0)から OPENING_DURATION までを使い、AFが寄って合焦→[REC]点灯→
+        // 再生開始(position=0)から OPENING_DURATION までを使い、AFが寄って合焦→合焦一閃→
         // 被写体がキメ顔/ポーズ、という流れで「撮る遊び」を最初の一瞬で直感させる。
         this.OPENING_DURATION = 3000;     // 導入演出の長さ(ms)
         this.openingDone = false;         // 導入完了フラグ(以後は通常更新)
         this.openingFocusFlash = 0;       // 合焦の瞬間に走る一閃(0..1で減衰)
-        this._recIgnited = false;         // [REC]点灯の発火済みフラグ(SE等の1回限り発火に使用)
+        this._recIgnited = false;         // 合焦の瞬間の一回限り発火ガード(一閃/キメ顔/SE)
 
         // --- AFロック「今だ！」合図（lockShots成立の発見性を上げる） ---
         // スコープ上に被写体ワードが吸着している間 _lockReady=1 へ滑らかに上がり、
@@ -1321,12 +1327,12 @@ export class SongShutter extends BaseSong {
     }
 
     initEnvironment() {
-        // Create flying polaroid frames (wireframe)
-        const boxGeo = new THREE.BoxGeometry(4, 3, 0.1);
+        // Create flying polaroid frames (wireframe)。枠サイズは 4×3 の1.5倍 = 6×4.5。
+        const boxGeo = new THREE.BoxGeometry(6, 4.5, 0.15);
         const edges = new THREE.EdgesGeometry(boxGeo);
         const mat = new THREE.LineBasicMaterial({ color: new THREE.Color(this.themeColor) });
 
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 20; i++) {
             const frame = new THREE.LineSegments(edges, mat);
             
             // 3D周回（楕円軌道）パラメータの設定
@@ -1642,8 +1648,12 @@ export class SongShutter extends BaseSong {
             #shutter-contactsheet .cs-sheet {
                 position: relative;
                 box-sizing: border-box;
-                width: min(88vw, 760px);
-                max-height: 86%;
+                display: flex;
+                flex-direction: column;
+                width: min(92vw, 880px);
+                /* 最初から大きい固定サイズ。写真選択でヒーロー(拡大写真)が出ても外枠は変化させない
+                   （中身は下のグリッドが flex で伸縮＆内部スクロールして吸収する）。 */
+                height: min(90%, 680px);
                 padding: 22px 20px 16px;
                 background:
                     repeating-linear-gradient(90deg, rgba(255,210,120,0.5) 0 7px, transparent 7px 24px) top 7px left / 100% 9px no-repeat,
@@ -1682,11 +1692,20 @@ export class SongShutter extends BaseSong {
             }
             .cs-grid {
                 display: grid;
-                grid-template-columns: repeat(4, 1fr);
-                gap: 10px;
-                max-height: 58vh;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 12px;
+                /* 固定サイズのシート内で余った縦スペースを埋める。min-height:0 は flex 子の内部スクロール許可に必須。 */
+                flex: 1 1 auto;
+                min-height: 0;
+                align-content: start;
+                /* 散開アニメ中はクリップ。整列後に JS が .cs-scroll を付けてスクロール可能化し、
+                   写真が多くて入りきらなくても全部スクロールして選べるようにする（クリップで見切れない）。 */
                 overflow: hidden;
+                overscroll-behavior: contain;
             }
+            .cs-grid.cs-scroll { overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; }
+            .cs-grid.cs-scroll::-webkit-scrollbar { width: 7px; }
+            .cs-grid.cs-scroll::-webkit-scrollbar-thumb { background: rgba(255,238,17,0.5); border-radius: 4px; }
             .cs-cell {
                 position: relative;
                 aspect-ratio: 1 / 1;
@@ -1722,7 +1741,10 @@ export class SongShutter extends BaseSong {
                 color: rgba(255,255,255,0.85);
                 text-shadow: 0 0 3px #000;
             }
-            /* ベストショット候補（プレイヤーが選ぶ・金色に脈動するリング） */
+            /* どの写真もタップで選べる（カーソル/ホバーで分かるように）。金枠は“おすすめ”の目印。 */
+            .cs-cell.cs-settled { cursor: pointer; }
+            .cs-cell.cs-settled:hover { transform: translate(0,0) rotate(var(--tilt,0deg)) scale(1.05); }
+            /* ベストショット候補（おすすめ・金色に脈動するリング） */
             .cs-cell.cs-candidate { border-color: #FFEE11; cursor: pointer; pointer-events: auto; }
             .cs-cell.cs-candidate:hover { transform: translate(0,0) rotate(var(--tilt,0deg)) scale(1.06); }
             .cs-cand-ring {
@@ -1758,7 +1780,7 @@ export class SongShutter extends BaseSong {
             /* 主役化した決定的1枚 */
             .cs-hero {
                 position: absolute; left: 50%; top: 48%; z-index: 6;
-                width: min(44%, 280px); aspect-ratio: 1 / 1;
+                width: min(64%, 460px); aspect-ratio: 1 / 1;
                 transform: translate(-50%, -50%) scale(0.55) rotate(-4deg);
                 opacity: 0; pointer-events: none;
                 border: 4px solid #fff; border-radius: 3px;
@@ -1894,7 +1916,9 @@ export class SongShutter extends BaseSong {
             .shutter-pose-btn.shutter-pose-create .pose-emoji { color: #FFEE11; font-weight: 700; }
             @container (max-width: 767px) {
                 #shutter-contactsheet .cs-sheet { width: 92cqw; padding: 16px 12px 12px; }
-                .cs-grid { grid-template-columns: repeat(3, 1fr); gap: 7px; max-height: 52cqh; }
+                /* スマホは2列にして1枚を大きく（小さすぎ防止）。入りきらない分はスクロールで選ぶ。
+                   高さは固定シート内で flex が伸縮させるので max-height は指定しない。 */
+                .cs-grid { grid-template-columns: repeat(2, 1fr); gap: 9px; }
                 .cs-title { letter-spacing: 4px; }
                 #shutter-pose-bar { bottom: 58px; gap: 4px; padding: 5px 7px; }
                 .shutter-pose-btn { min-width: 42px; padding: 4px 5px; }
@@ -1949,10 +1973,7 @@ export class SongShutter extends BaseSong {
             <div style="${bracketStyle}; top: 40px; right: 40px; border-left: none; border-bottom: none;"></div>
             <div style="${bracketStyle}; bottom: 40px; left: 40px; border-right: none; border-top: none;"></div>
             <div style="${bracketStyle}; bottom: 40px; right: 40px; border-left: none; border-top: none;"></div>
-            
-            <!-- REC Title -->
-            <div style="position: absolute; top: 50px; left: 50%; transform: translateX(-50%); color: ${this.themeColor}; font-family: monospace; font-size: 20px; font-weight: bold; text-shadow: 0 0 10px ${this.themeColor};" id="shutter-rec-label">[ REC ]</div>
-            
+
             <!-- CAMERA SETTINGS (Zoom & Aperture) -->
             <div style="position: absolute; top: 50px; left: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-zoom-label">ZOOM 1.0x</div>
             <div style="position: absolute; top: 50px; right: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-aperture-label">F2.8 [OPEN]</div>
@@ -2215,7 +2236,7 @@ export class SongShutter extends BaseSong {
         const position = this.getSmoothedTime();
         this.lastPosition = position;
 
-        // --- オープニングの掴み（曲頭の「構図が決まる」導入。zoom/scope/RECを駆動） ---
+        // --- オープニングの掴み（曲頭の「構図が決まる」導入。zoom/scope/合焦一閃を駆動） ---
         this.updateOpening(position);
 
         // --- 夕暮れの湖面アニメ＋撮影波紋のライフサイクル（フラグoff時は即return） ---
@@ -2738,23 +2759,27 @@ export class SongShutter extends BaseSong {
                     }
                 }
 
-                // サビ(山場)＝被写体を拍に合わせて発光させ、画面を華やがせる。
-                // 通常時は素のマテリアルへ戻す（撮影の見た目を保つ）。
-                if (isShown) {
-                    if (this.isClimax) {
-                        const climaxGlow = 0.14 + beatPulse * 0.18; // 拍頭で一段明るく
-                        this.applyFadeGlow(subject, 1.0, climaxGlow);
-                        subject._wasGlowing = true;
-                    } else if (subject._wasGlowing) {
-                        this.restoreSubjectMaterials(subject);
-                        subject._wasGlowing = false;
-                    }
+                // サビでも被写体は発光させない（ユーザー要望で撤去）。常に素のマテリアルを保つ。
+                // ※万一以前のフレームで発光状態が残っていたら一度だけ元へ戻す（保険）。
+                if (isShown && subject._wasGlowing) {
+                    this.restoreSubjectMaterials(subject);
+                    subject._wasGlowing = false;
                 }
 
-                // ステージ内を動き回る（撮影者が追って構図を作れるよう画面内を移動）
-                const wander = 1 - 0.82 * this._poseHoldAmt; // ポーズ・ホールド中は移動を抑えて被写体を構えさせる
-                const sx = (Math.sin(floatT * 0.55) * 3.8 + Math.sin(floatT * 0.27 + 1.3) * 1.8) * wander; // 横移動 ~±5.6
-                const sz = (Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1) * wander;        // 前後移動 ~±3.5
+                // ステージ内を動き回る（撮影者が追って構図を作れるよう画面内を移動）。
+                // ※以前は「ポーズ中はwanderを縮小」→ 中心へ寄る動きが出て、ポーズを切り替えるたびに
+                //   被写体がスッとズレて見えていた(#1)。代わりにポーズ開始時のオフセットを凍結し、
+                //   ホールド度に応じて現在位置をその場へ blend する＝“動かさず構えさせる”。
+                const rawSx = Math.sin(floatT * 0.55) * 3.8 + Math.sin(floatT * 0.27 + 1.3) * 1.8; // 横移動 ~±5.6
+                const rawSz = Math.sin(floatT * 0.37) * 2.4 + Math.sin(floatT * 0.19) * 1.1;        // 前後移動 ~±3.5
+                if (posing) {
+                    if (this._holdSx === null) { this._holdSx = rawSx; this._holdSz = rawSz; } // 入った瞬間の位置で固定
+                } else {
+                    this._holdSx = null; this._holdSz = null;
+                }
+                const hold = this._poseHoldAmt;
+                const sx = (this._holdSx !== null) ? rawSx + (this._holdSx - rawSx) * hold : rawSx;
+                const sz = (this._holdSz !== null) ? rawSz + (this._holdSz - rawSz) * hold : rawSz;
                 const px = subject.baseX + sx;
                 const pz = this.mikuBaseZ + sz;
                 subject.mesh.position.x = px;
@@ -2779,7 +2804,7 @@ export class SongShutter extends BaseSong {
         // songEnd（自然終了）後の runEndInterlude() に移した。ここでは早出しトリガを持たない。
     }
 
-    // オープニングの掴み: 曲頭3秒で「カメラを構える→AFが寄って合焦→[REC]点灯→被写体キメ」流れを作る。
+    // オープニングの掴み: 曲頭3秒で「カメラを構える→AFが寄って合焦→合焦一閃→被写体キメ」流れを作る。
     // position(再生ヘッド)で駆動するので、シーク/一時停止にも自然に追従する。
     updateOpening(position) {
         if (this.openingDone) {
@@ -2798,7 +2823,7 @@ export class SongShutter extends BaseSong {
         const t = Math.min(1, position / this.OPENING_DURATION); // 0..1
 
         // フェーズA(0〜55%): AFが寄って合焦。引き(1.6)→寄り(2.4)へズームイン。
-        // フェーズB(合焦の瞬間=55%付近): [REC]点灯＆合焦一閃。
+        // フェーズB(合焦の瞬間=55%付近): 合焦一閃＆被写体キメ。
         // フェーズC(55〜100%): 規定ズーム(2.2)へ落ち着き、被写体がキメ顔/ポーズ。
         const focusPoint = 0.55;
         if (t < focusPoint) {
@@ -2809,16 +2834,10 @@ export class SongShutter extends BaseSong {
             const b = (t - focusPoint) / (1 - focusPoint);
             const eased = b * b * (3 - 2 * b);
             this.targetZoom = 2.4 + (2.2 - 2.4) * eased;
-            // 合焦の瞬間に一度だけ [REC] 点灯＆一閃＆被写体キメ顔
+            // 合焦の瞬間に一度だけ 合焦一閃＆被写体キメ顔（録画ではないので[REC]表示は出さない）
             if (!this._recIgnited) {
                 this._recIgnited = true;
                 this.openingFocusFlash = 1.0;
-                const recLabel = document.getElementById('shutter-rec-label');
-                if (recLabel) {
-                    recLabel.style.color = '#ff3b30';
-                    recLabel.style.textShadow = '0 0 16px #ff3b30, 0 0 6px #fff';
-                    recLabel.innerText = '● REC';
-                }
                 // 被写体が一瞬キメ顔＋キメポーズ(peace)
                 const shown = this.subjects && this.subjects.find(s => s.key === this.shownKey);
                 if (shown) shown.smileTimer = 1200;
@@ -2860,15 +2879,9 @@ export class SongShutter extends BaseSong {
     animateVocalMeters(activeVocal, position) {
         const mikuContainer = document.getElementById('miku-indicator-container');
         const rinContainer = document.getElementById('rin-indicator-container');
-        const recLabel = document.getElementById('shutter-rec-label');
-        
+
         if (!mikuContainer || !rinContainer) return;
-        
-        // RECラベルを優雅に点滅させる
-        if (recLabel) {
-            recLabel.style.opacity = (Math.floor(position / 600) % 2 === 0) ? '1.0' : '0.25';
-        }
-        
+
         let mikuIntensity = 0;
         let rinIntensity = 0;
         
@@ -2936,17 +2949,20 @@ export class SongShutter extends BaseSong {
         }
     }
 
-    // 撮影写真をフィルムストリップ用に内部記録（小型サムネイル化・最大12枚で古い順に間引き）
+    // 撮影写真をフィルムストリップ用に内部記録（最大12枚で古い順に間引き）。
+    // コンタクトシートの選択セル(#3)＆選んだベスト1枚の拡大表示(#4)をどちらも鮮明にするため、
+    // 元の撮影キャンバス(1024)から十分な解像度で保存する（dataURL文字列なので軽量・GPU不使用）。
     recordPhotoToFilm(canvas, candidate, score, timeStr) {
         sfx.play('shutter_click');
         if (candidate) sfx.play('shutter_star');
-        const thumbSize = this.isMobile ? 112 : 160;
+        const thumbSize = this.isMobile ? 384 : 512;
         const thumb = document.createElement('canvas');
         thumb.width = thumbSize;
         thumb.height = thumbSize;
         const tctx = thumb.getContext('2d');
+        tctx.imageSmoothingQuality = 'high';
         tctx.drawImage(canvas, 0, 0, thumbSize, thumbSize);
-        const url = thumb.toDataURL('image/jpeg', 0.72);
+        const url = thumb.toDataURL('image/jpeg', 0.86);
 
         this.photoLog.push({ url: url, candidate: candidate, score: score || 0, timeStr: timeStr });
         while (this.photoLog.length > this.MAX_FILM_PHOTOS) {
@@ -3008,6 +3024,12 @@ export class SongShutter extends BaseSong {
         `;
         this.songWrapper.appendChild(sheet);
         this.filmStripEl = sheet;
+
+        // コンタクトシート内の入力を songWrapper（カメラ首振り/ピンチズーム/ホイール＝onWheelは常にpreventDefault）
+        // へ伝播させない。これらが touch/wheel を奪うと写真グリッドがスクロールできない。
+        // すべて passive（preventDefaultしない）で stopPropagation だけ行い、ネイティブスクロール/タップは活かす。
+        ['pointerdown', 'mousedown', 'mousemove', 'mouseup', 'touchstart', 'touchmove', 'touchend', 'wheel', 'click']
+            .forEach((ev) => sheet.addEventListener(ev, (e) => e.stopPropagation(), { passive: true }));
 
         // 「次へ」: 通常のリザルト（エンドカード→楽曲選択へ復帰）に繋ぐ。
         // 曲は既に自然終了しているので、再生再開ではなく完了コールバックを呼ぶ。
@@ -3091,7 +3113,8 @@ export class SongShutter extends BaseSong {
             requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('cs-settled')));
         });
 
-        // 整列が終わったら「候補から1枚を選ぶ」操作を有効化
+        // 整列が終わったら「1枚を選ぶ」操作を有効化。
+        // 候補(金枠)は“おすすめ”の目印に留め、撮った写真ならどれでもタップして選べるようにする。
         this._bestChosen = false;
         const enableDelay = 250 + cellEls.length * 70 + 300;
         if (!this._csMarkTimers) this._csMarkTimers = [];
@@ -3099,15 +3122,17 @@ export class SongShutter extends BaseSong {
         this._csMarkTimers = [];
         this._csMarkTimers.push(setTimeout(() => {
             if (this._bestChosen) return;
-            if (prompt) prompt.textContent = '★ 決定的な1枚を選ぼう — 光る候補をタップ';
+            grid.classList.add('cs-scroll'); // 整列完了→スクロール可能に（多くても全写真を選べる／見切れない）
+            if (prompt) {
+                const more = grid.scrollHeight > grid.clientHeight + 4;
+                prompt.textContent = '★ ベストの1枚を選ぼう — 好きな写真をタップ（光るのはおすすめ）' + (more ? '／スクロールで全部表示' : '');
+            }
             cellEls.forEach((el) => {
-                if (el.classList.contains('cs-candidate')) {
-                    el.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        const idx = parseInt(el.getAttribute('data-idx'), 10);
-                        this.chooseBestShot(idx, el);
-                    });
-                }
+                el.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const idx = parseInt(el.getAttribute('data-idx'), 10);
+                    this.chooseBestShot(idx, el);
+                });
             });
         }, enableDelay));
     }
@@ -3500,8 +3525,9 @@ export class SongShutter extends BaseSong {
         }
 
         // 1. 古い写真の枚数制限処理を実行
+        // 浮かぶ写真の同時枚数はフレーム数(20)と一致させる（FPS≥40を実機確認のうえ確定）。
         const activePhotoFrames = this.frames.filter(f => f.userData.hasPhoto && !f.userData.isFadingOut);
-        const MAX_PHOTOS = 8;
+        const MAX_PHOTOS = 20;
         if (activePhotoFrames.length >= MAX_PHOTOS) {
             activePhotoFrames.sort((a, b) => a.userData.photoSpawnTime - b.userData.photoSpawnTime);
             const oldest = activePhotoFrames[0];
@@ -3724,8 +3750,8 @@ export class SongShutter extends BaseSong {
             const dist = this.camera.position.distanceTo(frame.position);
             const fovRad = ((75 / this.zoomLevel) * Math.PI) / 180;
             const visibleFrustumHeight = 2 * dist * Math.tan(fovRad / 2);
-            // 物理的に正確なパースペクティブ投影によるサイズ計算
-            const frameSizeH = photoH * (3.0 / visibleFrustumHeight);
+            // 物理的に正確なパースペクティブ投影によるサイズ計算（枠の世界高さ 3.0→4.5＝1.5倍）
+            const frameSizeH = photoH * (4.5 / visibleFrustumHeight);
             const frameSizeW = frameSizeH * (4.0 / 3.0); // 4:3 アスペクト比
             
             ctx.save();
@@ -3770,7 +3796,7 @@ export class SongShutter extends BaseSong {
             const visibleFrustumHeight = 2 * dist * Math.tan(fovRad / 2);
             // 物理的に正確なパースペクティブ投影によるサイズ計算（現在のスケールを適用）
             const currentScale = photo.scale.x;
-            const sizeH = photoH * ((2.9 * currentScale) / visibleFrustumHeight);
+            const sizeH = photoH * ((4.35 * currentScale) / visibleFrustumHeight); // 写真世界高さ 2.9→4.35（1.5倍）
             const sizeW = sizeH * (3.9 / 2.9);
             
             ctx.save();
@@ -3904,7 +3930,7 @@ export class SongShutter extends BaseSong {
         ctx.font = 'bold 28px monospace';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'alphabetic';
-        ctx.fillText(`[ REC ${timeStr} ]  SNAP_${Date.now().toString().slice(-4)}`, photoX + 30, 850);
+        ctx.fillText(`[ ${timeStr} ]  SNAP_${Date.now().toString().slice(-4)}`, photoX + 30, 850);
 
         // 【ステッカーコラージュ描画 (案A)】
         const keyword = lockedWordText || (this.activeSprites.length > 0 ? this.activeSprites[0].userData.text : '');
@@ -4193,13 +4219,24 @@ export class SongShutter extends BaseSong {
         this.recordPhotoToFilm(canvas, isBestShot, composition.score, timeStr);
         this.updateResultSummary();
 
-        // 3. CanvasTexture の生成と設定
-        const texture = new THREE.CanvasTexture(canvas);
+        // 3. 空中ポラロイドのテクスチャ生成。1024フルのままだとGPU/CPUメモリが重く、
+        //    新規撮影ごとに既存の全ポラロイドを再焼き付け(drawImage)するため動作が重くなる(#2)。
+        //    見栄えを保てる範囲へ縮小したオフキャンバスをテクスチャ＆再焼き付け用に使い、
+        //    元1024キャンバスは関数を抜けたらGCされるようにする。
+        //    （コンタクトシート用サムネは直前の recordPhotoToFilm が元1024から取得済みで無影響）
+        const TEX_SIZE = this.isMobile ? 512 : 768;
+        const texCanvas = document.createElement('canvas');
+        texCanvas.width = TEX_SIZE;
+        texCanvas.height = TEX_SIZE;
+        const texCtx = texCanvas.getContext('2d');
+        texCtx.imageSmoothingQuality = 'high';
+        texCtx.drawImage(canvas, 0, 0, TEX_SIZE, TEX_SIZE);
+        const texture = new THREE.CanvasTexture(texCanvas);
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.needsUpdate = true;
 
         const photoMat = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 1.0, side: THREE.DoubleSide });
-        const photoGeo = new THREE.PlaneGeometry(3.9, 2.9);
+        const photoGeo = new THREE.PlaneGeometry(5.85, 4.35); // 枠1.5倍に合わせて 3.9×2.9 ×1.5
         const photoMesh = new THREE.Mesh(photoGeo, photoMat);
 
         // 撮影の瞬間、カメラの正面(視線方向3)に配置(回り込み対応)
@@ -4209,7 +4246,7 @@ export class SongShutter extends BaseSong {
         this.scene.add(photoMesh);
 
         targetFrame.userData.hasPhoto = true;
-        targetFrame.userData.photoImage = canvas;
+        targetFrame.userData.photoImage = texCanvas; // 再焼き付けも縮小版で十分（メモリ・描画コスト削減）
 
         // 4. 写真がターゲットフレーム（赤い枠）に向けて「スーッと吸い込まれる」トランジションデータを設定
         this.transitioningPhotos.push(photoMesh);
