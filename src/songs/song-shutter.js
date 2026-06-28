@@ -3045,6 +3045,15 @@ export class SongShutter extends BaseSong {
         this.songWrapper.appendChild(sheet);
         this.filmStripEl = sheet;
 
+        // コンタクトシートは songWrapper(=#scene-container, z-index:1 の内側)に属するため、
+        // z-index:60 を持たせても #ui-container(z-index:10) 配下のフッター再生バーより前面に
+        // 来られない。結果、画面下端の再生シークバーがコンタクトシートの上に描画され、
+        // スマホでは中央シートの「次へ」ボタンと重なっていた。曲は自然終了済みで
+        // シークバーは操作不能なため、コンタクトシート表示中はフッターごと退避する。
+        // 復帰は不要: backToLake で隠れ、次曲の songChange で表示し直される。
+        const footerControls = document.getElementById('player-controls');
+        if (footerControls) footerControls.style.display = 'none';
+
         // コンタクトシート内の入力を songWrapper（カメラ首振り/ピンチズーム/ホイール＝onWheelは常にpreventDefault）
         // へ伝播させない。これらが touch/wheel を奪うと写真グリッドがスクロールできない。
         // すべて passive（preventDefaultしない）で stopPropagation だけ行い、ネイティブスクロール/タップは活かす。
