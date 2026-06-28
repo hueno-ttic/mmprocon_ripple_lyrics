@@ -517,7 +517,7 @@ export class SongOrchestra extends BaseSong {
         this.dismissFirstInteractable();
         this.collectedColors.push(hex);
         this.totalCollectedCount++;
-        this.addOrbToGauge(hex);
+        // イントロのタイトル由来オーブはゲージに溜めない(ゲージ＝本編で集めたサビ花火の燃料を表すため)。
         this.updateResultSummary();
     }
 
@@ -535,14 +535,15 @@ export class SongOrchestra extends BaseSong {
         this.resonateOrbs = [];
         if (!colors.length) return;
 
-        // 花火ショーの発火リストを組む:
-        //  ・主役の大輪 … 集めた色ごとに1発(intensity=2.4=最大)
-        //  ・余韻のecho … 約0.7倍数を小さめに添えて夜空を埋める(層を作る)
+        // 花火ショーの発火リストを組む。イントロの花火は「予告編」なので控えめにし、サビの大輪を主役に
+        // 際立たせる(以前は intensity=2.4 でサビと同等に大きく、サビが目立たなかった)。
+        //  ・小さめの一輪 … 集めた色ごとに1発(intensity=0.55=控えめ)
+        //  ・さらに小さい余韻のecho … 数を絞って軽く添える
         const bursts = [];
-        colors.forEach(c => bursts.push({ color: c, intensity: 2.4 }));
-        const echoN = Math.ceil(colors.length * 0.7);
+        colors.forEach(c => bursts.push({ color: c, intensity: 0.55 }));
+        const echoN = Math.ceil(colors.length * 0.4);
         for (let i = 0; i < echoN; i++) {
-            bursts.push({ color: colors[Math.floor(Math.random() * colors.length)].clone(), intensity: 1.3 });
+            bursts.push({ color: colors[Math.floor(Math.random() * colors.length)].clone(), intensity: 0.35 });
         }
 
         // 夜空の各所へ時間差(約1.4s)で咲かせる予約列(songポジション駆動=一時停止に強い)。
@@ -1568,6 +1569,17 @@ export class SongOrchestra extends BaseSong {
                 .orchestra-orb-gauge-charged .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-charge 1.4s ease-in-out infinite; border-color:rgba(255,255,255,0.6); }
                 @keyframes orchestra-orb-gauge-charge { 0%,100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35), 0 0 8px rgba(255,255,255,0.25); } 50% { box-shadow:inset 0 0 16px rgba(120,180,255,0.6), 0 0 22px rgba(255,255,255,0.7); } }
                 .orchestra-orb-gauge-charged .orchestra-orb-gauge-count { color:#fff; text-shadow:0 0 10px rgba(180,220,255,0.95); }
+                /* 満タン時: 光がゲージの周りを一周して「溜まりきった」手応えを出す */
+                .orchestra-orb-gauge-full .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-full 1.5s linear infinite; border-color:#fff; }
+                @keyframes orchestra-orb-gauge-full {
+                    0%   { box-shadow:inset 0 0 18px rgba(200,230,255,0.85), 0 -13px 22px rgba(255,255,255,0.9); }
+                    25%  { box-shadow:inset 0 0 20px rgba(210,235,255,0.9), 15px 0 22px rgba(255,255,255,0.9); }
+                    50%  { box-shadow:inset 0 0 20px rgba(220,240,255,0.95), 0 13px 22px rgba(255,255,255,0.9); }
+                    75%  { box-shadow:inset 0 0 20px rgba(210,235,255,0.9), -15px 0 22px rgba(255,255,255,0.9); }
+                    100% { box-shadow:inset 0 0 18px rgba(200,230,255,0.85), 0 -13px 22px rgba(255,255,255,0.9); }
+                }
+                .orchestra-orb-gauge-full .orchestra-orb-gauge-count { color:#fff; text-shadow:0 0 14px rgba(200,235,255,1); }
+                .orchestra-orb-gauge-full .orchestra-orb-gauge-label { color:rgba(255,255,255,0.92); text-shadow:0 0 10px rgba(200,235,255,0.9); }
                 /* 開幕の予兆: まだ何も集めていない序盤、ゲージ管が薄く脈動して「ここに色が溜まる」ことを予感させる */
                 .orchestra-orb-gauge-intro .orchestra-orb-gauge-tube { animation:orchestra-orb-gauge-introglow 2.4s ease-in-out infinite; }
                 @keyframes orchestra-orb-gauge-introglow { 0%,100% { box-shadow:inset 0 0 12px rgba(24,95,165,0.35); } 50% { box-shadow:inset 0 0 18px rgba(24,95,165,0.65), 0 0 12px rgba(80,150,220,0.4); } }
@@ -1602,10 +1614,12 @@ export class SongOrchestra extends BaseSong {
         this.orbGaugeFillEl.style.height = `${Math.min(100, (n / this.GAUGE_CAPACITY) * 100)}%`;
         if (this.orbGaugeCountEl) this.orbGaugeCountEl.textContent = String(n);
 
-        // 満タンの75%を超えたら「もうすぐ花火」の脈動発光を点灯し、期待を可視化する
+        // 75%超で「もうすぐ花火」の脈動、満タンで光が一周する演出に切り替えて手応えを出す
         if (this.orbGaugeEl) {
-            const charged = n >= Math.ceil(this.GAUGE_CAPACITY * 0.75);
+            const full = n >= this.GAUGE_CAPACITY;
+            const charged = n >= Math.ceil(this.GAUGE_CAPACITY * 0.75) && !full;
             this.orbGaugeEl.classList.toggle('orchestra-orb-gauge-charged', charged);
+            this.orbGaugeEl.classList.toggle('orchestra-orb-gauge-full', full);
         }
     }
 
@@ -1614,6 +1628,7 @@ export class SongOrchestra extends BaseSong {
         if (!this.orbGaugeEl) return;
         clearTimeout(this._gaugeResetTimer);
         this.orbGaugeEl.classList.remove('orchestra-orb-gauge-charged'); // 消費したら期待発光を解除
+        this.orbGaugeEl.classList.remove('orchestra-orb-gauge-full');    // 満タン演出も解除
         if (consumedCount > 0) {
             this.orbGaugeEl.classList.add('orchestra-orb-gauge-burst');
         }
@@ -1985,9 +2000,14 @@ export class SongOrchestra extends BaseSong {
             }
 
             const climaxDuration = chorusEnd - chorusStart;
-            const activeWindow = climaxDuration * 0.85;
             const totalOrbs = this.climaxOrbs.length;
-            const clampedInterval = totalOrbs > 1 ? Math.min(3500, activeWindow / totalOrbs) : 0;
+            // サビ終了までに「最後のオーブの爆発」が必ず収まるよう間隔を決める。
+            // オーブは打ち上げから FLIGHT(=launchDuration) 後に爆発するので、最後の打ち上げは
+            // chorusEnd - FLIGHT - 余裕 までに行う必要がある。打ち上げは idx=0..n-1 なので n-1 で割る。
+            const FLIGHT = 1800;  // launchDuration と一致させる
+            const SAFETY = 300;   // サビ終了直前に確実に咲かせる余裕
+            const lastLaunchBy = Math.max(0, climaxDuration - FLIGHT - SAFETY);
+            const clampedInterval = totalOrbs > 1 ? Math.min(3500, lastLaunchBy / (totalOrbs - 1)) : 0;
 
             const time = position * 0.001;
 
@@ -2104,8 +2124,12 @@ export class SongOrchestra extends BaseSong {
             // C. サビ以外の区間：トリガーリセット、サビ打ち上げ用配列のクリーンアップ
             if (this.hasTriggeredClimaxExplosion) {
                 this.hasTriggeredClimaxExplosion = false;
-                // まだ残っている打ち上げ用オーブがあればすべてクリーンアップ
+                // サビ終了までに打ち上げ切れなかったオーブは、ここで必ず花火にしてから片付ける
+                // (「サビが終わるタイミングで全オーブが花火になっている」を保証する)。
+                const accumulated = Math.max(this.chorusOrbCount, this.climaxOrbs.length);
+                const intensity = Math.min(2.2, 0.6 + accumulated * 0.11);
                 this.climaxOrbs.forEach(orb => {
+                    this.spawnCustomColorFirework(orb.userData.color, orb.position, intensity);
                     this.scene.remove(orb);
                     if (orb.material) orb.material.dispose();
                     if (orb.userData.trail) {
