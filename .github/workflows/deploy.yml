@@ -32,8 +32,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      # 検証ビルドとして配信する: VITE_DEV_TOOLS=1 で審査用のデバッグモード(?debug=1)と
+      # 単独ポーズ作成ページ(/pose-editor.html)を有効化する。
+      # 一般公開ビルド(これらを伏せる)にしたい場合は、この env を外すか 0 にする。
+      - name: Build (検証ビルド / 開発者ツール有効)
         run: npm run build
+        env:
+          VITE_DEV_TOOLS: '1'
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

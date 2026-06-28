@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -30,23 +30,29 @@ const saveShotPlugin = () => ({
   },
 });
 
-export default defineConfig({
-  base: './',
-  root: '.',
-  plugins: [saveShotPlugin()],
-  server: {
-    port: 5173,
-    open: true
-  },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-    rollupOptions: {
-      input: {
-        main: 'index.html',
-        // dev用ポーズエディタも本番ビルドに含める（GitHub Pagesで /pose-editor.html を配信）
-        poseEditor: 'pose-editor.html',
-      },
+export default defineConfig(({ mode }) => {
+  // VITE_DEV_TOOLS=1 のビルドだけ開発者向け機能（デバッグ／ポーズ作成）を含める。
+  // src/core/featureFlags.js のクライアント側判定と対になるNode側の判定。
+  const env = loadEnv(mode, process.cwd(), '');
+  const devTools = env.VITE_DEV_TOOLS === '1';
+
+  // ビルド成果物に含めるHTMLエントリ。pose-editor.html(単独ポーズ作成ページ)は
+  // 開発者向けビルドのときだけ配信する（公開・提出用ビルドからは除外）。
+  const input = { main: 'index.html' };
+  if (devTools) input.poseEditor = 'pose-editor.html';
+
+  return {
+    base: './',
+    root: '.',
+    plugins: [saveShotPlugin()],
+    server: {
+      port: 5173,
+      open: true
     },
-  }
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      rollupOptions: { input },
+    }
+  };
 });
