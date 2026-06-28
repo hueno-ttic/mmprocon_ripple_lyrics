@@ -2051,7 +2051,8 @@ export class SongTakeover extends BaseSong {
         this.setResultSummary({
             lines: [
                 `制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`,
-                this._clearKind === 'complete' ? 'TAKEOVER COMPLETE' : 'TAKEOVER RECLAIMED'
+                this._clearKind === 'complete' ? 'TAKEOVER COMPLETE' : 'TAKEOVER RECLAIMED',
+                '奪還完了 — 世界はあなたのものに'
             ],
             accentColor: '#00FFAA',
             swatch: '#00FFAA'
@@ -2126,7 +2127,7 @@ export class SongTakeover extends BaseSong {
         }, lineBase + bootLines.length * 520);
 
         this.setResultSummary({
-            lines: [`制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER FAILED'],
+            lines: [`制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER FAILED', '奪還ならず — 世界はまだ赤いまま'],
             accentColor: '#FF3A3A',
             swatch: '#FF3A3A'
         });

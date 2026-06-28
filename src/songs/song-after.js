@@ -1095,7 +1095,7 @@ export class SongAfter extends BaseSong {
         this.setResultSummary({
             accentColor: '#E8A84C',
             lines: [
-                `客席に残った灯 ${this.kindledCount}`,
+                `客席にともった灯 ${this.kindledCount}`,
                 '終わりの後にも、灯りは消えない',
             ],
         });
