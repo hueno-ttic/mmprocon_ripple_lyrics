@@ -98,6 +98,13 @@ const HAIR_BONES = [
 ];
 // 表情モーフ（0=なし 1=最大）。ウィンク系を先頭に。
 const EXPR_MORPHS = ['ウィンク','ウィンク右','ウィンク２','ｳｨﾝｸ２右','まばたき','笑い','なごみ','びっくり','困る','照れ','怒り','涙','じゅるり','はぅ','あ','い','う','お','ワ','ω'];
+// 顔プリセット（= シャッターチャンスのポーズエディタ EXPR_OPTIONS と同一）。
+// [モーフ名, 表示ラベル]。選ぶと該当モーフを 1、他の表情モーフを 0 にする。
+const FACE_PRESETS = [
+  ['', 'なし'], ['ウィンク', 'ウィンク'], ['ウィンク右', 'ウィンク(右)'],
+  ['笑い', 'にっこり'], ['なごみ', 'なごみ'], ['びっくり', 'びっくり'],
+  ['照れ', 'てれ'], ['じゅるり', 'じゅるり'], ['はぅ', 'はぅ'],
+];
 
 const wrap = document.getElementById('canvasWrap');
 const statusEl = document.getElementById('status');
@@ -182,14 +189,30 @@ function buildPanel(){
   EDIT_BONES.forEach(([name,label])=>{ const d=boneDetail(name,label); if(d){ d._sync=d._sync||[]; cont.appendChild(d);} });
   grp('▼ 髪・ツインテール');
   HAIR_BONES.forEach(([name,label])=>{ const d=boneDetail(name,label); if(d) cont.appendChild(d); });
+  // 顔プリセット（シャッターチャンスのポーズエディタと同じ）
+  grp('▼ 顔プリセット（シャッターチャンスと同じ）');
+  const presetRow=document.createElement('div'); presetRow.className='axis'; presetRow.style.padding='4px 8px';
+  const presetLab=document.createElement('span'); presetLab.textContent='表情'; presetLab.style.cssText='width:78px;font-size:12px';
+  const presetSel=document.createElement('select'); presetSel.style.cssText='flex:1;background:#1a1a26;color:#cde;border:1px solid #33333e;border-radius:5px;padding:4px 6px;font-size:12px';
+  presetSel.innerHTML=FACE_PRESETS.map(([v,l])=>'<option value="'+v+'">'+l+'</option>').join('');
+  // 現在のモーフ状態から選択を復元（単一モーフが≒1ならそのプリセット）
+  const activeExpr=Object.entries(morphState).filter(([,w])=>w>0.95);
+  presetSel.value=(activeExpr.length===1 && FACE_PRESETS.some(([v])=>v===activeExpr[0][0])) ? activeExpr[0][0] : '';
+  presetSel.addEventListener('change',()=>{
+    EXPR_MORPHS.forEach(n=>applyMorph(n,0)); // 既存の表情を一旦クリア
+    if(presetSel.value) applyMorph(presetSel.value,1);
+    buildPanel(); // 個別スライダーへ反映し直す
+  });
+  presetRow.append(presetLab,presetSel); cont.appendChild(presetRow);
   // 表情モーフ
   grp('▼ 表情（目つむり/ウィンク等）');
   EXPR_MORPHS.forEach(name=>{
     if(!morphMeshes.some(mm=>mm.morphTargetDictionary[name]!==undefined)) return;
+    const cur=morphState[name]||0;
     const ax=document.createElement('div'); ax.className='axis'; ax.style.padding='4px 8px';
     const lab=document.createElement('span'); lab.textContent=name; lab.style.cssText='width:78px;font-size:12px';
-    const range=document.createElement('input'); range.type='range'; range.min=0; range.max=1; range.step=0.05; range.value=0;
-    const num=document.createElement('input'); num.type='number'; num.min=0; num.max=1; num.step=0.05; num.value=0;
+    const range=document.createElement('input'); range.type='range'; range.min=0; range.max=1; range.step=0.05; range.value=cur;
+    const num=document.createElement('input'); num.type='number'; num.min=0; num.max=1; num.step=0.05; num.value=(+cur.toFixed(2));
     const set=v=>{ v=Math.max(0,Math.min(1,+v||0)); applyMorph(name,v); range.value=v; num.value=(+v.toFixed(2)); };
     range.addEventListener('input',()=>set(range.value));
     num.addEventListener('input',()=>set(num.value));
