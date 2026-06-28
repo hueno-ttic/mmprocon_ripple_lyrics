@@ -1674,7 +1674,7 @@ export class SongOrchestra extends BaseSong {
 
     updateResultSummary() {
         this.setResultSummary({
-            lines: [`集めた音色 ${this.totalCollectedCount} ・ あなたの空の色`],
+            lines: [`集めた音色 ${this.totalCollectedCount} ・ あなたの空の色`, 'あなたのカタチは、この空に溶けた'],
             accentColor: '#185FA5',
             swatch: this.mixCollectedColors()
         });

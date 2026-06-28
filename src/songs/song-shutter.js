@@ -575,16 +575,13 @@ export class SongShutter extends BaseSong {
         const lines = [];
         if (this.bestChosenTimeStr) {
             // プレイヤーが「決定的な1枚」を選んだ後
-            lines.push(`★ ベストショット選定 ✓ (${this.bestChosenTimeStr})`);
-            lines.push(`撮影 ${this.totalShots}枚 ・ 候補 ${this.starShots}枚`);
+            lines.push(`★ ベストショット、決定！(${this.bestChosenTimeStr})`);
+            lines.push(`撮影 ${this.totalShots}枚 ・ ベスト候補 ${this.starShots}枚`);
             if (SHUTTER_LAKE_ENABLED && this._bestRippleSaved) {
-                lines.push('この1枚を湖に流した — いつかまた、別の曲で');
+                lines.push('この瞬間を、永遠に閉じ込めた');
             }
         } else {
-            lines.push(`撮影 ${this.totalShots}枚 ・ 候補 ${this.starShots}枚`);
-        }
-        if (this.lockShots > 0) {
-            lines.push(`ターゲットロック成功 ${this.lockShots}回`);
+            lines.push(`撮影 ${this.totalShots}枚 ・ ベスト候補 ${this.starShots}枚`);
         }
         this.setResultSummary({
             lines: lines,
