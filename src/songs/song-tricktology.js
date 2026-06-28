@@ -503,13 +503,14 @@ export class SongTricktology extends BaseSong {
 
     // 1句を地上 or 水面のどちらか一方の世界に浮かべる
     spawnLyric(phrase, position) {
-        const maxLyrics = this.isMobile ? 5 : 7;
+        const maxLyrics = this.isMobile ? 6 : 8;
         while (this.lyrics.length >= maxLyrics) {
             this.disposeLyric(this.lyrics.shift());
         }
-        // 当該パートが終わったらすぐ消えるよう、既存句は素早くフェードへ送る
+        // 次の句が出ても前の句をすぐ消さず、タップ猶予として一定の余韻を残す。
+        // （以前は260msで急いで消していたため、どちらの世界で拾うか迷う間に消えていた）
         for (const ex of this.lyrics) {
-            if (!ex.collected) ex.life = Math.min(ex.life, (position - ex.birth) + 260);
+            if (!ex.collected) ex.life = Math.min(ex.life, (position - ex.birth) + 1500);
         }
 
         // 句ごとに地上／水面へ交互配分
@@ -556,11 +557,16 @@ export class SongTricktology extends BaseSong {
         (mirrored ? this.lowerGroup : this.upperGroup).add(sprite);
 
         const duration = (phrase.endTime - phrase.startTime) || 2500;
+        // 消えるのが早すぎて「どちらの世界でタップするか」の判断が難しかったため、
+        // 寿命を延ばして両方の世界でタップできる猶予を作る（短い句でも最低約4.2秒）。
+        const life = Math.max(duration + 1600, 4200);
 
         // 時間とともに水面ラインを越えて反対の世界へ渡る縦速度(u/s)。
-        // 終盤の収束(gather)句は渡らせない。寿命の6〜8割で対岸へ着くおおよその速さ。
+        // 終盤の収束(gather)句は渡らせない。寿命基準でゆっくり渡らせ、出現した世界・
+        // 渡った先の世界のどちらにもタップできる猶予を残す（寿命の半ば過ぎで対岸へ）。
         const willCross = entry !== 'gather';
-        const crossSec = Math.max(0.6, (duration / 1000) * (0.6 + Math.random() * 0.2));
+        const lifeSec = life / 1000;
+        const crossSec = Math.max(1.2, lifeSec * (0.62 + Math.random() * 0.12));
         const crossTravel = Math.abs(ty) + 1.2 + Math.random() * 1.0;
         const vy = willCross ? (-sign * crossTravel / crossSec) : 0;
 
@@ -568,7 +574,7 @@ export class SongTricktology extends BaseSong {
             sprite, tex: texture, world, mirrored, entry,
             text: phrase.text,
             birth: position,
-            life: duration + 350,   // パート終了後はすぐ消える
+            life,                   // 寿命を延ばし両世界でのタップ猶予を確保
             baseScale: scale, aspect,
             baseX: tx, baseY: ty,
             offX0: offX, offY0: offY,   // 初期オフセット
