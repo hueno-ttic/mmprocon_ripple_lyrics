@@ -261,9 +261,17 @@ class Application {
         });
 
         eventBus.on('songEnd', () => {
-            this._showSongEndOverlay(() => {
+            const toResult = () => this._showSongEndOverlay(() => {
                 eventBus.emit('backToLake', { markComplete: true });
             });
+            // 曲固有の「締めの間」（例: シャッターチャンスの写真選択コンタクトシート）を
+            // 自然終了後に挟めるようにする。シーンが用意していればそれが終わってからリザルトへ。
+            const scene = this.currentSongScene;
+            if (scene && typeof scene.runEndInterlude === 'function') {
+                scene.runEndInterlude(toResult);
+            } else {
+                toResult();
+            }
         });
 
         eventBus.on('backToLake', ({ markComplete = false } = {}) => {

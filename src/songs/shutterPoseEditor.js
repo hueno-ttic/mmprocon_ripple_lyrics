@@ -166,8 +166,12 @@ export class ShutterPoseEditor {
 
     // 編集中は楽曲をPauseして被写体をじっくり作れるようにする。
     // 再生ループ(requestAnimationFrame)は止まらないのでライブプレビューは継続する。
-    this._wasPlaying = !!appState.isPlaying;
-    if (this._wasPlaying) { try { playerManager.pause(); } catch (e) { /* noop */ } }
+    // appState と player.isPlaying がズレていても確実に止まるよう、どちらかが再生中なら pause する
+    // （止め損ねると「ポーズを作っている間も曲が進む」＝写真選択が早出しする原因になる）。
+    const playing = !!appState.isPlaying ||
+      !!(playerManager.player && playerManager.player.isPlaying);
+    this._wasPlaying = playing;
+    if (playing) { try { playerManager.pause(); } catch (e) { /* noop */ } }
 
     // 「湖面へ戻る」ボタン・シークバー(プレイヤーUI)をエディタの裏へ隠して誤操作を防ぐ。
     // body クラスでCSS的に display:none。閉じる時にクラスを外せば元の表示へ戻る。
