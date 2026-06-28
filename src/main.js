@@ -331,8 +331,16 @@ class Application {
         const isKotaete = appState.currentSongId === 'kotaete';
 
         const overlay = document.createElement('div');
+        // 背景は半透明(0.7)止まりなので、下端フッターの再生シークバー(z-index:10)は
+        // この上に重ねたリザルトの背後で透けて見える。中央寄せのままだと画面の低い
+        // スマホ(特に横持ち)で「楽曲選択画面へ」ボタンや成果サマリーがシークバー帯と
+        // 重なってしまうため、上下にフッター/ヘッダー帯ぶんのパディングを確保して
+        // 中央寄せ領域そのものを安全域へ押し込み、ボタンが絶対にシークバーへ被らないようにする。
         overlay.style.cssText = `
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            box-sizing: border-box;
+            padding-top: calc(96px + env(safe-area-inset-top, 0px));
+            padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
             background: rgba(0,0,0,0);
