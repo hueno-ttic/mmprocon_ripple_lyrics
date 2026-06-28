@@ -587,7 +587,7 @@ export class SongTricktology extends BaseSong {
             entryT: 0, entryDur: entry === 'fall' ? 0.55 : 0.85,
             drift: (Math.random() - 0.5) * 0.004,
             bobPhase: Math.random() * Math.PI * 2,      // 句ごとに上下ゆらぎの位相をずらす
-            bobAmp: 0.42 + Math.random() * 0.22,        // 上下ゆらぎの振幅（旧0.08から拡大）
+            bobAmp: 1.2 + Math.random() * 0.6,          // 上下ゆらぎの振幅（旧0.08→0.42を更に拡大。リンの背丈ぶん下がっても可）
             pulse: 0,
             collected: false, shatter: false, shatterT: 0,
         });
@@ -846,16 +846,19 @@ export class SongTricktology extends BaseSong {
         const theta = p * Math.PI;
         let x = -Math.cos(theta) * this.moonR;   // 左(-R)→右(+R)
         let yAbs = Math.sin(theta) * this.moonArcH; // 地平から昇り天頂へ
-        // 2周目の終盤は中央へ寄って水面(y=0)へ静かに沈む。
+        // 2周目の終盤は中央へ寄って水面ライン(y=0)へ静かに沈む。
         // かつては -5 まで沈めていたが、空の月が中心を越えて反対側の世界へ
         // 潜り込み、その鏡像が逆側に昇るため、白(現実)とオレンジ(鏡像)の月が
-        // それぞれ逆の世界に現れてしまっていた。各月を自分の世界の側へ残すよう、
-        // 水面の手前(わずかな正の値)で留め、中心線を越えさせない。
+        // それぞれ逆の世界に現れてしまっていた。逆に +0.3 で手前に留めると、
+        // 線上の中央で空の月と水鏡の月が重ならなくなっていた。
+        // そこで「ちょうど y=0」へ沈める：sinking が進むほど x→0・yAbs→0 と
+        // 単調に減るため中心線を越えず（負へ潜らない）、線上の中央で
+        // 空の月(o.x, +yAbs)と水鏡の月(o.x, -yAbs)が一点に重なる。
         let sinking = 0;
         if (cycle === 1 && p > 0.8) {
             sinking = (p - 0.8) / 0.2;
             x *= (1 - sinking);
-            yAbs = yAbs * (1 - sinking) + sinking * 0.3;
+            yAbs = yAbs * (1 - sinking);
         }
         return { x, yAbs, cycle, p, sinking };
     }
