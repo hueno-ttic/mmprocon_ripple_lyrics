@@ -101,6 +101,9 @@ export class TitleScreen {
         this.tagline.style.transition = 'opacity 2s ease';
         this.tagline.style.position = 'relative';
         this.tagline.style.zIndex = '1';
+        // タップ時にタイトルと同じく波打たせるため、transform合成のヒントを付ける。
+        this.tagline.style.display = 'inline-block';
+        this.tagline.style.willChange = 'transform';
         this.container.appendChild(this.tagline);
 
         this.subtitle = document.createElement('div');
@@ -302,6 +305,7 @@ export class TitleScreen {
             this._syncTextToRipple();
         } else if (this.titleInner) {
             this.titleInner.style.animation = 'title-ripple 0.7s cubic-bezier(0.2, 0.8, 0.2, 1)';
+            if (this.tagline) this.tagline.style.animation = 'title-ripple 0.7s cubic-bezier(0.2, 0.8, 0.2, 1)';
         }
     }
 
@@ -317,6 +321,7 @@ export class TitleScreen {
     // 波面の通過に同期して文字を上下/せん断で動かす(波紋の寿命ぶん回す)
     _syncTextToRipple() {
         const tUv = this._centerUv(this.titleInner);
+        const gUv = this._centerUv(this.tagline);
         const sUv = this._centerUv(this.subtitle);
         const AMP = 52;      // 上下振幅(px)
         const SKEW = 12;     // せん断(deg)
@@ -328,17 +333,23 @@ export class TitleScreen {
             if (!this.water) return;
             // 文字向けは低周波・広め(うねり)で評価=細かいリングではなく波面の通過を大きく表現
             const ht = this.water.sampleHeight(tUv[0], tUv[1], 10, 5);
+            const hg = this.water.sampleHeight(gUv[0], gUv[1], 10, 5);
             const hs = this.water.sampleHeight(sUv[0], sUv[1], 10, 5);
-            const yt = clamp(-ht * AMP, CLAMP), ys = clamp(-hs * AMP * 0.7, CLAMP * 0.7);
+            const yt = clamp(-ht * AMP, CLAMP);
+            const yg = clamp(-hg * AMP * 0.85, CLAMP * 0.85);
+            const ys = clamp(-hs * AMP * 0.7, CLAMP * 0.7);
             this.titleInner.style.transform =
                 `translateY(${yt.toFixed(2)}px) skewX(${clamp(ht * SKEW, 14).toFixed(2)}deg) ` +
                 `scale(${(1 + Math.abs(ht) * 0.06).toFixed(3)})`;
+            this.tagline.style.transform =
+                `translateY(${yg.toFixed(2)}px) skewX(${clamp(hg * SKEW * 0.75, 11).toFixed(2)}deg)`;
             this.subtitle.style.transform =
                 `translateY(${ys.toFixed(2)}px) skewX(${clamp(hs * SKEW * 0.6, 9).toFixed(2)}deg)`;
             if (performance.now() - start < 2200) {
                 this._titleRaf = requestAnimationFrame(tick);
             } else {
                 this.titleInner.style.transform = '';
+                this.tagline.style.transform = '';
                 this.subtitle.style.transform = '';
             }
         };
