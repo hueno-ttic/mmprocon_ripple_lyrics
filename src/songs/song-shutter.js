@@ -128,8 +128,8 @@ const SHUTTER_CUTE_POSES = [
     // 注: leftUpperArm を明示すること。省くと lerpSubjectPose が左上腕を補間せず、待機グルーヴ/前姿勢の
     //     値が残って左腕の向きが毎回バラつく（右の rightUpperArm のミラー値で左右を揃える）。
     { id: 'pray', label: 'お願い', emoji: '🙏', pose: { spine: { x: 0.91, y: 0.19, z: 0 }, neck: { x: -0.99, y: 0.07, z: 0 }, leftShoulder: { x: -2.33, y: -0.19, z: -0.95 }, leftUpperArm: { x: 0, y: 0.14, z: 0.5 }, leftLowerArm: { x: -0.07, y: -1.1, z: 0 }, leftHand: { x: -0.66, y: -0.57, z: 0.07 }, rightShoulder: { x: -2.27, y: -0.33, z: 0.91 }, rightUpperArm: { x: 0, y: -0.14, z: -0.5 }, rightLowerArm: { x: 0, y: 1.77, z: 0 }, rightHand: { x: -0.53, y: -0.08, z: 0.21 }, expr: { 'ウィンク': 1, 'びっくり': 0.2, '照れ': 1, 'う': 0.45 } } },
-    // かんがえ中
-    { id: 'thinking', label: 'かんがえ', emoji: '🤔', pose: { leftUpperArm: { x: -0.4, y: 0, z: 0.62 }, rightUpperArm: { x: -0.45, y: 0, z: -0.42 }, leftLowerArm: { x: 0, y: 0.2, z: -1.95 }, rightLowerArm: { x: -0.1, y: 0, z: 2.25 }, leftHand: { x: 0, y: 0, z: 0 }, rightHand: { x: 0, y: 0, z: 0.1 }, head: { x: -0.08, y: 0.16, z: 0.3 }, neck: { x: -0.04, y: 0.08, z: 0.14 }, chest: { x: 0, y: 0.06, z: 0.05 }, spine: { x: 0.02, y: 0.04, z: 0.04 }, hips: { x: 0, y: 0, z: 0 } } },
+    // かんがえ中（ポーズエディタ製・全身＋ツインテール/前髪＋なごみ顔）
+    { id: 'thinking', label: 'かんがえ', emoji: '🤔', pose: { neck: { x: 0.07, y: -0.07, z: -0.39 }, leftUpperArm: { x: 0, y: -1.1, z: 0.03 }, rightUpperArm: { x: -1.28, y: 0, z: -0.5 }, rightLowerArm: { x: -0.05, y: 2.23, z: -0.27 }, rightHand: { x: -2.52, y: -0.38, z: -0.83 }, leftLowerLeg: { x: 1.71, y: -0.15, z: 0 }, leftFoot: { x: 1.1, y: 0, z: 0 }, rightLowerLeg: { x: 1.71, y: 0.1, z: 0.13 }, rightFoot: { x: 1.13, y: 0.12, z: 0.02 }, '右髪１': { x: 0, y: 0, z: 0.2 }, '左髪１': { x: 0, y: -0.06, z: 0.18 }, '前髪２': { x: 0, y: 0.09, z: 0 }, expr: 'なごみ' } },
     // てふり
     { id: 'wave', label: 'てふり', emoji: '👋', pose: { leftUpperArm: { x: 0, y: 0, z: 0.45 }, rightUpperArm: { x: -0.3, y: -0.12, z: -1.62 }, leftLowerArm: { x: 0, y: 0.2, z: -0.5 }, rightLowerArm: { x: 0, y: -0.2, z: 0.7 }, head: { x: 0.02, y: 0.06, z: -0.24 }, neck: { x: 0.04, y: 0.03, z: -0.14 }, chest: { x: 0, y: 0, z: 0.05 } } },
 ];
