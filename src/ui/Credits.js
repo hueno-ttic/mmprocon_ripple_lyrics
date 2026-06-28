@@ -68,7 +68,8 @@ export class Credits {
                     歌詞・タイミングは TextAlive App API を通じて取得しています。<br>
                     楽曲・キャラクターは piapro キャラクター・ライセンスに基づいて利用しています。<br>
                     各曲のサムネイル画像は課題曲のMVサムネイルであり、著作権は上記の各楽曲制作者に帰属します。<br>
-                    選曲画面のBGM：甘茶の音楽工房
+                    選曲画面のBGM：甘茶の音楽工房／DOVA-SYNDROME<br>
+                    <span class="credits-note-sub">「静かな海鳴り」作曲：蒲鉾さちこ／配布：DOVA-SYNDROME（※音量調整・ループ編集を行っています）</span>
                 </p>
             </div>
         `;
@@ -186,6 +187,9 @@ export class Credits {
                 margin: 22px 0 0; font-size: 11px; line-height: 1.8;
                 color: rgba(255,255,255,0.42); letter-spacing: 0.04em;
             }
+            .credits-note-sub {
+                font-size: 10px; color: rgba(255,255,255,0.34);
+            }
             @container (max-width: 600px) {
                 .is-mobile .credits-panel {
                     padding: 22px 18px 18px;
@@ -202,6 +206,7 @@ export class Credits {
                 .is-mobile .credits-dev-team { font-size: 12px; }
                 .is-mobile .credits-dev-row { font-size: 11px; padding-left: 8px; }
                 .is-mobile .credits-note { font-size: 9px; line-height: 1.6; margin-top: 14px; }
+                .is-mobile .credits-note-sub { font-size: 8px; }
                 .is-mobile .credits-close { width: 28px; height: 28px; font-size: 16px; top: 10px; right: 12px; }
             }
         `;

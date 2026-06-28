@@ -166,3 +166,13 @@ npm run dev
 | ねんどリンちゃん | maebari | <https://piapro.jp/t/0aEn> |
 | 鏡音リン / Wittrockiana_R1N（ウィットロッキアナ） | 602e | <https://piapro.jp/t/5hZ9> |
 | 「初音ミク」VRM Model | 6666669（ROLOCK） | <https://booth.pm/ja/items/6690538> |
+
+### BGM
+
+選曲画面（湖の世界）のBGMにフリー音源を利用しています。
+
+「静かな海鳴り」
+作曲：蒲鉾さちこ
+配布：DOVA-SYNDROME
+URL：<https://dova-s.jp/bgm/detail/22518>
+※音量調整・ループ編集を行っています
