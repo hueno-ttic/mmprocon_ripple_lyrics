@@ -2774,12 +2774,9 @@ export class SongShutter extends BaseSong {
             });
         }
 
-        // --- 曲終了12秒前: フィルムストリップ（撮影成果の回収演出）を表示 ---
-        const video = playerManager.player.video;
-        if (!this.filmStripVisible && video && video.duration > 0 &&
-            position >= video.duration - 12000) {
-            this.showFilmStrip();
-        }
+        // フィルムストリップ（コンタクトシート＝写真選択）は曲が自然終了してから出す。
+        // かつては曲終了12秒前に割り込み表示していたが「楽曲が終わる前に写真選択が出る」ため、
+        // songEnd（自然終了）後の runEndInterlude() に移した。ここでは早出しトリガを持たない。
     }
 
     // オープニングの掴み: 曲頭3秒で「カメラを構える→AFが寄って合焦→[REC]点灯→被写体キメ」流れを作る。
@@ -2962,20 +2959,32 @@ export class SongShutter extends BaseSong {
         }
     }
 
-    // 曲終了が近づいたら、撮った写真を画面全体に散らしてから1枚の
-    // コンタクトシート（印画紙）へ整列させるフィナーレを表示。
-    showFilmStrip() {
+    // 曲が自然終了（songEnd）したときに main.js から呼ばれる「締めの間」。
+    // 撮った写真があればコンタクトシート（ベスト選定＝写真選択）を出し、選び終えて
+    // 「次へ」を押したら done() で通常のリザルト（エンドカード→湖へ）へ繋ぐ。
+    // 写真が無ければ間を置かずそのまま done()。
+    // ※「写真選択が楽曲終了前に出る」不具合を避けるため、曲を最後まで聴かせてから出す。
+    runEndInterlude(done) {
+        const finish = (typeof done === 'function') ? done : () => {};
+        if (!this.isActive || !this.photoLog || this.photoLog.length === 0) {
+            finish();
+            return;
+        }
+        this.showFilmStrip(finish);
+    }
+
+    // 曲が終わったら、撮った写真を画面全体に散らしてから1枚の
+    // コンタクトシート（印画紙）へ整列させるフィナーレ（写真選択）を表示。
+    // onDone: ベストを選び「次へ」を押したときに呼ぶ完了コールバック（通常リザルトへ繋ぐ）。
+    showFilmStrip(onDone) {
         if (this.filmStripVisible || !this.songWrapper) return;
         this.filmStripVisible = true;
+        this._endInterludeDone = (typeof onDone === 'function') ? onDone : null;
 
         // 現像ラボ風の一閃でコンタクトシートへ切り替わる印象を作る
         try { this.triggerShutterFlash(); } catch (e) { /* 無害 */ }
 
-        // 写真があればここで再生を一時停止し、プレイヤーが落ち着いてベストを選べる“選考の間”を作る。
-        // 選定後に「次へ」で再生を終端まで進めて通常のリザルトへ繋ぐ。
-        if (this.photoLog.length > 0 && playerManager.player && playerManager.player.isPlaying) {
-            try { playerManager.pause(); } catch (e) { /* 無害 */ }
-        }
+        // ここに来る時点で曲は自然終了済み（songEnd後）。早出し時代のような再生一時停止は不要。
 
         // ミク/リンは「被写体(Model)」。撮影したのはプレイヤー自身なので Photo by YOU。
         const shownName = this.shownKey === 'rin' ? 'リン⚡' : 'ミク♡';
@@ -3000,16 +3009,17 @@ export class SongShutter extends BaseSong {
         this.songWrapper.appendChild(sheet);
         this.filmStripEl = sheet;
 
-        // 「次へ」: 再生を終端へ進めて通常のリザルト（楽曲選択へ復帰）に繋ぐ
+        // 「次へ」: 通常のリザルト（エンドカード→楽曲選択へ復帰）に繋ぐ。
+        // 曲は既に自然終了しているので、再生再開ではなく完了コールバックを呼ぶ。
         const nextBtn = sheet.querySelector('#shutter-cs-next');
         if (nextBtn) {
             nextBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 nextBtn.disabled = true;
                 nextBtn.textContent = '♪';
-                // 一時停止していた再生を再開し、残りの outro を流して自然終了させる。
-                // 自然終了が通常のリザルト（クリア記録→楽曲選択へ復帰）を発火する経路。
-                try { playerManager.play(); } catch (er) { /* 無害 */ }
+                const done = this._endInterludeDone;
+                this._endInterludeDone = null;
+                if (done) done();
             });
         }
 
