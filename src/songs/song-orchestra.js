@@ -114,6 +114,13 @@ export class SongOrchestra extends BaseSong {
         this.baseMikuX = 0;
         this.baseMikuZ = -13.0; // Placed behind the lyrics (Z=-11.0)
         this.baseMikuRotY = 0; // Face the camera
+
+        // タップ時の本体配置オフセット(responsiveScale倍で使用)。
+        // ハンドボーンが本体中心から「右0.064・上0.49」ぶん離れて垂れている計測値を打ち消し、
+        // 手先を歌詞フレーズの中心へ重ねる。奥行きは歌詞(Z=-11)より少し後ろに置き前面で読ませる。
+        this.TAP_HAND_OFF_X = 0.064;
+        this.TAP_HAND_OFF_Y = 0.49;
+        this.TAP_BODY_BEHIND = 0.23;
         this.lastRealTime = undefined;
 
         const loader = new GLTFLoader();
@@ -392,8 +399,7 @@ export class SongOrchestra extends BaseSong {
         // --- 3D: タイトル文字をタップ可能スプライトとして夜空へ並べる ---
         this._buildIntroTitleSprites(cfg.title || '');
 
-        // --- DOM: 作者と操作説明の小さなキャプション(タイトルは3Dなので重複しない) ---
-        const sub = [cfg.artist, cfg.vocal].filter(Boolean).join(' ／ ');
+        // --- DOM: 操作説明の小さなキャプションのみ(作者はイントロでは出さない／タイトルは3D表示) ---
         const overlay = document.createElement('div');
         overlay.className = 'orchestra-intro-title';
         overlay.style.cssText = `
@@ -401,12 +407,11 @@ export class SongOrchestra extends BaseSong {
             width:min(86vw,640px); text-align:center; pointer-events:none; z-index:150;
             opacity:0; transition:opacity 0.9s ease;
             font-family:"Hiragino Kaku Gothic Pro","Yu Gothic",sans-serif;
-            text-shadow:0 0 14px ${color}, 0 2px 20px rgba(0,0,0,0.55);
+            text-shadow:0 0 12px ${color}, 0 2px 16px rgba(0,0,0,0.55);
         `;
         overlay.innerHTML = `
-            <div style="font-size:clamp(12px,2.2vw,16px);letter-spacing:0.16em;color:rgba(255,255,255,0.72);">${sub}</div>
-            <div style="margin:14px auto 0;width:54px;height:1px;background:linear-gradient(90deg,transparent,${color},transparent);"></div>
-            <div style="margin-top:14px;font-size:clamp(13px,2.4vw,17px);line-height:1.9;color:rgba(255,255,255,0.92);">タイトルの文字にふれると、光のオーブになって<br>夜空にひびきます</div>
+            <div style="margin:0 auto;width:46px;height:1px;background:linear-gradient(90deg,transparent,${color},transparent);"></div>
+            <div style="margin-top:11px;font-size:clamp(10px,1.7vw,13px);line-height:1.8;color:rgba(255,255,255,0.8);">タイトルの文字にふれると、光のオーブになって<br>夜空にひびきます</div>
         `;
         this.songWrapper.appendChild(overlay);
         this._introOverlay = overlay;
@@ -436,9 +441,9 @@ export class SongOrchestra extends BaseSong {
         // 文字列の総幅 = S * advance（CJKはほぼ正方形なので代表アスペクト1.0で概算）
         const advance = (chars.length - 1) * GAP_RATIO + 1.0;
         const isMobile = window.innerWidth < 768;
-        // 可視幅の86%に収め、スマホで潰れない下限〜従来デスクトップ感の上限でクランプ
-        const fitS = (visibleWidth * 0.86) / advance;
-        const S = Math.max(isMobile ? 0.95 : 0.7, Math.min(isMobile ? 2.4 : 0.92, fitS));
+        // タップしやすさ優先で可視幅の92%まで使って大きく表示。スマホ下限〜デスクトップ上限でクランプ。
+        const fitS = (visibleWidth * 0.92) / advance;
+        const S = Math.max(isMobile ? 1.3 : 1.15, Math.min(isMobile ? 3.2 : 1.9, fitS));
         const gap = S * GAP_RATIO;                        // 文字間隔
         const totalW = (chars.length - 1) * gap;
         chars.forEach((ch, i) => {
@@ -843,14 +848,17 @@ export class SongOrchestra extends BaseSong {
         }
         const textWidth = Math.max(160, Math.ceil(metrics.width) + padding);
         
+        // 文字がぼやけないよう実ピクセルを SS 倍で確保し、論理座標(W×H)で描画する。
+        const SS = 2;                 // スーパーサンプリング倍率(解像度向上)
+        const W = textWidth, H = 128; // 論理サイズ(aspect・レイアウト計算はこの値基準)
         const canvas = document.createElement('canvas');
-        canvas.width = textWidth;
-        canvas.height = 128;
-        
+        canvas.width = W * SS;
+        canvas.height = H * SS;
+
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = 'rgba(0,0,0,0)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+        ctx.scale(SS, SS);
+        ctx.clearRect(0, 0, W, H);
+
         // --- Category Background Decorations ---
         if (category === 'music' || category === 'music_march') {
             // Faint staff lines in the background
@@ -862,7 +870,7 @@ export class SongOrchestra extends BaseSong {
                 const y = centerY + i * spacing;
                 ctx.beginPath();
                 ctx.moveTo(10, y);
-                ctx.lineTo(canvas.width - 10, y);
+                ctx.lineTo(W - 10, y);
                 ctx.stroke();
             }
         } else if (category === 'voice_echo') {
@@ -870,7 +878,7 @@ export class SongOrchestra extends BaseSong {
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            for (let x = 10; x < canvas.width - 10; x += 4) {
+            for (let x = 10; x < W - 10; x += 4) {
                 const amp = Math.sin(x * 0.08) * 16 * Math.sin(x * 0.01);
                 const y = 64 + amp;
                 if (x === 10) ctx.moveTo(x, y);
@@ -884,10 +892,10 @@ export class SongOrchestra extends BaseSong {
             ctx.beginPath();
             const pts = [
                 { x: 15, y: 35 },
-                { x: canvas.width * 0.28, y: 85 },
-                { x: canvas.width * 0.5, y: 30 },
-                { x: canvas.width * 0.72, y: 95 },
-                { x: canvas.width - 15, y: 45 }
+                { x: W * 0.28, y: 85 },
+                { x: W * 0.5, y: 30 },
+                { x: W * 0.72, y: 95 },
+                { x: W - 15, y: 45 }
             ];
             ctx.moveTo(pts[0].x, pts[0].y);
             for (let i = 1; i < pts.length; i++) {
@@ -926,29 +934,25 @@ export class SongOrchestra extends BaseSong {
         if (category === 'machine') {
             // Glitched red/cyan offsets
             ctx.fillStyle = 'rgba(0, 255, 255, 0.7)';
-            ctx.fillText(text, canvas.width / 2 - 3, 64);
-            
+            ctx.fillText(text, W / 2 - 3, 64);
+
             ctx.fillStyle = 'rgba(255, 0, 128, 0.7)';
-            ctx.fillText(text, canvas.width / 2 + 3, 64);
-            
+            ctx.fillText(text, W / 2 + 3, 64);
+
             ctx.fillStyle = '#ffffff';
-            ctx.fillText(text, canvas.width / 2, 64);
+            ctx.fillText(text, W / 2, 64);
         } else if (category === 'voice_echo') {
-            // Echo ghost trailing texts baked in
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-            ctx.fillText(text, canvas.width / 2 - 40, 64);
-            
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-            ctx.fillText(text, canvas.width / 2 - 20, 64);
-            
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(text, canvas.width / 2, 64);
+            // 以前は同じ文字を -40/-20/0px にずらして焼き込む「エコー残像」だったが、
+            // 歌詞が二重に見える主因だったため廃止。発光は背景のサウンドウェーブとハロー(spawnText)で表現し、
+            // 文字自体は中央に一度だけ描く。
+            ctx.fillText(text, W / 2, 64);
         } else {
-            ctx.fillText(text, canvas.width / 2, 64);
+            ctx.fillText(text, W / 2, 64);
         }
-        
+
         const texture = new THREE.CanvasTexture(canvas);
-        return { texture, aspect: canvas.width / 128 };
+        texture.anisotropy = 4; // 斜め視/縮小時のにじみを軽減
+        return { texture, aspect: W / H };
     }
 
     createGlowTexture() {
@@ -1058,11 +1062,21 @@ export class SongOrchestra extends BaseSong {
             sprite.add(halo);
         }
         
-        let scale = 1.2 + Math.random() * 0.2; // フレーズ表示用にやや小さめのベーススケール
-        if (aspect > 10.0) {
-            scale *= (10.0 / aspect); // フレーズは長いのでキャップを広めに
-            scale = Math.max(0.7, scale); // 最低限の可読性を維持
-        }
+        // 歌詞の大きさは「その奥行きでの可視領域の高さ」に対する割合で決める。
+        // 固定のワールドスケールだと、奥行き(向き)や画面サイズ・カメラ引き(サビ)で見かけの大きさが
+        // バラつき小さくなりがち。可視高に対する割合にすることで、奥へ下げても・画面が変わっても
+        // 画面上での大きさが一定になり、十分に読める大きさを保てる。
+        const _layerZ = this._lyricLayerZ();
+        const _fovRad = (this.camera ? this.camera.fov : 75) * Math.PI / 180;
+        const _camZ = this.camera ? this.camera.position.z : 10;
+        const _visH = 2.0 * Math.max(1, (_camZ - _layerZ)) * Math.tan(_fovRad / 2.0); // 歌詞奥行きでの可視高
+        const _visW = _visH * (this.camera ? this.camera.aspect : 1.6);               // 同・可視幅
+        const SIZE_FRAC = 0.085;            // スプライト高 = 可視高のこの割合(大きめ=読みやすい)
+        const chorusBoost = this.isClimax ? 1.35 : 1.0;
+        let scale = _visH * SIZE_FRAC * (0.95 + Math.random() * 0.1) * chorusBoost;
+        // 横に長いフレーズが画面からはみ出さないよう、可視幅の90%に収まる高さでクランプする(見切れ防止)。
+        const _maxScaleByWidth = (_visW * 0.9) / aspect;
+        if (scale > _maxScaleByWidth) scale = _maxScaleByWidth;
         
         // Ensure camera matrices are updated before projecting
         if (this.camera) {
@@ -1128,15 +1142,16 @@ export class SongOrchestra extends BaseSong {
             return false;
         };
         
-        // 画面アスペクト比とカメラの視野角から、3D空間における可視領域を動的に算出して出現候補を決定
-        const dist = 21.0; // カメラZ(10) - オブジェクトZ(-11)
+        // 画面アスペクト比とカメラの視野角から、3D空間における可視領域を動的に算出して出現候補を決定。
+        // 距離は歌詞の実際の奥行き(_layerZ)基準にする(固定21だと、奥へ下げた今は可視領域がズレて見切れる)。
+        const dist = _camZ - _layerZ;
         const fovRad = (this.camera.fov * Math.PI) / 180;
         const visibleHeight = 2.0 * dist * Math.tan(fovRad / 2.0);
         const visibleWidth = visibleHeight * this.camera.aspect;
 
-        // はみ出し防止のマージンを考慮した配置可能半幅・半高
-        const halfW = visibleWidth * 0.38;  // 左右端から十分な余裕をもたせる
-        const halfH = visibleHeight * 0.35; // 上下端から十分な余裕をもたせる
+        // 画面端だとタップしづらいので、出現範囲を中心寄りに絞る(半幅・半高を控えめに)。
+        const halfW = visibleWidth * 0.26;  // 左右をより中央寄りに
+        const halfH = visibleHeight * 0.24; // 上下をより中央寄りに
 
         const xCandidates = [];
         const yCandidates = [];
@@ -1152,7 +1167,9 @@ export class SongOrchestra extends BaseSong {
         
         let foundX = 0;
         let foundY = 0;
-        let spawnZ = -11.0; // Zを-11.0に引っ込めてカメラを塞がないように調整
+        // スポーン時から向きに応じた奥行きに置く(背面時はミクの奥)。
+        // 常に-11で湧かせると、背面時でも一瞬だけミクより手前に見えて背中を貫通するため。
+        let spawnZ = this._lyricLayerZ();
         let found = false;
         
         // Search passes with decreasing padding strictly to find optimal non-overlapping spots
@@ -1185,12 +1202,19 @@ export class SongOrchestra extends BaseSong {
         }
         
         if (!found) {
-            // Absolute backup fallback — 画面全体を使ってランダム配置
-            foundX = (Math.random() - 0.5) * 14;
-            foundY = (Math.random() - 0.5) * 7;
+            // Absolute backup fallback — 可視領域内にランダム配置
+            foundX = (Math.random() - 0.5) * visibleWidth * 0.42;
+            foundY = (Math.random() - 0.5) * visibleHeight * 0.42;
             console.warn(`[ORCHESTRA] Fallback spawning "${lyricEntity.text}" at (${foundX.toFixed(2)}, ${foundY.toFixed(2)})`);
         }
-        
+
+        // スプライト全体が画面内に収まるよう最終クランプ(左右/上下の見切れ防止)。
+        const _hw = (scale * aspect) * 0.5, _hh = scale * 0.5;
+        const _maxX = Math.max(0, visibleWidth * 0.5 - _hw - 0.3);
+        const _maxY = Math.max(0, visibleHeight * 0.5 - _hh - 0.3);
+        foundX = Math.max(-_maxX, Math.min(_maxX, foundX));
+        foundY = Math.max(-_maxY, Math.min(_maxY, foundY));
+
         sprite.position.set(foundX, foundY, spawnZ);
         const birthTime = lyricEntity.startTime !== undefined ? lyricEntity.startTime : spawnTime;
         const duration = lyricEntity.endTime !== undefined ? (lyricEntity.endTime - lyricEntity.startTime) : 2500;
@@ -1212,6 +1236,88 @@ export class SongOrchestra extends BaseSong {
         
         this.scene.add(sprite);
         this.activeSprites.push(sprite);
+    }
+
+    // 歌詞レイヤーのワールドZ(奥行き)をミクの向きに連動して返す。
+    // ミクは背面(夜空を見上げる)/サビで正面(客席)に回頭する。背面のあいだは、
+    // ミクの体・髪の奥行き(実測: 後端がホーム位置で約Z=-14.5、ツインテールの揺れでさらに奥)を
+    // 確実に超える -17 に置き、背中を貫通させない。正面化(_faceFront)が0.7を超えてから手前(-11)へ
+    // 寄せ、サビでは大きく読ませる。z自体はスポーン/毎フレームのlerpで滑らかに反映する。
+    // ミクの実際のワールドZ範囲(_mikuZMin=最奥 / _mikuZMax=最前=カメラ側)を毎フレーム更新する。
+    // 各メッシュのローカルAABBの8隅をワールドへ変換してz範囲を取る(頂点全走査より軽量)。
+    // 体・ツインテールの張り出しまで含めるので、これを基準にすれば歌詞を確実にミクより手前/奥へ置ける。
+    _updateMikuZExtent() {
+        const vrm = this.currentVRM;
+        if (!vrm || !vrm.scene) return;
+        // タップ中はミクが歌詞へ前後に寄るため、その一時的な位置でbboxを取ると他の歌詞の奥行きが
+        // 一瞬変わってしまう。タップ中は直前(静止時)の範囲を据え置き、歌詞の奥行きを安定させる。
+        if (this.tapAnimation) return;
+        let zmin = Infinity, zmax = -Infinity;
+        const v = this._scratchVZ || (this._scratchVZ = new THREE.Vector3());
+        vrm.scene.traverse(o => {
+            if (!o.isMesh || !o.geometry) return;
+            let bb = o.geometry.boundingBox;
+            if (!bb) { o.geometry.computeBoundingBox(); bb = o.geometry.boundingBox; }
+            if (!bb) return;
+            const m = o.matrixWorld;
+            for (let xi = 0; xi < 2; xi++)
+                for (let yi = 0; yi < 2; yi++)
+                    for (let zi = 0; zi < 2; zi++) {
+                        v.set(xi ? bb.max.x : bb.min.x, yi ? bb.max.y : bb.min.y, zi ? bb.max.z : bb.min.z).applyMatrix4(m);
+                        if (v.z < zmin) zmin = v.z;
+                        if (v.z > zmax) zmax = v.z;
+                    }
+        });
+        if (zmin <= zmax) { this._mikuZMin = zmin; this._mikuZMax = zmax; }
+    }
+
+    // 歌詞レイヤーのワールドZを、ミクの実Z範囲に対して常に手前/奥になるよう返す。
+    // 正面(サビ)時はミクの最前(_mikuZMax)よりさらに手前(カメラ側)、背面時は最奥(_mikuZMin)よりさらに奥へ。
+    // 固定値だとミクの位置・姿勢の変動で前後関係が崩れる(=甘い)ため、実測Z範囲に追従させる。
+    _lyricLayerZ() {
+        const ff = this._faceFront || 0;
+        const zmin = (this._mikuZMin !== undefined) ? this._mikuZMin : -14.5; // ミクの最奥
+        const zmax = (this._mikuZMax !== undefined) ? this._mikuZMax : -8.5;  // ミクの最前(カメラ側)
+        const MARGIN = 1.8;                 // 確実に前後へ抜けるための余白
+        const behindZ = zmin - MARGIN;      // 背面: ミクの最奥よりさらに奥
+        const frontZ = zmax + MARGIN;       // 正面(サビ): ミクの最前よりさらに手前
+        const t = Math.max(0, Math.min(1, (ff - 0.5) / 0.2)); // 正面度0.5→0.7で手前へ切替
+        return behindZ + (frontZ - behindZ) * t;
+    }
+
+    // 歌詞スプライト同士の重なり解消(二重表示の防止)。
+    // ワールド空間のAABBで重なりを判定し、重なったペアを縦方向へ少しずつ押し分ける。
+    // 配置時のcheckOverlapだけでは、漂い(drift)やサビの加速で後から接近したペアを救えないため、
+    // 毎フレームの連続的な分離で「別フレーズが同じ行に重なって読めない」状態を解消する。
+    _separateOverlappingLyrics() {
+        const arr = this.activeSprites.filter(
+            s => s && !s.userData.isNode && s.userData.text && !s.userData.isBeingTapped
+        );
+        const PAD_X = 0.3;   // 横の余白(これ未満まで近づいたら重なり扱い)
+        const PAD_Y = 0.28;  // 縦の最小すき間
+        const MAX_PUSH = 0.07; // 1フレームの最大移動量(急に弾かず滑らかに分離)
+        for (let i = 0; i < arr.length; i++) {
+            for (let j = i + 1; j < arr.length; j++) {
+                const a = arr[i], b = arr[j];
+                const aHalfW = (a.userData.baseScale * a.userData.aspect) * 0.5;
+                const aHalfH = a.userData.baseScale * 0.5;
+                const bHalfW = (b.userData.baseScale * b.userData.aspect) * 0.5;
+                const bHalfH = b.userData.baseScale * 0.5;
+                const dx = Math.abs(a.position.x - b.position.x);
+                const dyRaw = a.position.y - b.position.y;
+                const overlapX = (aHalfW + bHalfW + PAD_X) - dx;
+                const overlapY = (aHalfH + bHalfH + PAD_Y) - Math.abs(dyRaw);
+                if (overlapX > 0 && overlapY > 0) {
+                    // 縦に分離(重なり量の半分ずつ)。同一yに重なった場合は決定的な向きで割る。
+                    const push = Math.min(overlapY * 0.5, MAX_PUSH);
+                    const dir = dyRaw === 0 ? (i % 2 === 0 ? 1 : -1) : Math.sign(dyRaw);
+                    a.position.y += dir * push;
+                    b.position.y -= dir * push;
+                    if (a.userData.baseY !== undefined) a.userData.baseY += dir * push;
+                    if (b.userData.baseY !== undefined) b.userData.baseY -= dir * push;
+                }
+            }
+        }
     }
 
     onClick(event) {
@@ -1387,39 +1493,8 @@ export class SongOrchestra extends BaseSong {
         this.addOrbToGauge(nextColorHex);
         this.updateResultSummary();
 
-        // 3. カラー変更を告げる美しい一時的なミニポップアップ（Toast）の表示
-        const colorNames = {
-            '#ffffff': '純白',
-            '#ffb834': '琥珀ゴールド',
-            '#ff3b5c': '夕焼けルビー',
-            '#00d4ff': '深宇宙サファイア',
-            '#00ffb0': '極光エメラルド',
-            '#d95bff': '宵闇アメジスト'
-        };
-        const colorName = colorNames[this.currentColor] || '新たな色';
-        
-        // 情緒的なトースト文言の出し分け（意味が一致したか、ランダムか）
-        let bodyText = `色彩のオーブ（計${this.resonateOrbs.length}個）が夜空に蓄積されました。`;
-        if (semanticHex) {
-            const matchedRule = [
-                { hex: '#00d4ff', keywords: ['青', 'あお', '空', '海', '深', '涙', '雨', '水', '宙', 'そら', 'ブルー', '天'] },
-                { hex: '#ff3b5c', keywords: ['赤', 'あか', '夕', '陽', '火', '熱', '血', '燃', '朱', 'ハート', 'レッド', '心臓'] },
-                { hex: '#ffb834', keywords: ['金', '黄', 'きいろ', '星', '光', '朝', '輝', 'ゴールド', 'イエロー', '灯', '瞬', '隊'] },
-                { hex: '#00ffb0', keywords: ['緑', 'みどり', '葉', '森', '風', '芽', '生', '陸', 'グリーン', '野', '草', '命'] },
-                { hex: '#d95bff', keywords: ['紫', 'むらさき', '夜', '闇', '宵', '影', '死', '終', '幕', 'アメジスト', 'パープル', '最後'] },
-                { hex: '#ffffff', keywords: ['白', 'しろ', '雪', '無', '明', '真', '純', '音', '歌', '唄', '響', 'ホワイト', '声'] }
-            ].find(r => r.hex === semanticHex);
-            
-            const matchedKeyword = matchedRule ? matchedRule.keywords.find(kw => text.includes(kw)) : '';
-            bodyText = `「${matchedKeyword}」の言葉が色彩を呼び覚ましました。\nオーブが蓄積されました。`;
-        }
-
-        this.showTutorialCard({
-            icon: '✨',
-            title: `言葉が共鳴しました`,
-            body: bodyText,
-            duration: 2800
-        });
+        // (オーブ生成ごとの説明ポップアップは廃止。操作はイントロの誘導で十分に伝わるため、
+        //  本編では蓄積の手応えをゲージ・花火・発光だけで返し、視界を歌詞と夜空に集中させる。)
     }
 
     /**
@@ -1609,6 +1684,14 @@ export class SongOrchestra extends BaseSong {
         // --- Climax (Chorus) logic ---
         const chorus = playerManager.player.findChorus(position);
         this.isClimax = !!chorus || position > 180000; // fallback climax at 3min
+
+        // --- ミクの向き(0=背面で夜空を見上げる / 1=正面で客席=ユーザーを向く) ---
+        // このVRMは rotation.y=π が正面、0 が背面。通常は背を向け、サビ(クライマックス)で滑らかに回頭する。
+        // この値は本体の回頭(baseMikuRotY)と、歌詞レイヤーの奥行き(背面時はミクより奥)に使う。
+        const faceTarget = this.isClimax ? 1 : 0;
+        if (this._faceFront === undefined) this._faceFront = 0;
+        this._faceFront += (faceTarget - this._faceFront) * 0.05;
+        this.baseMikuRotY = this._faceFront * Math.PI;
 
         // サビで「画面全体が変わる」演出量。突入で素早く開き、抜けると緩やかに閉じる(軸6)
         const chorusOpenTarget = this.isClimax ? 1.0 : 0.0;
@@ -1835,6 +1918,20 @@ export class SongOrchestra extends BaseSong {
             }
         }
 
+        // 別フレーズ同士が同じ行に重なって「歌詞が二重に見える」のを防ぐ。
+        // 長いフレーズが接近・漂って重なっても、毎フレームわずかに上下へ押し分けて読めるよう保つ。
+        this._separateOverlappingLyrics();
+
+        // 歌詞レイヤーの奥行きをミクの向きに連動させる(_lyricLayerZ)。
+        // 背面(夜空を見上げている)ときは歌詞をミクの体・髪の奥行きを確実に超える深さへ置き、背中を貫通させない。
+        // サビ(正面)では手前へ戻して大きく読ませる。タップ中の歌詞は固定なので除外。
+        const targetLyricZ = this._lyricLayerZ();
+        for (let i = 0; i < this.activeSprites.length; i++) {
+            const s = this.activeSprites[i];
+            if (!s || s.userData.isNode || s.userData.isBeingTapped) continue;
+            s.position.z += (targetLyricZ - s.position.z) * 0.08;
+        }
+
         // Update drawn/constellation lines
         this.drawnLines.forEach(line => {
             line.rotation.y += 0.01;
@@ -1864,26 +1961,14 @@ export class SongOrchestra extends BaseSong {
                         }
                     }
 
-                    // 豪華な大合奏のアナウンスを表示
-                    this.showTutorialCard({
-                        icon: '🎆',
-                        title: '色彩交響曲（カラー・シンフォニー）',
-                        body: `蓄積された${orbCount}個の言葉の記憶が、\nサビの終わりに向け時間をかけて夜空に咲き誇ります！`,
-                        duration: 4500
-                    });
+                    // (サビ突入のトースト説明は廃止。蓄積オーブは花火そのもので魅せる)
                 } else {
-                    // 蓄積0個のサビ: 控えめな単発花火を一輪だけ上げ、蓄積が体験に直結することを伝える
+                    // 蓄積0個のサビ: 控えめな単発花火を一輪だけ上げる(トースト説明は出さない)
                     this.spawnCustomColorFirework(
                         new THREE.Color(this.currentColor),
                         new THREE.Vector3((Math.random() - 0.5) * 6.0, 3.0 + Math.random() * 2.0, -24.0),
                         0.35
                     );
-                    this.showTutorialCard({
-                        icon: '🌠',
-                        title: '静かな夜空…',
-                        body: 'オーブが空のため、ささやかな一輪だけ。\n歌詞に触れてオーブを集めると、\nサビの花火が大連鎖になります。',
-                        duration: 4500
-                    });
                 }
             }
 
@@ -2166,7 +2251,10 @@ export class SongOrchestra extends BaseSong {
                     if (this.lastTappedMikuPos) {
                         targetHomeX = this.lastTappedMikuPos.x;
                         targetHomeY = this.lastTappedMikuPos.y;
-                        targetHomeZ = this.lastTappedMikuPos.z;
+                        // 奥行き(Z)はタップ位置を引き継がず、必ず一定ホーム(-13)へ戻す。
+                        // タップ時のZ(歌詞の前後へずらした値)を引き継ぐと、歌詞レイヤーZ(ミクのbbox基準)が
+                        // タップごとに奥へ累積ドリフトし、曲が進む(タップが増える)ほど歌詞が小さくなってしまう。
+                        // targetHomeZ は既定の -13.0 のまま据え置く。
                     }
 
                     this.baseMikuX += (targetHomeX - this.baseMikuX) * 0.04;
@@ -2235,10 +2323,13 @@ export class SongOrchestra extends BaseSong {
                 if (elapsed >= dur) {
                     // Update Miku's base position to the last tapped lyric's position
                     // so she floats there instead of flying back to the center
-                    this.baseMikuX = projectedTarget.x;
-                    this.baseMikuY = projectedTarget.y + (-1.2 * responsiveScale);
-                    this.baseMikuZ = projectedTarget.z + (-1.0 * responsiveScale);
+                    // クローズドループで手先が中心へ収束した「現在位置」をそのまま停止位置にする。
+                    // (静的オフセットへスナップさせると1フレームの跳ね＝SpringBone暴発を招くため)
+                    this.baseMikuX = this.currentVRM.scene.position.x;
+                    this.baseMikuY = this.currentVRM.scene.position.y;
+                    this.baseMikuZ = this.currentVRM.scene.position.z;
                     this.tapAnimation = null;
+                    this._tapDesired = null; // 次のタップ用にローパス目標をクリア
 
                     // Save last tapped position to return back to after flight mode
                     this.lastTappedMikuPos = new THREE.Vector3(this.baseMikuX, this.baseMikuY, this.baseMikuZ);
@@ -2252,23 +2343,61 @@ export class SongOrchestra extends BaseSong {
 
             // Miku body position interpolation (move to tapped lyric position and stay there)
             if (this.tapAnimation && projectedTarget) {
-                // Adjust offsets dynamically based on responsive scale
-                const targetMikuPos = new THREE.Vector3(
-                    projectedTarget.x,
-                    projectedTarget.y + (-1.2 * responsiveScale),
-                    projectedTarget.z + (-1.0 * responsiveScale)
-                );
-                
+                // 手先(ハンドボーン)が「画面上で」歌詞フレーズの中心に重なるよう本体を配置する。
+                // 旧実装は本体を中心の遥か下(-1.2×scale)・奥(-1.0×scale)へ置いていたが、腕IKが実質伸びず
+                // 手は本体直下に垂れるため、中心から大きく下/奥にズレていた(計測: 下6.9・奥10.7)。
+                // ここでは実際のハンドボーンを毎フレーム投影し、中心との画面誤差ぶん本体XYをずらす
+                // クローズドループ補正にする。左右の腕差・揺れ・遠近に自動追従し、手先が中心へ収束する。
+                // 奥行き(Z): 歌詞レイヤーの前後関係(_lyricLayerZ: サビ=歌詞が手前 / それ以外=歌詞が奥)を
+                // タップ中も保つよう、本体を歌詞のどちら側に置くかを向きで切り替える。
+                //  ・背面(夜空向き)時: 本体を歌詞より手前へ → タップした歌詞もミクの背後(奥)に隠れる。
+                //  ・正面(サビ)時: 本体を歌詞より奥へ → タップした歌詞もミクより手前に出る。
+                // 腕は別途「ミクの正面方向」へ伸ばすので、本体をどちら側に置いても手の向きは正しく保たれる。
+                const facingFront = (this._faceFront || 0) > 0.5;
+                const behindZ = facingFront
+                    ? projectedTarget.z - (this.TAP_BODY_BEHIND * responsiveScale)  // サビ: ミクが奥 → 歌詞が手前
+                    : projectedTarget.z + (this.TAP_BODY_BEHIND * responsiveScale); // それ以外: ミクが手前 → 歌詞が奥
+                // フォールバック(初回フレーム=ハンド行列が未確定のとき)は計測オフセットで概算配置
+                let desiredX = projectedTarget.x - (this.TAP_HAND_OFF_X * responsiveScale);
+                let desiredY = projectedTarget.y - (this.TAP_HAND_OFF_Y * responsiveScale);
+                const handBone = this.currentVRM.humanoid.getNormalizedBoneNode(activeArm === 'left' ? 'leftHand' : 'rightHand');
+                if (handBone) {
+                    handBone.updateWorldMatrix(true, false);
+                    const handPos = new THREE.Vector3().setFromMatrixPosition(handBone.matrixWorld);
+                    const handNdc = handPos.clone().project(this.camera);
+                    const tgtNdc = projectedTarget.clone().project(this.camera);
+                    const fovRad = (this.camera.fov * Math.PI) / 180;
+                    const worldPerNdcY = (this.camera.position.z - handPos.z) * Math.tan(fovRad / 2);
+                    const worldPerNdcX = worldPerNdcY * this.camera.aspect;
+                    // 現在の本体XYに「手先→中心」の画面誤差(NDC)を world に直して加える
+                    desiredX = this.currentVRM.scene.position.x + (tgtNdc.x - handNdc.x) * worldPerNdcX;
+                    desiredY = this.currentVRM.scene.position.y + (tgtNdc.y - handNdc.y) * worldPerNdcY;
+                }
+                const rawDesired = new THREE.Vector3(desiredX, desiredY, behindZ);
+                // 目標を低域通過(ローパス)で滑らかにし、クローズドループの自己振動を抑える。
+                // (補正対象のハンド位置が腕の揺れで毎フレーム動くと目標が暴れ、体が跳ねてツインテールが乱れる)
+                if (!this._tapDesired) this._tapDesired = rawDesired.clone();
+                else this._tapDesired.lerp(rawDesired, 0.2);
+                const targetMikuPos = this._tapDesired;
+
                 const elapsed = this.tapAnimation.elapsed;
                 const peak = this.tapAnimation.peakTime;
-                
+
+                // 目的地(intended)を求め、1フレームの移動量を上限クランプしてゆっくり動かす。
+                // 体が一気に飛ぶ(=並進速度が大きい)とSpringBoneが追従しきれずツインテールが乱れるため、
+                // 毎フレームの並進量を抑えて滑らかに移動させる。
+                let intended;
                 if (elapsed < peak) {
-                    const t_pos = elapsed / peak;
-                    const w_pos = Math.sin(t_pos * Math.PI / 2);
-                    this.currentVRM.scene.position.lerpVectors(basePos, targetMikuPos, w_pos);
+                    const w_pos = Math.sin((elapsed / peak) * Math.PI / 2);
+                    intended = new THREE.Vector3().lerpVectors(basePos, targetMikuPos, w_pos);
                 } else {
-                    this.currentVRM.scene.position.copy(targetMikuPos);
+                    intended = targetMikuPos;
                 }
+                const cur = this.currentVRM.scene.position;
+                const move = new THREE.Vector3().subVectors(intended, cur);
+                const maxStep = 0.1 * responsiveScale; // ≈0.85/frame: 髪が暴れない並進上限
+                if (move.length() > maxStep) move.setLength(maxStep);
+                cur.add(move);
             } else {
                 // タップ終了フレームでは、直前のタップ完了処理(elapsed>=dur)で baseMiku が
                 // 移動先へ更新されるが、basePos は update() 冒頭で旧home値のまま計算済み。
@@ -2339,14 +2468,20 @@ export class SongOrchestra extends BaseSong {
 
                     if (activeUpper) {
                         const shoulderPos = activeUpper.getWorldPosition(new THREE.Vector3());
-                        const dir = projectedTarget.clone().sub(shoulderPos);
+                        // 歌詞の世界座標ではなく「ミクの正面(顔の向き)」方向へ腕を伸ばす。
+                        // 背面時は画面奥(=ミクの前)へ、正面(サビ)時は客席側(=ミクの前)へ、常にミクの正面側へ手が出る。
+                        // (歌詞へ正対させると、サビは歌詞がミクの背側に来るため腕が背面へ回ってしまう)
+                        const wf = new THREE.Vector3(-Math.sin(this.baseMikuRotY), 0, -Math.cos(this.baseMikuRotY)); // ミクのワールド前方
+                        const sideSign = isLeft ? 1 : -1;
+                        const aimDir = wf.clone().add(new THREE.Vector3(0.3 * sideSign, -0.6, 0)).normalize(); // 前方やや下・腕側へ
                         const parentWorldQ = activeUpper.parent.getWorldQuaternion(new THREE.Quaternion());
-                        const localDir = dir.clone().applyQuaternion(parentWorldQ.clone().invert()).normalize();
-                        
-                        // VRM standard arm axis (left: +X, right: -X)
-                        const localAxis = isLeft ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(-1, 0, 0);
+                        const localDir = aimDir.clone().applyQuaternion(parentWorldQ.clone().invert()).normalize();
+
+                        // 腕の長さ軸を aimDir に合わせる。このモデルでは符号が逆(左:-X / 右:+X)で
+                        // ないと手が反対(背面)へ出るため反転している(計測で確定)。
+                        const localAxis = isLeft ? new THREE.Vector3(-1, 0, 0) : new THREE.Vector3(1, 0, 0);
                         const targetUpperQ = new THREE.Quaternion().setFromUnitVectors(localAxis, localDir);
-                        
+
                         activeUpper.quaternion.slerp(targetUpperQ, w);
                     }
 
@@ -2403,12 +2538,16 @@ export class SongOrchestra extends BaseSong {
             // Head/neck lookAt tracking (looking at the lyric during tap, otherwise looking at camera)
             const neck = this.currentVRM.humanoid.getNormalizedBoneNode('neck');
             if (neck) {
-                if (this.tapAnimation && projectedTarget && w > 0) {
-                    // Turn head towards target lyric
+                const facingFront = (this._faceFront || 0) > 0.5;
+                if (this.tapAnimation && facingFront) {
+                    // サビ(正面)のタップ中は首を一切動かさない(かしげ防止)。
+                    // lookAtを呼ばず、直前(タップ前にカメラを見ていた)の首の向きのまま据え置く。
+                } else if (this.tapAnimation && projectedTarget && w > 0) {
+                    // 背面(夜空向き)時のみ、タップした歌詞の方へ顔を向ける
                     const lookPos = new THREE.Vector3().lerpVectors(this.camera.position, projectedTarget, w);
                     this.lookAtTarget(neck, lookPos, 0.7, 0.4);
                 } else {
-                    // Keep eye contact with user/camera
+                    // 通常時は客席=ユーザーと目を合わせる
                     this.lookAtTarget(neck, this.camera.position, 0.5, 0.3);
                 }
             }
@@ -2449,6 +2588,9 @@ export class SongOrchestra extends BaseSong {
 
             // Run SpringBone physics update
             this.currentVRM.update(deltaTime);
+
+            // ミクの実Z範囲を更新(歌詞レイヤーの奥行き判定に使用。ワールド行列が確定したこの直後に取る)
+            this._updateMikuZExtent();
         }
 
         // --- Dynamic Color Resonance Hint trigger ---
@@ -2743,6 +2885,7 @@ export class SongOrchestra extends BaseSong {
         }
 
         this.hasTapped = true; // Mark as tapped to stop auto-positioning based on scale
+        this._tapDesired = null; // ローパス目標を初期化(前回タップの残りを持ち越さない)
 
         // Reset SpringBone physics to prevent hair twisting or jittering on sudden starting motion
         if (this.currentVRM.springBoneManager) {
@@ -2753,8 +2896,11 @@ export class SongOrchestra extends BaseSong {
         sprite.userData.isBeingTapped = true;
         const targetWorldPos = sprite.position.clone();
         
-        // 歌詞が画面の左右どちらにあるかで、左腕・右腕のどちらを使用するか選択
-        const arm = targetWorldPos.x < 0 ? 'left' : 'right';
+        // 歌詞が画面の左右どちらにあるかで、左腕・右腕のどちらを使用するか選択。
+        // ただしサビ(正面=rotation.y≈π)ではミクが鏡像になり左右が反転するため、出す腕も反転させる。
+        // (背面時: ミクの右手は画面右側 / 正面時: ミクの右手は画面左側)
+        let arm = targetWorldPos.x < 0 ? 'left' : 'right';
+        if ((this._faceFront || 0) > 0.5) arm = (arm === 'left') ? 'right' : 'left';
 
         this.tapAnimation = {
             sprite: sprite,
