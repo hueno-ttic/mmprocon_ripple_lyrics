@@ -69,18 +69,19 @@ export class StoryIntro {
         const raceOrText = (text, duration) => Promise.race([this.showText(text, duration), skipPromise]);
 
         const phase = appState.getPhase();
+        // 湖面の「光るたま(オーブ)」は廃止済み(選曲は中央パネルに一本化)。
+        // よって「光に触れてみてください」の操作誘導は出さず、物語のナレーションだけ流す。
         const introTexts = [
-            ['よく晴れた空の下、一滴の水の旅がはじまる。', '陽にのぼる光のしずくに、触れてみてください。'],
-            ['のぼった水蒸気が、雲になって集まりだした。', '雲間に浮かぶ光に、触れてみてください。'],
-            ['集まった雲は、ついに雨を降らせた。', '雨の中に浮かぶ光に、触れてみてください。'],
-            ['雨があがり、地上に水たまりが残った。', '空を映す水たまりに、触れてみてください。'],
-            ['水たまりは流れ出し、小川になった。', '小川のほとりに浮かぶ光に、触れてみてください。'],
-            ['小川は流れを重ね、ついに湖へとたどり着いた。', '湖面に浮かぶ光に、触れてみてください。'],
+            'よく晴れた空の下、一滴の水の旅がはじまる。',
+            'のぼった水蒸気が、雲になって集まりだした。',
+            '集まった雲は、ついに雨を降らせた。',
+            '雨があがり、地上に水たまりが残った。',
+            '水たまりは流れ出し、小川になった。',
+            '小川は流れを重ね、ついに湖へとたどり着いた。',
         ];
-        const [line1, line2] = introTexts[phase] || introTexts[0];
+        const line1 = introTexts[phase] || introTexts[0];
 
-        await raceOrText(line1, 2200);
-        if (!this._skipped) await raceOrText(line2, 2600);
+        await raceOrText(line1, 2600);
 
         // Hand off to the app, which fades the screen curtain over this intro
         // and builds the world behind it. Remove our overlay once it's covered
