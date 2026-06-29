@@ -78,6 +78,7 @@ export class SongTricktology extends BaseSong {
         this.mirrorVRM = null;    // 水面（lowerGroup）
         this.realMatCache = [];
         this.mirrorMatCache = [];
+        this.mirrorSilhouetteMat = null;  // 虚像のリンを覆うシルエット材質（Takeover流の逆光ファントム・全メッシュ共有）
         this.mikuZ = -5.0;
         this.mikuScale = this.isMobile ? 3.0 : 3.6;
         // スマホ縦画面はカメラを寄せて横の見える幅が狭いので、歌詞の左右展開を内側へ寄せる。
@@ -136,11 +137,13 @@ export class SongTricktology extends BaseSong {
         this.maxWaterRise = this.isMobile ? 1.4 : 1.8;
         this.crackLevel = 0;  // 曲が進むほど世界に走るヒビ
         this.mirrorAlpha = 0.62; // 鏡像のリンは姿が透ける
+        this.silBaseColor = new THREE.Color(0x8fc6ff); // 虚像シルエットの基調（月光の冷たい青）
 
         // ── 終盤の決着（満ちた月で本物の世界が決まる）──
         this.choiceShown = false;    // 決着処理に入ったか
         this.worldChosen = null;     // 'ground' | 'water'（本物として残る世界）
         this.collapseStart = -1;
+        this.turnProgress = 0;       // 0=背中／1=こちらへ振り返った（世界確定で残る側だけ振り返る）
         this.choiceOverlay = null;   // 互換のため保持（現在は未使用）
         this.captionEl = null;
         this._captionTimer = null;
@@ -437,7 +440,7 @@ export class SongTricktology extends BaseSong {
             vrm.scene.scale.setScalar(this.mikuScale);
             this.setupRelaxedPose(vrm);
             settleSpringBones(vrm);
-            this.cacheMaterials(vrm, this.mirrorMatCache);
+            this.applyMirrorSilhouette(vrm);
             this.lowerGroup.add(vrm.scene);
             console.log('[TRICKTOLOGY] Water Rin loaded.');
         });
@@ -459,6 +462,45 @@ export class SongTricktology extends BaseSong {
         for (let i = 0; i < cache.length; i++) {
             const e = cache[i];
             e.material.color.copy(e.baseColor).multiplyScalar(factor);
+        }
+    }
+
+    // 虚像（水面）のリンを Takeover 流のシルエットに置き換える。
+    // 元マテリアルは userData._origMat に退避し、破棄時に解放する。
+    applyMirrorSilhouette(vrm) {
+        if (!this.mirrorSilhouetteMat) {
+            this.mirrorSilhouetteMat = new THREE.MeshBasicMaterial({
+                color: this.silBaseColor.clone(),
+                transparent: true,
+                opacity: this.mirrorAlpha,
+                depthWrite: false,
+                blending: THREE.AdditiveBlending,
+            });
+        }
+        vrm.scene.traverse((o) => {
+            if (o.isMesh || o.isSkinnedMesh) {
+                if (o.userData._origMat === undefined) o.userData._origMat = o.material;
+                o.material = this.mirrorSilhouetteMat;
+            }
+        });
+    }
+
+    // 虚像シルエットの色・透明度を毎フレーム更新する。
+    // brightness: 水面世界の明るさ配分。collapseT: 選ばれなかった側の崩壊進捗。
+    updateMirrorSilhouette(brightness, collapseT, t) {
+        const m = this.mirrorSilhouetteMat;
+        if (!m) return;
+        const rejected = this.worldChosen === 'ground';
+        if (rejected) {
+            // 溶けゆく虚像：白く飛んで明滅しながら消える
+            const flick = 0.6 + 0.4 * Math.sin(t * 9);
+            const diss = this._dissolveCol || (this._dissolveCol = new THREE.Color('#dff3ff'));
+            m.color.copy(this.silBaseColor).lerp(diss, collapseT * 0.7 * flick);
+            m.opacity = Math.max(0, this.mirrorAlpha * (1 - collapseT));
+        } else {
+            // 水面世界の明るさに応じて、ほのかに濃淡をつける
+            m.color.copy(this.silBaseColor).multiplyScalar(0.65 + brightness * 0.5);
+            m.opacity = this.mirrorAlpha * (0.85 + Math.min(0.4, brightness * 0.3));
         }
     }
 
@@ -1336,7 +1378,7 @@ export class SongTricktology extends BaseSong {
         this.dirLight.intensity = 2.3 * groundB + 0.4;
         this.mirrorLight.intensity = 0.7 + 1.6 * Math.max(0, waterB - 0.45);
         if (this.realMatCache.length) this.applyWorldMaterial(this.realMatCache, 'ground', Math.max(0.05, groundB), collapseT, t);
-        if (this.mirrorMatCache.length) this.applyWorldMaterial(this.mirrorMatCache, 'water', Math.max(0.05, waterB * 0.95), collapseT, t);
+        this.updateMirrorSilhouette(Math.max(0.05, waterB * 0.95), collapseT, t);
 
         // ── VRM ──
         this._updateGroove(position, delta);
@@ -1552,6 +1594,11 @@ export class SongTricktology extends BaseSong {
         const leanZ = g.lean * 0.07 * energy;   // 体の傾き
         const dipY = g.hit * 0.06 * energy;     // 拍頭の縦のはずみ
 
+        // 世界が確定したら、残る側のリンが背中からこちらへ振り返る。
+        // collapseT(崩壊3秒)の前半1.2秒ぶんを smoothstep でなめらかに 0→1。
+        const turnRaw = this.worldChosen ? Math.min(1, collapseT / 0.4) : 0;
+        this.turnProgress = turnRaw * turnRaw * (3 - 2 * turnRaw);
+
         // 地上のリン
         if (this.realVRM) {
             const vrm = this.realVRM;
@@ -1565,6 +1612,8 @@ export class SongTricktology extends BaseSong {
             vrm.scene.position.x = swayX + (rejected ? Math.sin(t * 7) * wob : 0);
             vrm.scene.position.y = Math.sin(t * 0.9) * 0.02 - dipY;
             vrm.scene.rotation.z = leanZ + Math.sin(t * 0.5) * 0.01 + (rejected ? Math.sin(t * 6) * wob : 0);
+            // 現実が残るなら、背中(rot.y=0)からこちらへ振り返る
+            vrm.scene.rotation.y = (this.worldChosen === 'ground' ? this.turnProgress : 0) * Math.PI;
             vrm.update(delta);
         }
 
@@ -1601,6 +1650,8 @@ export class SongTricktology extends BaseSong {
                                  + (rejected ? Math.sin(t * 7) * wob * 3 : 0);
             vrm.scene.position.y = Math.sin(t * 0.9 + 0.6) * 0.02 + dipY;
             vrm.scene.rotation.z = Math.PI - leanZ + Math.sin(t * 0.6 + 1.2) * 0.015 + (rejected ? Math.sin(t * 6) * wob : 0);
+            // 虚像が残るなら、こちらへ振り返る
+            vrm.scene.rotation.y = (this.worldChosen === 'water' ? this.turnProgress : 0) * Math.PI;
             vrm.update(delta);
         }
     }
@@ -1624,13 +1675,20 @@ export class SongTricktology extends BaseSong {
         if (!vrm) return;
         vrm.scene.traverse((obj) => {
             if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                mats.forEach((m) => {
-                    if (m.map) m.map.dispose();
-                    m.dispose();
-                });
+            const mats = [];
+            // シルエット差し替えで退避した元マテリアルも解放する
+            if (obj.userData && obj.userData._origMat !== undefined) {
+                const om = obj.userData._origMat;
+                mats.push(...(Array.isArray(om) ? om : [om]));
             }
+            if (obj.material) {
+                mats.push(...(Array.isArray(obj.material) ? obj.material : [obj.material]));
+            }
+            mats.forEach((m) => {
+                if (!m || m === this.mirrorSilhouetteMat) return; // 共有材質は destroy 側で一度だけ解放
+                if (m.map) m.map.dispose();
+                m.dispose();
+            });
         });
     }
 
@@ -1700,6 +1758,10 @@ export class SongTricktology extends BaseSong {
         }
         this.realMatCache = [];
         this.mirrorMatCache = [];
+        if (this.mirrorSilhouetteMat) {
+            this.mirrorSilhouetteMat.dispose();
+            this.mirrorSilhouetteMat = null;
+        }
 
         if (this.choiceOverlay && this.choiceOverlay.parentNode) {
             this.choiceOverlay.parentNode.removeChild(this.choiceOverlay);
