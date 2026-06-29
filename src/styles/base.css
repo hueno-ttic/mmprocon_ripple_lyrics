@@ -21,6 +21,14 @@ body, html {
     font-family: var(--primary-font);
 }
 
+/* 裏リロード/チャンク復帰の直後だけ立つクラス(index.html 先頭の同期スクリプトが付与)。
+   body が描画される前に暗色へ固定し、上の空色グラデが最初の1フレーム覗くのを防ぐ。
+   復帰時はタイトルを挟まず暗転幕→湖へクロスフェードするので「黒いまま選曲画面へ」になる。 */
+html.boot-recover, html.boot-recover body {
+    background-color: #05070d !important;
+    background-image: none !important;
+}
+
 #app {
     width: 100vw;
     /* モバイルブラウザのアドレスバー/ツールバーで下端が隠れないよう、
