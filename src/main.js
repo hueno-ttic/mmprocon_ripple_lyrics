@@ -22,17 +22,24 @@ const TRICKTOLOGY_LEGACY = false;
 // こたえては現在ひまわり登攀版(song-kotaete.js)。true にすると水鏡版へいつでも戻せる
 // (song-kotaete.mizukagami.js)。どちらも class SongKotaete を export する。
 const KOTAETE_MIZUKAGAMI = false;
+// 各曲: チャンクを動的 import する load() と、その中から取り出す class 名。
+// あえてモジュール名前空間ごと受け取り、_loadSongClass 側で class を取り出す。
+// 本番ビルドでは Vite が vite:preloadError を握り潰してモジュールを undefined で
+// 解決することがある(主に再デプロイで消えた stale chunk)。.then(m => m.SongX) と
+// 即時に取り出すと undefined への参照で TypeError 化し、stale と判別できないまま
+// BaseSong(黒画面+白歌詞)へ落ちてしまう。モジュールを丸ごと受け取れば、
+// 「解決したが class が無い = 実質ロード失敗」を確実に検知してリトライ/案内できる。
 const SONG_LOADERS = {
-    kotaete: () => (KOTAETE_MIZUKAGAMI
+    kotaete: { load: () => (KOTAETE_MIZUKAGAMI
         ? import('./songs/song-kotaete.mizukagami.js')
-        : import('./songs/song-kotaete.js')).then(m => m.SongKotaete),
-    after: () => import('./songs/song-after.js').then(m => m.SongAfter),
-    shutter: () => import('./songs/song-shutter.js').then(m => m.SongShutter),
-    orchestra: () => import('./songs/song-orchestra.js').then(m => m.SongOrchestra),
-    tricktology: () => (TRICKTOLOGY_LEGACY
+        : import('./songs/song-kotaete.js')), cls: 'SongKotaete' },
+    after: { load: () => import('./songs/song-after.js'), cls: 'SongAfter' },
+    shutter: { load: () => import('./songs/song-shutter.js'), cls: 'SongShutter' },
+    orchestra: { load: () => import('./songs/song-orchestra.js'), cls: 'SongOrchestra' },
+    tricktology: { load: () => (TRICKTOLOGY_LEGACY
         ? import('./songs/song-tricktology.legacy.js')
-        : import('./songs/song-tricktology.js')).then(m => m.SongTricktology),
-    takeover: () => import('./songs/song-takeover.js').then(m => m.SongTakeover),
+        : import('./songs/song-tricktology.js')), cls: 'SongTricktology' },
+    takeover: { load: () => import('./songs/song-takeover.js'), cls: 'SongTakeover' },
 };
 import { TitleScreen } from './ui/TitleScreen.js';
 import { StoryIntro } from './ui/StoryIntro.js';
@@ -60,12 +67,33 @@ window.addEventListener('unhandledrejection', (event) => {
 // 再デプロイで内容ハッシュが変わると、古い index.html/main.js が参照する曲チャンク
 // (例: song-takeover-xxxx.js)はサーバーから消えており、その曲を選んだ瞬間に
 // 動的 import() が 404 になる(= "Failed to fetch dynamically imported module")。
-// 一度フルリロードすれば新しい index.html→新ハッシュを取り直して必ず復旧するので、
-// stale chunk を検知したら自動リロードする。曲チャンクは曲選択時(load より遥か後)に
-// 遅延ロードされるため、ガードは時刻ベースにする。直近に一度リロードしたばかりなら
-// 再発を「別要因」とみなして再リロードせず諦める(=無限ループ防止)。
-const RELOAD_GUARD_KEY = 'mm_chunk_reloaded_at';
-const RELOAD_GUARD_WINDOW_MS = 30 * 1000;
+// 復旧にはフルリロードで新しい index.html→新ハッシュを取り直す必要がある。
+// 「勝手にリロード」が問題になるのは没入中(ポーズ作成中など)に走る場合だが、
+// チャンク取得失敗は必ず「曲を選んだロード時=カーテンが閉じている瞬間」にしか起きず、
+// 没入中には発生しない。そこで自動リロードは _onSongChunkUnavailable に一本化し、
+// 曲選択時のチャンク失敗に限って即リロード→復帰させる(没入中には決して走らない)。
+// 復旧後はタイトル/プロローグを飛ばして選曲画面へ直帰し、さらに失敗した曲そのものを
+// 自動で読み直すため、ユーザーから見れば「一瞬の再読込のあとそのまま曲が始まる」。
+// 一方でバックグラウンドのプリロード失敗(vite:preloadError)はユーザー操作と無関係に
+// 走るため自動リロードせず、任意で押せる「更新」バナー(showManualUpdatePrompt)に委ねる。
+const RELOAD_RECOVER_KEY = 'mm_chunk_recovering';   // 立っていればリロード後にタイトルを飛ばす
+const RECOVER_SONG_KEY = 'mm_chunk_recover_song';   // 復帰後に自動で読み直す曲ID
+// 自動リロードのループ防止。直近にこの猶予内で一度リロード済みなら、再失敗しても
+// 「別要因」とみなしてもう自動リロードせず、エラー画面に切り替える。
+const RELOAD_RETRY_AT_KEY = 'mm_chunk_reload_at';
+const RELOAD_RETRY_WINDOW_MS = 30 * 1000;
+
+// 曲を次々に遊ぶと three.js/VRM/MMD/TextAlive のリソースが少しずつ積み上がり、
+// やがて描画が重くなる(特にスマホ)。確実なリセットはフルリロードだけなので、
+// 「湖へ戻る」瞬間(=カーテンが黒く覆っていてユーザーが何も操作していない間)に限り、
+// この曲数ごとに一度だけ裏でリロードしてリソースを解放する。0 にすると無効。
+// リロード後は復帰フラグでタイトルを飛ばし湖へ直帰するので、体感は黒い間の一瞬の間だけ。
+const RELOAD_AFTER_SONGS = 3;
+
+// 注: 裏リロード/チャンク復帰直後に body 既定の空色(base.css)が最初の1フレーム覗くのを
+// 防ぐ処理は index.html 先頭の同期スクリプト(<html>に boot-recover を付与)＋ base.css の
+// `html.boot-recover` ルールで、body が描画される前に暗色固定している。module スクリプトは
+// 最初のペイント後に実行されるためここでは塗らない(間に合わない)。
 
 function isStaleChunkError(err) {
     const msg = (err && (err.message || err.toString())) || '';
@@ -74,27 +102,64 @@ function isStaleChunkError(err) {
         || msg.includes('Importing a module script failed'); // Safari の同等メッセージ
 }
 
-function reloadOnceForStaleChunk() {
+// stale chunk を検知したときに一度だけ出す「更新」バナー。リロードは決して自動では
+// 行わず、ユーザーがこのバナーをタップした瞬間にだけ走る(=任意のタイミングで更新)。
+let manualUpdatePromptShown = false;
+function showManualUpdatePrompt() {
+    if (manualUpdatePromptShown) return;
+    manualUpdatePromptShown = true;
+    console.warn('[Ripple Lyrics] 古い曲チャンクを検出。更新バナーを表示します(自動リロードはしません)。');
     try {
-        const last = Number(sessionStorage.getItem(RELOAD_GUARD_KEY) || 0);
-        if (last && (Date.now() - last) < RELOAD_GUARD_WINDOW_MS) {
-            // ついさっきリロードしたのにまだ失敗する = 別要因。ループを避けて諦める。
-            console.error('[Ripple Lyrics] チャンク再取得後も失敗。自動リロードを中止します。');
-            return false;
-        }
-        sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
-    } catch (_) { /* sessionStorage 不可環境でもリロードは試みる */ }
-    console.warn('[Ripple Lyrics] 古い曲チャンクを検出。最新版を取り直すため再読み込みします。');
-    location.reload();
-    return true;
+        const bar = document.createElement('div');
+        bar.style.cssText = `
+            position: fixed; left: 50%;
+            bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+            transform: translateX(-50%) translateY(8px);
+            display: flex; align-items: center; gap: 14px;
+            padding: 10px 14px 10px 22px; border-radius: 24px;
+            font-family: 'Noto Sans JP', 'Inter', sans-serif;
+            font-size: 13px; letter-spacing: 0.06em; white-space: nowrap;
+            color: rgba(255,255,255,0.92); background: rgba(20,40,60,0.78);
+            border: 1px solid rgba(255,255,255,0.22);
+            -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+            z-index: 3000; opacity: 0;
+            transition: opacity 0.5s ease, transform 0.5s ease;
+        `;
+        const msg = document.createElement('span');
+        msg.textContent = '新しいバージョンがあります';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = '更新';
+        btn.style.cssText = `
+            font-family: inherit; font-size: 13px; font-weight: 700;
+            letter-spacing: 0.08em; color: #0b1a26;
+            padding: 7px 18px; border-radius: 18px; border: none;
+            background: rgba(255,255,255,0.92); cursor: pointer;
+            touch-action: manipulation;
+        `;
+        // ここだけがアプリ内で location.reload() を呼ぶ唯一の経路。必ずユーザー操作起点。
+        btn.addEventListener('click', () => {
+            try { sessionStorage.setItem(RELOAD_RECOVER_KEY, '1'); } catch (_) { /* storage不可でもリロードは試みる */ }
+            location.reload();
+        });
+        bar.appendChild(msg);
+        bar.appendChild(btn);
+        document.body.appendChild(bar);
+        requestAnimationFrame(() => {
+            bar.style.opacity = '1';
+            bar.style.transform = 'translateX(-50%) translateY(0)';
+        });
+    } catch (_) { /* バナー生成失敗は致命的でない */ }
 }
 
 // Vite が dynamic import を変換した際の標準プリロード失敗イベント。
-// 曲選択前にプリロードが走って失敗するケースもここで拾う。
+// プリロードはユーザーが曲を選ぶ前にバックグラウンドで走るため、ここで何かすると
+// 「選曲画面を眺めているだけ」で勝手に挙動が変わって見える。ここでは Vite 既定の
+// throw を抑止するだけに留め、実際の対応は曲を選んだ瞬間の import() 失敗
+// (switchToSongScene)側でリトライ→必要時のみ「更新」バナー、に集約する。
 window.addEventListener('vite:preloadError', (event) => {
     if (isStaleChunkError(event.payload)) {
-        event.preventDefault(); // Vite 既定の throw を抑止して自前でリロード
-        reloadOnceForStaleChunk();
+        event.preventDefault();
     }
 });
 
@@ -106,6 +171,9 @@ class Application {
     constructor() {
         this.lakeUI = null;
         this.currentSongScene = null;
+        // このページ読み込み以降に開いた曲数。RELOAD_AFTER_SONGS に達したら
+        // 「湖へ戻る」瞬間に裏リロードしてリソースをリセットする(リロードで0に戻る)。
+        this._songsSinceLoad = 0;
         this.playerControls = null;
         this.sceneContainer = document.getElementById('scene-container');
     }
@@ -152,27 +220,49 @@ class Application {
         const seenIntro = localStorage.getItem('mm_seen_intro') === '1';
         const skipParam = new URLSearchParams(location.search).get('skipIntro') === '1';
 
-        // Start Entry Sequence
-        const titleScreen = new TitleScreen(() => {
-            // タイトル通過後から音量コントロールを表示
+        // 「更新」バナーのタップ、または曲選択時のチャンク失敗による自動リロードで
+        // 戻ってきた直後か?(復帰フラグが立っている)。その場合はタイトル/プロローグを
+        // 一切挟まず選曲画面へ直帰し、さらに失敗していた曲があればそのまま自動で開き直す
+        // (=「選曲したらタイトルに飛ばされた/選び直し」という断絶を感じさせない)。
+        let recovering = false;
+        let recoverSongId = null;
+        try {
+            recovering = sessionStorage.getItem(RELOAD_RECOVER_KEY) === '1';
+            if (recovering) sessionStorage.removeItem(RELOAD_RECOVER_KEY);
+            recoverSongId = sessionStorage.getItem(RECOVER_SONG_KEY);
+            if (recoverSongId) sessionStorage.removeItem(RECOVER_SONG_KEY);
+        } catch (_) { /* sessionStorage 不可環境では通常フローへ */ }
+
+        if (recovering) {
+            // 音量コントロールを表示して即・選曲画面へ。リロードの理由をさりげなく伝える。
             this.volumeControl.show();
+            initWorld();
+            this.showRecoveryToast();
+            // 自動リロード前に開こうとしていた曲があれば、選び直さず自動で開き直す。
+            if (recoverSongId) this._resumeSongAfterRecover(recoverSongId);
+        } else {
+            // Start Entry Sequence
+            const titleScreen = new TitleScreen(() => {
+                // タイトル通過後から音量コントロールを表示
+                this.volumeControl.show();
 
-            if (seenIntro || skipParam) {
-                // プロローグをスキップして即・選曲画面へ
-                initWorld();
-                return;
-            }
+                if (seenIntro || skipParam) {
+                    // プロローグをスキップして即・選曲画面へ
+                    initWorld();
+                    return;
+                }
 
-            // 初回はプロローグを流し、完了時に視聴済みフラグを立てる
-            const storyIntro = new StoryIntro(() => {
-                try {
-                    localStorage.setItem('mm_seen_intro', '1');
-                } catch (e) { /* storage失敗は致命的でない */ }
-                initWorld();
+                // 初回はプロローグを流し、完了時に視聴済みフラグを立てる
+                const storyIntro = new StoryIntro(() => {
+                    try {
+                        localStorage.setItem('mm_seen_intro', '1');
+                    } catch (e) { /* storage失敗は致命的でない */ }
+                    initWorld();
+                });
+                storyIntro.start();
             });
-            storyIntro.start();
-        });
-        titleScreen.start();
+            titleScreen.start();
+        }
 
         // ── DEBUG MODE ──
         // デプロイで開発者向け機能が有効(DEV_TOOLS_ENABLED)なビルドに限り、?debug=1 で起動。
@@ -280,9 +370,14 @@ class Application {
         eventBus.on('backToLake', ({ markComplete = false } = {}) => {
             // Fade to the curtain, swap the song scene out for the world, fade back.
             screenFade.cover(() => {
+                const wasAllComplete = appState.areAllSongsComplete();
                 if (markComplete && appState.currentSongId) {
                     appState.markSongComplete(appState.currentSongId);
                 }
+                // この復帰で通常曲を全クリアした瞬間だけは、全曲制覇の祝福
+                // (CompletionScreen)を潰さないよう裏リロードを見送る。
+                const justCompletedAll = !wasAllComplete && appState.areAllSongsComplete();
+
                 appState.setCurrentSong(null);
                 appState.setLoading(false);
 
@@ -293,6 +388,16 @@ class Application {
 
                 document.body.style.backgroundImage = '';
                 document.body.style.backgroundColor = '';
+
+                // 累積で重くなる前に、カーテンが覆っている黒い間に裏リロードして
+                // 全リソース(three.js/VRM/MMD/TextAlive)を一掃する。リロード後は
+                // 復帰フラグでタイトルを飛ばし湖へ直帰するので、体感は黒い間の一瞬だけ。
+                if (!justCompletedAll && this._shouldBackgroundReload()) {
+                    console.warn('[Ripple Lyrics] 区切りで裏リロードしてリソースをリセットします');
+                    location.reload();
+                    return; // この後の lakeUI.show() は不要(リロードする)
+                }
+
                 this.lakeUI.show();
             }, { out: 450, in: 650 });
         });
@@ -306,8 +411,16 @@ class Application {
         const isKotaete = appState.currentSongId === 'kotaete';
 
         const overlay = document.createElement('div');
+        // 背景は半透明(0.7)止まりなので、下端フッターの再生シークバー(z-index:10)は
+        // この上に重ねたリザルトの背後で透けて見える。中央寄せのままだと画面の低い
+        // スマホ(特に横持ち)で「楽曲選択画面へ」ボタンや成果サマリーがシークバー帯と
+        // 重なってしまうため、上下にフッター/ヘッダー帯ぶんのパディングを確保して
+        // 中央寄せ領域そのものを安全域へ押し込み、ボタンが絶対にシークバーへ被らないようにする。
         overlay.style.cssText = `
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            box-sizing: border-box;
+            padding-top: calc(96px + env(safe-area-inset-top, 0px));
+            padding-bottom: calc(112px + env(safe-area-inset-bottom, 0px));
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
             background: rgba(0,0,0,0);
@@ -439,23 +552,186 @@ class Application {
         const token = (this._sceneToken = (this._sceneToken || 0) + 1);
 
         let SongClass = BaseSong;
-        const loader = SONG_LOADERS[songConfig.id];
-        if (loader) {
-            try {
-                SongClass = await loader();
-            } catch (err) {
-                console.error(`[Ripple Lyrics] 曲チャンクのロードに失敗: ${songConfig.id}`, err);
-                // 再デプロイでハッシュが切れた古いチャンクなら、一度リロードすれば復旧する。
-                // (BaseSong フォールバックで無言に壊すより、最新版で正しく遊ばせる)
-                if (isStaleChunkError(err) && reloadOnceForStaleChunk()) return;
-                SongClass = BaseSong;
+        const entry = SONG_LOADERS[songConfig.id];
+        if (entry) {
+            const Loaded = await this._loadSongClass(entry, songConfig.id);
+            // ロード中に別の曲へ切り替わっていたら、この結果は捨てる
+            if (token !== this._sceneToken) return;
+            if (!Loaded) {
+                // 実曲のシーンチャンクをどうしても取得できなかった。BaseSong の
+                // 「黒画面+白い歌詞だけ」という壊れて見える状態は絶対に見せず、
+                // カーテンを開けて明示的な復帰導線(再読み込み/湖へ戻る)を出す。
+                this._onSongChunkUnavailable(songConfig);
+                return;
             }
+            SongClass = Loaded;
+        } else if (token !== this._sceneToken) {
+            return;
         }
-        // ロード中に別の曲へ切り替わっていたら、この結果は捨てる
-        if (token !== this._sceneToken) return;
 
+        // 曲のロードに成功した = 自動リロードのループ防止ガードはもう不要。解除して、
+        // 以後また別の曲が stale で失敗したら改めて自動リロードで復帰できるようにする。
+        try { sessionStorage.removeItem(RELOAD_RETRY_AT_KEY); } catch (_) { /* 解除失敗は無害 */ }
+
+        this._songsSinceLoad++; // 累積リソースの目安(裏リロード判定に使う)
         this.currentSongScene = new SongClass(this.sceneContainer, songConfig.id);
         this.currentSongScene.init();
+    }
+
+    // 自動リロード復帰後、失敗した曲を「選曲し直さなくても」そのまま開き直す。
+    // 湖(WorldUI)の生成完了をポーリングで待ってから、通常の選曲導線に乗せる。
+    _resumeSongAfterRecover(songId) {
+        const song = SONGS.find(s => s.id === songId);
+        if (!song) return;
+        let tries = 0;
+        const tick = () => {
+            tries++;
+            const lake = this.lakeUI;
+            if (lake && Array.isArray(lake.songs)) {
+                const idx = lake.songs.findIndex(s => s.id === songId);
+                if (idx >= 0 && typeof lake.selectSong === 'function') {
+                    lake.selectSong(lake.songs[idx], idx); // 通常と同じ導線で開く
+                    return;
+                }
+                // 解放状態の都合でリスト未掲載なら、湖に留めておく(無理に開かない)
+                if (idx < 0) return;
+            }
+            if (tries < 60) setTimeout(tick, 200); // 最大~12秒待って諦める
+        };
+        setTimeout(tick, 300);
+    }
+
+    // 「湖へ戻る」瞬間に裏リロードすべきか。曲数が閾値に達していて、かつ復帰フラグを
+    // 残せる(sessionStorage が使える)ときだけ true。フラグを残せない環境でリロードすると
+    // タイトルへ送られてしまうため、その場合はリロードしない(安全側)。判定が true のときは
+    // 復帰フラグもこの中で立てる(呼び出し側はそのまま location.reload() するだけでよい)。
+    _shouldBackgroundReload() {
+        if (!RELOAD_AFTER_SONGS || (this._songsSinceLoad || 0) < RELOAD_AFTER_SONGS) return false;
+        try {
+            sessionStorage.setItem(RELOAD_RECOVER_KEY, '1'); // 復帰後タイトル/プロローグを飛ばす
+        } catch (_) {
+            return false; // 復帰フラグを残せない=リロードするとタイトル送りになるので諦める
+        }
+        // RECOVER_SONG_KEY は立てない=曲ではなく湖(選曲画面)に留まる。
+        return true;
+    }
+
+    // 曲シーンチャンクが取得できなかったときの復帰導線。BaseSong フォールバックの
+    // 黒画面+白歌詞は絶対に出さない。チャンク失敗は曲選択時(カーテンが閉じている=
+    // 没入していない瞬間)にしか起きないので、ここでは即・自動リロードして最新の
+    // index.html→新ハッシュを取り直す。復帰フラグと対象曲IDを残し、リロード後は
+    // タイトルを飛ばして「失敗した曲」へそのまま自動復帰する(タイトルに戻らない)。
+    // ただし直近にこの猶予内で一度リロード済みなら、再失敗は別要因とみなしてループを
+    // 避け、自動リロードせずエラー画面(再読み込み/湖へ戻る)に切り替える。
+    _onSongChunkUnavailable(songConfig) {
+        this._revealOnLoad = false; // TextAlive 側のロード完了で勝手にカーテンを開けない
+
+        let recentlyReloaded = false;
+        try {
+            const last = Number(sessionStorage.getItem(RELOAD_RETRY_AT_KEY) || 0);
+            recentlyReloaded = last > 0 && (Date.now() - last) < RELOAD_RETRY_WINDOW_MS;
+        } catch (_) { /* sessionStorage 不可環境ではエラー画面側へ倒す */ }
+
+        if (!recentlyReloaded) {
+            // 曲選択時の stale chunk → シームレスに自動リロードして同じ曲へ復帰。
+            try {
+                sessionStorage.setItem(RELOAD_RETRY_AT_KEY, String(Date.now()));
+                sessionStorage.setItem(RELOAD_RECOVER_KEY, '1');
+                sessionStorage.setItem(RECOVER_SONG_KEY, songConfig.id);
+            } catch (_) { /* storage不可でもリロードは試みる */ }
+            console.warn(`[Ripple Lyrics] 曲チャンク失敗→自動リロードで復帰します: ${songConfig.id}`);
+            location.reload();
+            return;
+        }
+
+        // リロード後もまだ失敗 = 別要因。黒画面は出さずエラー画面で導く。
+        console.error(`[Ripple Lyrics] 再読み込み後も曲チャンクを取得できませんでした: ${songConfig.id}`);
+        screenFade.fadeIn(400);     // カーテンを開けてエラー画面(z3400)を見せる
+        this.errorScreen.show({
+            title: '曲を読み込めませんでした',
+            message: '通信環境をご確認のうえ、再読み込みしてもう一度お試しください。',
+            actions: [
+                { label: '再読み込み', primary: true, onClick: () => {
+                    try {
+                        sessionStorage.setItem(RELOAD_RECOVER_KEY, '1');
+                        sessionStorage.setItem(RECOVER_SONG_KEY, songConfig.id);
+                        sessionStorage.removeItem(RELOAD_RETRY_AT_KEY); // 手動操作なのでガードは解除
+                    } catch (_) { /* storage不可でもリロードは試みる */ }
+                    location.reload();
+                } },
+                { label: '湖へ戻る', onClick: () => eventBus.emit('backToLake', { markComplete: false }) },
+            ],
+        });
+    }
+
+    // 曲チャンクを動的ロードして class を返す。電波の瞬断・プリロード競合など一過性の
+    // 失敗は数回リトライすれば回復するため、stale 判定に関わらず毎回リトライする
+    // (以前は stale 以外を即諦めて BaseSong に落とし、黒画面+白歌詞を招いていた)。
+    // 本番ビルドでは Vite が vite:preloadError を握り潰してモジュールを undefined で
+    // 解決することがある(主に stale chunk)。その場合 mod から class を取り出せない
+    // ので、これも「実質ロード失敗」として扱う。最終的に取得できなければ null を返し、
+    // 呼び出し側で BaseSong を見せずエラー画面へ導く。
+    async _loadSongClass(entry, songId) {
+        const MAX_ATTEMPTS = 3;
+        const RETRY_BASE_MS = 500;
+        let lastErr = null;
+        let sawStale = false;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                const mod = await entry.load();
+                const SongClass = mod ? mod[entry.cls] : undefined;
+                if (typeof SongClass === 'function') return SongClass;
+                // モジュールは解決したが class が取れない = Vite が握り潰した stale chunk の疑い。
+                sawStale = true;
+                lastErr = new Error(`song module resolved without "${entry.cls}": ${songId}`);
+                console.warn(`[Ripple Lyrics] 曲チャンクの内容が空でした (${attempt}/${MAX_ATTEMPTS}): ${songId}`);
+            } catch (err) {
+                lastErr = err;
+                if (isStaleChunkError(err)) sawStale = true;
+                console.warn(`[Ripple Lyrics] 曲チャンク取得に失敗 (${attempt}/${MAX_ATTEMPTS}): ${songId}`, err);
+            }
+            if (attempt < MAX_ATTEMPTS) {
+                await new Promise(r => setTimeout(r, RETRY_BASE_MS * attempt));
+            }
+        }
+        console.error(`[Ripple Lyrics] 曲チャンクのロードに失敗: ${songId}`, lastErr);
+        // 再デプロイでハッシュが切れた古いチャンクなら、フルリロードで最新版を取り直せば
+        // 復旧する。「更新」バナーも併せて出し、リロードのタイミングをユーザーに委ねる
+        // (自動リロードは没入を壊すのでしない)。実体の復帰導線は呼び出し側のエラー画面。
+        if (sawStale) showManualUpdatePrompt();
+        return null;
+    }
+
+    // 復旧リロード後に「なぜ一瞬再読み込みされたか」をさりげなく伝える控えめなトースト。
+    // 数秒で自動的に消える。失敗しても致命的でないため握り潰す。
+    showRecoveryToast() {
+        try {
+            const toast = document.createElement('div');
+            toast.textContent = '最新版に更新しました';
+            toast.style.cssText = `
+                position: fixed; left: 50%;
+                bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+                transform: translateX(-50%) translateY(8px);
+                padding: 10px 22px; border-radius: 22px;
+                font-family: 'Noto Sans JP', 'Inter', sans-serif;
+                font-size: 13px; letter-spacing: 0.08em; white-space: nowrap;
+                color: rgba(255,255,255,0.92); background: rgba(20,40,60,0.72);
+                border: 1px solid rgba(255,255,255,0.22);
+                -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+                z-index: 3000; opacity: 0; pointer-events: none;
+                transition: opacity 0.5s ease, transform 0.5s ease;
+            `;
+            document.body.appendChild(toast);
+            requestAnimationFrame(() => {
+                toast.style.opacity = '1';
+                toast.style.transform = 'translateX(-50%) translateY(0)';
+            });
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateX(-50%) translateY(8px)';
+                setTimeout(() => { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 600);
+            }, 2600);
+        } catch (_) { /* トースト失敗は無視 */ }
     }
 }
 

@@ -11,6 +11,13 @@
     <link rel="stylesheet" href="/src/styles/base.css">
     <link rel="stylesheet" href="/src/styles/theme.css">
     <link rel="stylesheet" href="/src/styles/responsive.css">
+    <script>
+      // 裏リロード/チャンク復帰の直後は、body 既定の空色グラデ(base.css)が最初の1フレーム
+      // 覗くのを防ぐ。body が描画される前のこの同期スクリプトで <html> にクラスを付け、
+      // base.css の html.boot-recover ルールで暗色に固定する(キーは main.js の
+      // RELOAD_RECOVER_KEY と一致させること)。フラグ自体は main.js 側で消費する。
+      try { if (sessionStorage.getItem('mm_chunk_recovering') === '1') document.documentElement.classList.add('boot-recover'); } catch (e) {}
+    </script>
 </head>
 <body>
     <div id="app">
