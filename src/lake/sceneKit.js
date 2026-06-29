@@ -151,9 +151,24 @@ export function addClouds(parent, defs, o = {}) {
 export function addWater(parent, o = {}) {
     const { w = 36, len = 150, cz = -30, y = 0.06, dpr = 2, mirrorColor = 0x1d3a57, segW = 48, segL = 110,
         colors, opacity = 0.74, roughness = 0.36, metalness = 0.14 } = o;
-    const texSize = isMobile() ? 512 : Math.min(1024 * dpr, 2048);
+    // 反射はぼやけた水面なので高解像度は要らない。塗りピクセルは解像度の二乗で
+    // 効くため、デスクトップでも 768 に固定して反射レンダの fillrate を大きく削る
+    // (旧: 最大2048²)。選曲ハブは滞在が長く、ここの軽さが体感FPSに直結する。
+    const texSize = isMobile() ? 512 : 768;
     const mirror = new Reflector(new THREE.PlaneGeometry(w, len), { clipBias: 0.004, textureWidth: texSize, textureHeight: texSize, color: mirrorColor });
     mirror.rotateX(-Math.PI / 2); mirror.position.set(o.x ?? 0, y - 0.08, cz); parent.add(mirror);
+
+    // 反射の更新間引き(B): Reflector はフレーム毎にシーン全体をもう一度
+    // レンダしてしまう。選曲ハブのカメラは微かにドリフトするだけなので、
+    // 反射を毎フレーム更新する必要はない。3フレームに1回だけ再レンダし、
+    // 残りは直前の反射テクスチャを使い回す(見た目はほぼ不変・コスト約1/3)。
+    const REFLECT_EVERY = 3;
+    let _reflFrame = 0;
+    const _origOnBeforeRender = mirror.onBeforeRender;
+    mirror.onBeforeRender = function () {
+        if ((_reflFrame++ % REFLECT_EVERY) !== 0) return; // この回は反射を更新しない(前回分を流用)
+        _origOnBeforeRender.apply(this, arguments);
+    };
     const geo = new THREE.PlaneGeometry(w, len, segW, segL); geo.rotateX(-Math.PI / 2);
     let mat;
     if (colors) {

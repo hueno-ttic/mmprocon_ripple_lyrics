@@ -2,6 +2,7 @@ import { appState } from './core/appState.js';
 import { eventBus } from './core/eventBus.js';
 import { playerManager } from './core/player.js';
 import { WorldUI } from './lake/WorldUI.js';
+import { clearRipples } from './lake/lakeMemory.js';
 import { PlayerControls } from './ui/PlayerControls.js';
 import { VolumeControl } from './ui/VolumeControl.js';
 import { SONGS } from './config/songs.js';
@@ -370,6 +371,10 @@ class Application {
         eventBus.on('backToLake', ({ markComplete = false } = {}) => {
             // Fade to the curtain, swap the song scene out for the world, fade back.
             screenFade.cover(() => {
+                // 曲を抜けるたびに使い捨ての堆積データを掃除して localStorage を肥大させない。
+                // シャッターチャンスの写真(波紋)は再利用しないので、選択画面へ戻る時点で破棄する。
+                clearRipples();
+
                 const wasAllComplete = appState.areAllSongsComplete();
                 if (markComplete && appState.currentSongId) {
                     appState.markSongComplete(appState.currentSongId);
