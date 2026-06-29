@@ -15,8 +15,9 @@ class PlayerManager {
     }
 
     init(mediaElement) {
-        const token = import.meta.env.VITE_TEXTALIVE_TOKEN;
-        const appConfig = token ? { token: token } : true;
+        // コンテスト提出用: 環境(.env)に依存せず常にこのトークンで動くよう直接埋め込む。
+        const token = 'XrbFND6w6SNKZezs';
+        const appConfig = { token: token };
 
         this.player = new Player({
             app: appConfig,

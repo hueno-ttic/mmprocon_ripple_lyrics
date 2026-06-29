@@ -533,6 +533,16 @@ export class SongShutter extends BaseSong {
             slider.addEventListener('input', this.boundOnSliderInput);
         }
 
+        // ズーム +/- トグルボタン。スライダー値域(1.2〜3.2)内で1タップ0.3刻み。
+        // targetZoom はスライダーと双方向バインド済みなのでツマミも自動追随する。
+        const stepZoom = (delta) => {
+            this.targetZoom = Math.min(3.2, Math.max(1.2, this.targetZoom + delta));
+        };
+        const zoomInBtn = document.getElementById('shutter-zoom-in');
+        const zoomOutBtn = document.getElementById('shutter-zoom-out');
+        if (zoomInBtn) zoomInBtn.addEventListener('click', () => stepZoom(0.3));
+        if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => stepZoom(-0.3));
+
         // ポーズ作成エディタを用意し、「かわいいポーズ」バー（プリセット＋マイポーズ＋作る）を構築。
         // バーの中身は refreshPoseBar() に集約（保存/削除のたびに再生成・再バインドする）。
         this.poseEditor = new ShutterPoseEditor(this);
@@ -1645,6 +1655,42 @@ export class SongShutter extends BaseSong {
                 cursor: pointer;
                 box-shadow: 0 0 8px #FFEE11;
             }
+            /* タッチ端末(スマホ・タブレット)では指で押しやすいよう拡大縮小トグルを大きくする。
+               +/- ボタンは最小44pxの指タップ域を確保し、スライダーは透明な幅広トラックで
+               当たり判定を広げつつ中央に細い見た目のレールとイエローの大ツマミを描画する。 */
+            @media (pointer: coarse) {
+                .shutter-zoom-btn {
+                    min-width: 48px;
+                    min-height: 48px;
+                    font-size: 26px !important;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    border-radius: 12px !important;
+                    background: rgba(185, 84, 60, 0.18) !important;
+                    border: 1px solid rgba(185, 84, 60, 0.5) !important;
+                }
+                .shutter-zoom-btn:active {
+                    background: rgba(255, 238, 17, 0.35) !important;
+                }
+                #shutter-zoom-slider {
+                    width: 44px !important;
+                    background:
+                        linear-gradient(to right, transparent calc(50% - 3px),
+                            rgba(185, 84, 60, 0.5) calc(50% - 3px),
+                            rgba(185, 84, 60, 0.5) calc(50% + 3px),
+                            transparent calc(50% + 3px)) !important;
+                    border: none !important;
+                }
+                #shutter-zoom-slider::-webkit-slider-thumb {
+                    width: 34px;
+                    height: 34px;
+                }
+                #shutter-zoom-slider::-moz-range-thumb {
+                    width: 34px;
+                    height: 34px;
+                }
+            }
             /* --- シャッターチャンス: 終盤フィナーレ（コンタクトシート集約） --- */
             #shutter-contactsheet {
                 position: absolute;
@@ -2034,9 +2080,10 @@ export class SongShutter extends BaseSong {
             <!-- NOW! Lock Cue (AFロック圏内で「今撮ると高得点」を直感させる合図) -->
             <div id="shutter-now-cue" style="position: absolute; top: calc(50% - 64px); left: 50%; transform: translate(-50%, -50%) scale(0.6); font-family: 'Inter', monospace; font-size: 30px; font-weight: 900; color: #22FF66; opacity: 0; letter-spacing: 4px; text-shadow: 0 0 12px #22FF66, 0 0 26px #00ff88; pointer-events: none; transition: opacity 0.12s ease, transform 0.12s ease;">NOW!</div>
 
-            <!-- Vertical Zoom Slider (Right Side) -->
+            <!-- Vertical Zoom Slider (Right Side)。+/- は実際に押せるトグルボタン。
+                 スマホ・タブレット(coarse pointer)では指タップ域を大きく広げる(injectCustomStyles) -->
             <div style="position: absolute; right: 200px; top: 50%; transform: translateY(-50%); height: 250px; display: flex; flex-direction: column; align-items: center; justify-content: space-between; pointer-events: auto; z-index: 35;" id="shutter-zoom-slider-container">
-                <span style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; user-select: none;">[+]</span>
+                <button type="button" id="shutter-zoom-in" class="shutter-zoom-btn" aria-label="ズームイン" style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; background: none; border: none; cursor: pointer; padding: 0; user-select: none; touch-action: manipulation;">[+]</button>
                 <input type="range" id="shutter-zoom-slider" min="1.2" max="3.2" step="0.01" value="2.2" style="
                     -webkit-appearance: none;
                     appearance: none;
@@ -2051,7 +2098,7 @@ export class SongShutter extends BaseSong {
                     -webkit-writing-mode: vertical-lr;
                     direction: rtl;
                 ">
-                <span style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; user-select: none;">[-]</span>
+                <button type="button" id="shutter-zoom-out" class="shutter-zoom-btn" aria-label="ズームアウト" style="color: ${this.themeColor}; font-family: monospace; font-size: 14px; font-weight: bold; text-shadow: 0 0 4px ${this.themeColor}; background: none; border: none; cursor: pointer; padding: 0; user-select: none; touch-action: manipulation;">[-]</button>
             </div>
 
             <!-- かわいいポーズ・バー（中身は refreshPoseBar() が生成: プリセット＋マイポーズ＋「作る」） -->
