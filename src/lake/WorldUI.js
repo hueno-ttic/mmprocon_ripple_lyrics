@@ -654,6 +654,8 @@ export class WorldUI {
             this.labelsContainer.style.display = 'none';
             if (this.selectionPanel) this.selectionPanel.style.display = 'none';
             if (this.thumbCard) this.thumbCard.style.display = 'none';
+            // 背景セレクタは選曲画面専用。曲本編に入る間は隠す(show()で再表示)。
+            if (this.bgSelectWrap) { this._closeBgMenu(); this.bgSelectWrap.style.display = 'none'; }
             if (this._endingTimeout) clearTimeout(this._endingTimeout);
             if (this._endingRemoveTimeout) clearTimeout(this._endingRemoveTimeout);
             if (this.ending?.parentNode) {
