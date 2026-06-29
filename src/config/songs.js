@@ -97,7 +97,7 @@ export const SONGS = [
       lyricId: 126594,
       lyricDiffId: 28629
     },
-    themeQuestion: '空はどんな色？あなたはどんなカタチ？',
+    themeQuestion: '空はどんな色？<br>あなたはどんなカタチ？',
     color: '#185FA5',
     thumbnail: 'assets/thumbnails/orchestra.jpg',
     waterBehavior: 'evaporate',
