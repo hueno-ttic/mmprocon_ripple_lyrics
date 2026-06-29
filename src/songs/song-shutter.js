@@ -6,7 +6,7 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
 import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
-import { ShutterPoseEditor, loadUserPoses, saveUserPoses } from './shutterPoseEditor.js';
+import { ShutterPoseEditor, loadUserPoses, saveUserPoses, BASE_POSE as POSE_EDITOR_BASE } from './shutterPoseEditor.js';
 import { addRipple } from '../lake/lakeMemory.js';
 
 // 「湖／水の循環」要素のオン/オフを束ねる単一フラグ。
@@ -165,6 +165,23 @@ const RELAX_IDLE_BONES = (() => {
         if (k !== 'expr' && !GESTURE_DRIVEN_ARM_BONES.has(k)) set.add(k);
     }));
     return [...set];
+})();
+
+// キメポーズの「入り」で全身を寄せる基準テンプレート。エディタの BASE_POSE(=プレビューの
+// 土台。腕は z:±1.12 等の自然な下ろし)に、プリセットが動かす髪等の非ヒューマノイドボーンの
+// 中立(0)を足したもの。各ポーズが定義しないボーンも必ずこの基準へ寄せることで、直前のポーズや
+// 待機グルーヴの残り(肘・手首など)に依存せず、毎回エディタのプレビューと同じ形へ決定論的に
+// 収束する。→「ジャンプは上腕しか定義しないのに前腕が前姿勢のまま残って腕角度が崩れる」類の
+// 不具合(定義ボーン依存のバラつき)を根絶する。
+const POSE_ENTRY_BASE = (() => {
+    const out = {};
+    Object.keys(POSE_EDITOR_BASE).forEach((k) => {
+        if (k !== 'expr') out[k] = POSE_EDITOR_BASE[k];
+    });
+    SHUTTER_CUTE_POSES.forEach((p) => Object.keys(p.pose || {}).forEach((k) => {
+        if (k !== 'expr' && !(k in out)) out[k] = { x: 0, y: 0, z: 0 };
+    }));
+    return out;
 })();
 
 // 「シャッターチャンス」の歌詞フレーズインデックスに対する100%正確な歌唱パートマッピング
@@ -821,6 +838,38 @@ export class SongShutter extends BaseSong {
             bone.rotation.x += (targetX - bone.rotation.x) * t;
             bone.rotation.y += (targetY - bone.rotation.y) * t;
             bone.rotation.z += (targetZ - bone.rotation.z) * t;
+        });
+    }
+
+    // キメポーズを「全身ぶんの完全なポーズ」へ展開する。基準テンプレート(POSE_ENTRY_BASE)へ
+    // ポーズの定義ボーンを上書き＝未定義ボーンも基準姿勢へ明示的に寄せるための目標を作る。
+    // これでエディタのプレビュー(mergePose(BASE_POSE, pose))と実機のキメポーズが一致し、
+    // 直前のポーズ/待機の残りに依存しない決定論的な形になる。expr は対象外(別経路で適用)。
+    buildFullPose(pose) {
+        const full = {};
+        for (const k in POSE_ENTRY_BASE) full[k] = POSE_ENTRY_BASE[k];
+        if (pose) for (const k in pose) { if (k !== 'expr') full[k] = pose[k]; }
+        return full;
+    }
+
+    // 目標ポーズへクォータニオン球面補間(slerp)で寄せる。オイラー各軸の直線補間と違い、
+    // 上腕の大回転(ジャンプの x≈-π 等)でも最短弧で素直に回るため、入りの途中で腕が
+    // ねじれて変な角度を通る不具合が出ない。t>=1 で目標へ完全一致(スナップ)。
+    slerpSubjectPose(subject, pose, t) {
+        if (!subject.mesh) return;
+        const e = this._poseEuler || (this._poseEuler = new THREE.Euler());
+        const q = this._poseQuat || (this._poseQuat = new THREE.Quaternion());
+        Object.keys(pose).forEach((boneName) => {
+            const bone = this.getMMDBone(subject, boneName);
+            if (!bone) return;
+            let tz = pose[boneName].z;
+            // MMDの初期Aポーズ補正(lerpSubjectPose と同一)
+            if (boneName === 'leftUpperArm') tz -= 0.5;
+            else if (boneName === 'rightUpperArm') tz += 0.5;
+            e.set(pose[boneName].x, pose[boneName].y, tz, bone.rotation.order);
+            q.setFromEuler(e);
+            if (t >= 1) bone.quaternion.copy(q);
+            else bone.quaternion.slerp(q, t);
         });
     }
 
@@ -2777,17 +2826,24 @@ export class SongShutter extends BaseSong {
                         this.relaxIdleBones(subject, 0.35);
                     } else {
                         // リセット相を抜けたら、ここから実ポーズの「入り」を開始する。
-                        if (ov.resetUntil) { ov.resetUntil = 0; ov.startedAt = performance.now(); }
-                        // キメポーズは「入りだけ補間＋クランプ」、決まったら凍結＝固定する。
-                        // 毎フレーム補間とクランプを続けると、肘がクランプ楕円の境界にある時に
-                        // 押し戻し⇔補間の引っ張り合いで上腕がプルプル振動する。一定時間で凍結し根絶。
+                        if (ov.resetUntil) { ov.resetUntil = 0; ov.startedAt = performance.now(); ov.settled = false; }
+                        // 目標は「全身ぶんの完全なポーズ」(基準姿勢へ当該ポーズを重ねたもの)。
+                        // 未定義ボーンも基準へ寄せるので、前ポーズ/待機の残りに依らず形が一定になる。
+                        const target = ov.fullPose || (ov.fullPose = this.buildFullPose(ov.pose));
                         const elapsed = performance.now() - (ov.startedAt || 0);
-                        if (elapsed < 420) {
-                            // 入り: 素早く寄せつつ貫通をクランプで補正（この区間だけ動く）
-                            this.lerpSubjectPose(subject, ov.pose, 0.34);
+                        if (elapsed < 320) {
+                            // 入り: クォータニオンslerpで最短弧を滑らかに。大回転(ジャンプの上腕等)でも
+                            // 腕がねじれた角度を通らない。swing中はクランプしない＝楕円を横切る瞬間の
+                            // 押し出しが累積して最終的な腕角度を狂わせるのを防ぐ。
+                            this.slerpSubjectPose(subject, target, 0.28);
+                        } else if (!ov.settled) {
+                            // 入り完了: 目標へスナップ→一度だけ貫通クランプ(エディタのプレビューと一致)
+                            // →以後は凍結＝かっちり静止。クランプを毎フレーム続けないので振動も出ない。
+                            this.slerpSubjectPose(subject, target, 1);
                             this.clampArmsWorld(subject);
+                            ov.settled = true;
                         }
-                        // elapsed>=420ms: 何もしない＝最後の補正済みポーズで固定（振動なし）
+                        // settled後: 何もしない＝補正済みポーズで固定（振動なし）
                     }
                 } else {
                     const gesture = this.idleGesture();

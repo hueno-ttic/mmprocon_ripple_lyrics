@@ -55,7 +55,9 @@ const DEFAULT_CLAMP = { x: R(-1.0, 1.0), y: R(-1.0, 1.0), z: R(-1.0, 1.0) };
 
 // 編集開始時の基本姿勢(リラックス立ち)。土台プリセット未選択時の初期値。
 // ここに全編集ボーンを列挙しておくことで「リセット」や土台切替時に確実に初期化される。
-const BASE_POSE = {
+// song-shutter.js もキメポーズの「入り」で同じ基準として使う(エディタのプレビューと
+// 実機のキメポーズを一致させるため)。
+export const BASE_POSE = {
   spine: { x: 0, y: 0, z: 0 }, chest: { x: 0, y: 0, z: 0 }, neck: { x: 0, y: 0, z: 0 }, head: { x: 0, y: 0, z: 0 },
   hips: { x: 0, y: 0, z: 0 },
   leftShoulder: { x: 0, y: 0, z: 0 }, leftUpperArm: { x: 0, y: 0, z: 1.12 }, leftLowerArm: { x: 0, y: 0.26, z: 0 }, leftHand: { x: 0, y: 0, z: 0 },
