@@ -65,11 +65,20 @@ function isTouchPrimary() {
     return (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
 }
 
+// モバイルOSの端末か。トラックパッド/マウス接続の iPad (主ポインタが fine になる) も
+// 従来どおりステージ対象に含めるための補助判定。iPadOS のデスクトップ表示は UA が
+// Macintosh になるため、タッチ点の有無で見分ける。
+function isMobileOS() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone|iPad|iPod|Android/i.test(ua)) return true;
+    return /Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1;
+}
+
 function recompute() {
     const vw = realVW(), vh = realVH();
     // タッチ主体の端末で、短辺がスマホ幅以下なら「モバイル」とみなす(縦横どちらの持ち方でも)。
     // 背の低いPCウィンドウ(短辺<=768でもマウス操作)は素のまま。
-    active = isTouchPrimary() && Math.min(vw, vh) <= MOBILE_MAX_WIDTH;
+    active = (isTouchPrimary() || isMobileOS()) && Math.min(vw, vh) <= MOBILE_MAX_WIDTH;
     if (!active) { SW = vw; SH = vh; dL = 0; dT = 0; dW = vw; dH = vh; rotated = false; scale = 1; return; }
 
     // モバイルは論理寸法を固定基準(16:9)にし、画面へは scale で縮小して内接させる。

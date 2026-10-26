@@ -308,6 +308,8 @@ class Application {
 
         // 歌詞データの読込失敗 — 無言の停止を避け、原因とリトライ/戻る導線を示す
         eventBus.on('songLoadError', ({ song, reason } = {}) => {
+            // 湖へ戻る途中/戻った後に届いた読込失敗は表示しない(湖の上にエラー画面が残るのを防ぐ)
+            if (this._leavingSong || appState.currentSongId === null) return;
             this._revealOnLoad = false;
             this._loadTimeoutShown = reason === 'timeout';
             screenFade.fadeIn(400); // カーテンを開けてエラーを見せる

@@ -241,6 +241,10 @@ class PlayerManager {
             : Promise.resolve();
         const attempt = () => {
             if (seq !== this._loadSeq || !this.player) return; // 新しい読込/湖への復帰で置き換わった
+            // 待っている間に、先行していた同じ曲の読込が完了していれば二重に読み込まない
+            // (タイムアウト後の「もう一度試す」や同じ曲の再選択で再生がリセットされるのを防ぐ)
+            const loaded = this.player.data && this.player.data.song && this.player.data.song.permalink;
+            if (this.isTimerReady && loaded && this._sameSong(loaded, songUrl)) return;
             let p;
             try {
                 p = Promise.resolve(this.player.createFromSongUrl(songUrl, options));
