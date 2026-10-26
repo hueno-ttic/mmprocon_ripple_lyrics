@@ -307,8 +307,9 @@ class Application {
         });
 
         // 歌詞データの読込失敗 — 無言の停止を避け、原因とリトライ/戻る導線を示す
-        eventBus.on('songLoadError', ({ song } = {}) => {
+        eventBus.on('songLoadError', ({ song, reason } = {}) => {
             this._revealOnLoad = false;
+            this._loadTimeoutShown = reason === 'timeout';
             screenFade.fadeIn(400); // カーテンを開けてエラーを見せる
             const target = song || SONGS.find(s => s.id === appState.currentSongId);
             this.errorScreen.show({
@@ -321,6 +322,14 @@ class Application {
                     { label: '湖へ戻る', onClick: () => eventBus.emit('backToLake', { markComplete: false }) },
                 ],
             });
+        });
+
+        // タイムアウト表示の後に読込が遅れて完了した場合 — 曲は準備済みなので
+        // エラー画面を閉じてスタートボタンを押せるようにする
+        eventBus.on('timerReady', () => {
+            if (!this._loadTimeoutShown) return;
+            this._loadTimeoutShown = false;
+            this.errorScreen.hide();
         });
 
         eventBus.on('loadSong', (song) => {
