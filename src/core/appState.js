@@ -1,12 +1,16 @@
 import { eventBus } from './eventBus.js';
 import { NORMAL_SONGS, areNormalSongsComplete, isSecretSong } from '../config/songs.js';
 import { PHASES } from '../config/constants.js';
+import { safeGetJSON, safeSetJSON } from '../utils/storage.js';
 
 class AppState {
     constructor() {
         this.currentSongId = null;
         this.isLoading = true;
-        this.completedSongs = JSON.parse(localStorage.getItem('completedSongs') || '[]');
+        // ストレージ不可・壊れたJSONでも起動を止めない(モジュール評価時に投げると画面が真っ白になる)。
+        // 文字列ID以外が混じっていたら除外する。
+        this.completedSongs = safeGetJSON('completedSongs', [], Array.isArray)
+            .filter(id => typeof id === 'string');
         this.isPlaying = false;
         this.currentTime = 0;
         this._previousPhase = this.getPhase();
@@ -26,7 +30,9 @@ class AppState {
         if (!this.completedSongs.includes(songId)) {
             this._previousPhase = this.getPhase();
             this.completedSongs.push(songId);
-            localStorage.setItem('completedSongs', JSON.stringify(this.completedSongs));
+            // 保存失敗(プライベートブラウズ等)でも例外を投げない。screenFade の暗転中に
+            // 呼ばれるため、ここで投げるとカーテンが上がらなくなる。
+            safeSetJSON('completedSongs', this.completedSongs);
             eventBus.emit('songComplete', songId);
             eventBus.emit('phaseChange', { from: this._previousPhase, to: this.getPhase() });
             // 通常曲(5曲)を全て終えた瞬間に「水の循環、完成」エンディングを流す。

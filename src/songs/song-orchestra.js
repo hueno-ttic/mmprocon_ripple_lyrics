@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
+import { safeGet, safeSet } from '../utils/storage.js';
 import { SONGS } from '../config/songs.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
@@ -26,7 +27,7 @@ export class SongOrchestra extends BaseSong {
         this.activeSprites = [];
         this.drawnLines = [];
         
-        this.currentColor = localStorage.getItem('orchestra_color') || '#ffffff';
+        this.currentColor = safeGet('orchestra_color') || '#ffffff';
         this.lastChar = null;
         this.lastGroupStartTime = -1;
         this.colorPickerShown = false;
@@ -1426,7 +1427,7 @@ export class SongOrchestra extends BaseSong {
         }
         
         this.currentColor = nextColorHex;
-        localStorage.setItem('orchestra_color', this.currentColor);
+        safeSet('orchestra_color', this.currentColor);
         this.hasResonatedColor = true; // カラー変更体験済みフラグ
         this.dismissFirstInteractable(); // 初回の色共鳴で誘導ガイドを片付ける
 

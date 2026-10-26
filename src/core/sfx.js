@@ -18,6 +18,7 @@
  * 曲ごとの固有SEは別途(各曲レーンで)追加予定。欠損ファイルは無音で許容する。
  */
 import { eventBus } from './eventBus.js';
+import { safeGet } from '../utils/storage.js';
 
 const BASE = (import.meta.env && import.meta.env.BASE_URL) || '/';
 const FILES = {
@@ -99,8 +100,8 @@ class Sfx {
 
     // ユーザー設定音量(0..1)。VolumeControl と同じ localStorage キーを参照。
     _userVol() {
-        if (localStorage.getItem('appMuted') === '1') return 0;
-        const v = parseInt(localStorage.getItem('appVolume'), 10);
+        if (safeGet('appMuted') === '1') return 0;
+        const v = parseInt(safeGet('appVolume'), 10);
         return (Number.isFinite(v) ? v : 80) / 100;
     }
 
