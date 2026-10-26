@@ -6,6 +6,7 @@ import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
 import { settleSpringBones } from '../utils/vrm.js';
 import { playerManager } from '../core/player.js';
+import { unlockAudio } from '../core/audioUnlock.js';
 import { groupPhraseWordsByMinLength, findGroupForWord } from '../utils/lyricGroups.js';
 
 export class SongTakeover extends BaseSong {
@@ -1898,19 +1899,7 @@ export class SongTakeover extends BaseSong {
     }
 
     _unlockAudio() {
-        try {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            if (AC) {
-                const dummy = new AC();
-                if (dummy.state === 'suspended') dummy.resume();
-            }
-            if (playerManager.player && playerManager.player.audioContext) {
-                const ctx = playerManager.player.audioContext;
-                if (ctx.state === 'suspended') ctx.resume();
-            }
-        } catch (err) {
-            console.warn('[Ripple Lyrics] Web Audio unlock failed safely:', err);
-        }
+        unlockAudio(); // 共有 AudioContext を resume(押下ごとの new によるリークを防ぐ)
     }
 
     // ── TAKEOVER COMPLETE: ブラックアウト→再起動風シーケンス→赤一色 ────

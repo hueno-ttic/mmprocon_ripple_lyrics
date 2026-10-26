@@ -19,6 +19,25 @@
 
 ---
 
+## 📅 2026-10-26: [共通コア/入力] 曲遷移・入力まわりの不具合修正（完了取りこぼし・湖でのキー誤作動・遷移ソフトロック等）
+
+### 変更内容
+* **曲終了リザルト中の「湖へ戻る」/Escape で完了が記録されない問題**（`main.js` / `PlayerControls.js`）: リザルト表示中はヘッダーボタン・Escape を `finishSongEndOverlay()` 経由でリザルトの「楽曲選択画面へ」と同じ経路（`markComplete: true`）に流す。`backToLake` のスワップで曲終了オーバーレイを必ず除去。湖へ戻る遷移中（`_leavingSong`）や `currentSongId === null` で届いた `songEnd` ではリザルトを出さない。`backToLake` の二重実行もガード。
+* **湖に戻った後も `isTimerReady` が true のまま**（`player.js` / `main.js` / `PlayerControls.js`）: `playerManager.releaseForLake()` を新設し `backToLake` スワップで呼ぶ（managed 時は準備状態を保持）。PlayerControls のキー処理は曲シーン中（`currentSongId !== null`）のみ反応。湖での Space が前曲音声を再生/Escape が backToLake（裏リロード）を再実行する問題を解消。
+* **ScreenFade の重なりで Promise が resolve されないソフトロック**（`ScreenFade.js` / `WorldUI.js`）: 各フェードは自分のタイマーで必ず resolve し、入力ブロック解除だけ最新フェードに限定。`selectSong` は `finally` で `isTransitioning` を必ず戻す。
+* **CompletionScreen の Enter/Esc が下層へ伝播**（`CompletionScreen.js`）: capture 段階＋`stopImmediatePropagation`（Credits.js と同方式）。
+* **曲終了後の Space で再生し直し songEnd が再発火**（`player.js` / `PlayerControls.js`）: `songEnd` 発火後は次の `loadSong`/`releaseForLake` まで `play()` を無視。
+* **タイムアウトした TextAlive 読込が後から別曲として新シーンに届く**（`player.js`）: 読込世代（`_loadSeq`）と直前 `createFromSongUrl` の完了待ち（最大3秒）＋並列エラー時の再試行で直列化。`onVideoReady/onTimerReady` は読込済み曲（`player.data.song.permalink`）が「過去に要求した別の曲」と確実に判定できる場合のみ無視（判定不能なら従来どおり通す保守的設計）。湖へ戻った後のイベント/エラーは無視。
+* **押下ごとに AudioContext を new してリーク**（新規 `src/core/audioUnlock.js`、`PlayerControls.js` / `BaseSong.js` / `song-takeover.js`）: 解錠用 AudioContext をアプリ全体で1つだけ遅延生成し `resume()` のみ行う。
+
+### 影響範囲
+* 曲⇔湖の遷移、曲終了リザルト、キーボード操作（Space/Escape/Enter）、TextAlive 読込処理、全曲の開始時オーディオ解錠。曲別演出ロジックには触れていない（BaseSong/takeover は解錠処理の置換のみ）。
+
+### 確認結果
+* `npm run build` 成功。実機/ブラウザでの通し確認は未実施（要: 曲末尾での Escape、リザルト中の Escape/ヘッダーボタン、湖での Space/Escape、連続選曲、全曲制覇画面の Enter）。
+
+---
+
 ## 📅 2026-06-27: [UI/レスポンシブ] プレイ領域コンテナクエリ化によるモバイル・タブレット自動スケーリング対応
 
 ### 変更内容

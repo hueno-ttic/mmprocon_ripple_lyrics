@@ -48,10 +48,16 @@ export class CompletionScreen {
         setTimeout(() => this._buildContent(), 700);
 
         // Close on Enter or Escape
+        // capture段階で握って止める。止めないと同じ Enter/Escape が湖(WorldUI)の選曲開始や
+        // PlayerControls の backToLake にも届いてしまう(Credits.js と同じ方式)。
         this._boundKeydown = (e) => {
-            if (e.code === 'Enter' || e.code === 'Escape') this.hide();
+            if (e.code === 'Enter' || e.code === 'Escape') {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                this.hide();
+            }
         };
-        window.addEventListener('keydown', this._boundKeydown);
+        window.addEventListener('keydown', this._boundKeydown, true);
     }
 
     _buildContent() {
@@ -171,7 +177,7 @@ export class CompletionScreen {
 
     hide() {
         if (!this.el) return;
-        window.removeEventListener('keydown', this._boundKeydown);
+        window.removeEventListener('keydown', this._boundKeydown, true);
         this.el.style.transition = 'opacity 0.8s ease';
         this.el.style.opacity = '0';
         setTimeout(() => {

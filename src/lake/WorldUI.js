@@ -663,6 +663,10 @@ export class WorldUI {
                 this.ending = null;
             }
             eventBus.emit('loadSong', song);
+        }).catch((err) => {
+            console.error('[Ripple Lyrics] selectSong transition failed:', err);
+        }).finally(() => {
+            // 何があっても遷移中フラグを戻す(戻らないと以後一切選曲できないソフトロックになる)
             this.isTransitioning = false;
         });
     }
