@@ -61,6 +61,9 @@ export class SongOrchestra extends BaseSong {
         this.lyricsCacheBuilt = false;
         this.allWordGroups = [];
         this.sublimatedGroupIndices = new Set();
+        // 画面外へ抜けた/上限で追い出した/同文の新しい行に置き換えたフレーズ。
+        // 時間窓内に残っていても再スポーンさせない(毎フレームの作り直し＝別位置への二重出現を防ぐ)。
+        this.retiredGroupIndices = new Set();
         this.lastPosition = 0;
 
 
@@ -80,7 +83,9 @@ export class SongOrchestra extends BaseSong {
         this._gaugeResetTimer = null;
 
         this.boundOnResize = this.onResize.bind(this);
-        this.boundOnClick = this.onClick.bind(this);
+        // クリックは BaseSong が songWrapper に登録する this.boundOnClick(=this.onClick) で受ける。
+        // 以前はここで boundOnClick を上書きし container にも登録していたため、
+        // 1回のクリックが songWrapper→container のバブリングで2回処理されていた(#129 周辺の二重処理)。
 
         this._boundOnMouseMove = (e) => {
             this._mousePos = new THREE.Vector2(
@@ -100,7 +105,6 @@ export class SongOrchestra extends BaseSong {
         this.createIntroTitle();    // イントロ中に曲名・作者・遊び方を歌詞風に提示
         this.updateResultSummary(); // 0個の状態でも成果サマリーを初期登録
         window.addEventListener('resize', this.boundOnResize);
-        this.container.addEventListener('click', this.boundOnClick);
         this.container.addEventListener('mousemove', this._boundOnMouseMove);
         
         // VRM model loading setup
@@ -929,7 +933,15 @@ export class SongOrchestra extends BaseSong {
         }
         ctx.fillStyle = fillStyle;
         
-        if (category !== 'machine') {
+        if (category === 'light' || category === 'voice_echo') {
+            // 加算ハロー(白/黄の光)の上に乗るカテゴリ。下方向にずらした濃い影だと、
+            // 光の中で影が「文字のもう一つの写し」に見えて二重表示になっていた(#129)。
+            // オフセット無しの淡い縁取りにして、可読性だけを確保する。
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+            ctx.shadowBlur = 6;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+        } else if (category !== 'machine') {
             ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
             ctx.shadowBlur = 10;
             ctx.shadowOffsetX = 0;
@@ -939,11 +951,12 @@ export class SongOrchestra extends BaseSong {
         // Category Text Rendering overrides
         if (category === 'machine') {
             // Glitched red/cyan offsets
-            ctx.fillStyle = 'rgba(0, 255, 255, 0.7)';
-            ctx.fillText(text, W / 2 - 3, 64);
+            // ±3px・α0.7だと文字が三重に読めてしまうため、ずれ幅と濃さを抑えて色収差の気配だけ残す。
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.35)';
+            ctx.fillText(text, W / 2 - 1.5, 64);
 
-            ctx.fillStyle = 'rgba(255, 0, 128, 0.7)';
-            ctx.fillText(text, W / 2 + 3, 64);
+            ctx.fillStyle = 'rgba(255, 0, 128, 0.35)';
+            ctx.fillText(text, W / 2 + 1.5, 64);
 
             ctx.fillStyle = '#ffffff';
             ctx.fillText(text, W / 2, 64);
@@ -1029,17 +1042,36 @@ export class SongOrchestra extends BaseSong {
         }
     }
 
+    // 歌詞スプライトを破棄し、そのフレーズを再スポーン対象から外す。
+    _retireLyricSprite(sprite) {
+        if (!sprite) return;
+        if (this.retiredGroupIndices && typeof sprite.userData.groupIndex === 'number') {
+            this.retiredGroupIndices.add(sprite.userData.groupIndex);
+        }
+        this.disposeSprite(sprite);
+        const idx = this.activeSprites.indexOf(sprite);
+        if (idx !== -1) this.activeSprites.splice(idx, 1);
+    }
+
+    // 歌詞レイヤー奥行きでの可視領域の半高(ワールド単位)。上端フェード/カリングの基準。
+    _lyricVisibleHalfHeight(z) {
+        if (!this.camera) return 10;
+        const fovRad = this.camera.fov * Math.PI / 180;
+        return Math.max(1, this.camera.position.z - z) * Math.tan(fovRad / 2);
+    }
+
     spawnText(lyricEntity, spawnTime) {
+        // 同じ文言の行(リフレイン)が前の行の余韻(extraLife)と重なると、同じ歌詞が二つ並んで見える(#129)。
+        // 新しい行が出る時点で、同文の古い行(タップ中を除く)は退場させて一つだけにする。
+        const sameText = this.activeSprites.filter(s => !s.userData.isNode && !s.userData.isBeingTapped
+            && s.userData.text === lyricEntity.text && s.userData.groupIndex !== lyricEntity.index);
+        sameText.forEach(s => this._retireLyricSprite(s));
+
         // フレーズ単位なので同時出現数を最大5個に制限する
-        const activeLyrics = this.activeSprites.filter(s => !s.userData.isNode);
+        // (タップ中の行は追い出さない。追い出した行は時間窓内でも再スポーンさせない)
+        const activeLyrics = this.activeSprites.filter(s => !s.userData.isNode && !s.userData.isBeingTapped);
         if (activeLyrics.length >= 5) {
-            const oldest = activeLyrics[0];
-            this.disposeSprite(oldest);
-            
-            const idx = this.activeSprites.indexOf(oldest);
-            if (idx !== -1) {
-                this.activeSprites.splice(idx, 1);
-            }
+            this._retireLyricSprite(activeLyrics[0]);
         }
 
         const category = this.getWordCategory(lyricEntity.text);
@@ -1054,18 +1086,25 @@ export class SongOrchestra extends BaseSong {
         const sprite = new THREE.Sprite(material);
 
         // Add glow halo child sprite if category is light or voice_echo
+        let haloSprite = null;
         if (category === 'light' || category === 'voice_echo') {
             const haloMat = new THREE.SpriteMaterial({
                 map: this.glowTexture,
                 color: new THREE.Color(category === 'light' ? '#ffea80' : '#ffffff'),
                 transparent: true,
-                opacity: 0.6,
+                opacity: 0, // 本体の不透明度に追従させる(更新ループで同期)
                 blending: THREE.AdditiveBlending,
                 depthWrite: false
             });
             const halo = new THREE.Sprite(haloMat);
-            halo.scale.set(aspect * 1.5, 1.5, 1);
+            // 子スプライトのscaleは親(=文字の箱 baseScale*aspect × baseScale)に対する相対値。
+            // 以前は aspect*1.5 を掛けていたため横幅が aspect² 倍に膨らみ、周囲の歌詞まで光で覆っていた。
+            // 文字の箱を少し囲む大きさに留める(フィルレートも削減)。
+            halo.scale.set(1.15, 1.7, 1);
+            // わずかに奥へ置き、透明ソートで必ず文字より先(背面)に描かせる。
+            halo.position.z = -0.02;
             sprite.add(halo);
+            haloSprite = halo;
         }
         
         // 歌詞の大きさは「その奥行きでの可視領域の高さ」に対する割合で決める。
@@ -1236,7 +1275,8 @@ export class SongOrchestra extends BaseSong {
             aspect: aspect,
             groupIndex: lyricEntity.index, // Store the index of the word group
             baseY: foundY,
-            marchDirection: marchDirection
+            marchDirection: marchDirection,
+            halo: haloSprite
         };
         sprite.scale.set(scale * aspect, scale, 1);
         
@@ -1296,8 +1336,10 @@ export class SongOrchestra extends BaseSong {
     // 配置時のcheckOverlapだけでは、漂い(drift)やサビの加速で後から接近したペアを救えないため、
     // 毎フレームの連続的な分離で「別フレーズが同じ行に重なって読めない」状態を解消する。
     _separateOverlappingLyrics() {
+        // タップ中の行も「動かない障害物」として判定に含める(白いタップフラッシュ中に他の行が
+        // 重なって通り抜け、二重に見えるのを防ぐ)。押し分けるのは相手側だけ。
         const arr = this.activeSprites.filter(
-            s => s && !s.userData.isNode && s.userData.text && !s.userData.isBeingTapped
+            s => s && !s.userData.isNode && s.userData.text
         );
         const PAD_X = 0.3;   // 横の余白(これ未満まで近づいたら重なり扱い)
         const PAD_Y = 0.28;  // 縦の最小すき間
@@ -1317,10 +1359,16 @@ export class SongOrchestra extends BaseSong {
                     // 縦に分離(重なり量の半分ずつ)。同一yに重なった場合は決定的な向きで割る。
                     const push = Math.min(overlapY * 0.5, MAX_PUSH);
                     const dir = dyRaw === 0 ? (i % 2 === 0 ? 1 : -1) : Math.sign(dyRaw);
-                    a.position.y += dir * push;
-                    b.position.y -= dir * push;
-                    if (a.userData.baseY !== undefined) a.userData.baseY += dir * push;
-                    if (b.userData.baseY !== undefined) b.userData.baseY -= dir * push;
+                    const aFixed = !!a.userData.isBeingTapped;
+                    const bFixed = !!b.userData.isBeingTapped;
+                    if (aFixed && bFixed) continue;
+                    // 片方が固定なら、もう片方を2倍(=重なり量ぶん)押して離す
+                    const aPush = aFixed ? 0 : (bFixed ? Math.min(overlapY, MAX_PUSH * 2) : push);
+                    const bPush = bFixed ? 0 : (aFixed ? Math.min(overlapY, MAX_PUSH * 2) : push);
+                    a.position.y += dir * aPush;
+                    b.position.y -= dir * bPush;
+                    if (a.userData.baseY !== undefined) a.userData.baseY += dir * aPush;
+                    if (b.userData.baseY !== undefined) b.userData.baseY -= dir * bPush;
                 }
             }
         }
@@ -1350,7 +1398,8 @@ export class SongOrchestra extends BaseSong {
 
         // ─── 歌詞共鳴タップ ───
         // アクティブな歌詞スプライトに対するクリック判定を行う
-        const intersects = raycaster.intersectObjects(this.activeSprites);
+        // 子のハロー(加算光)は当たり判定に含めない(隣の歌詞のハローで誤ヒットしないように)
+        const intersects = raycaster.intersectObjects(this.activeSprites, false);
 
         if (intersects.length > 0) {
             // 一番手前にある歌詞スプライトを取得
@@ -1691,6 +1740,7 @@ export class SongOrchestra extends BaseSong {
         // Clear sublimated indices on backwards seek or loop
         if (position < this.lastPosition - 1000) {
             this.sublimatedGroupIndices.clear();
+            if (this.retiredGroupIndices) this.retiredGroupIndices.clear();
         }
         this.lastPosition = position;
         
@@ -1823,8 +1873,15 @@ export class SongOrchestra extends BaseSong {
                 const groupIndex = s.userData.groupIndex;
                 const isStillActive = activeGroups.some(g => g.index === groupIndex);
                 if (!isStillActive) {
-                    this.disposeSprite(s);
-                    this.activeSprites.splice(i, 1);
+                    if (position >= s.userData.birth) {
+                        // 既に歌い始めた行が時間窓から外れた(LEADのサビ切替や再生位置の揺れで一瞬外れる場合を含む)。
+                        // 再び窓に入っても別位置へ作り直さないよう退場扱いにする。
+                        this._retireLyricSprite(s);
+                    } else {
+                        // 後方シーク等で開始前に戻った行は、通常どおり再スポーン可能なまま破棄
+                        this.disposeSprite(s);
+                        this.activeSprites.splice(i, 1);
+                    }
                 }
             }
 
@@ -1832,6 +1889,9 @@ export class SongOrchestra extends BaseSong {
             activeGroups.forEach(g => {
                 if (this.sublimatedGroupIndices.has(g.index)) {
                     return; // Skip if it has already been clicked and sublimated!
+                }
+                if (this.retiredGroupIndices.has(g.index)) {
+                    return; // 画面外へ抜けた/置き換え済みの行は再スポーンしない
                 }
                 
                 // Track by exact groupIndex to prevent clicked lyrics from reappearing,
@@ -1876,6 +1936,7 @@ export class SongOrchestra extends BaseSong {
             if (s.userData.isBeingTapped) {
                 // タップ中は位置をフリーズし、不透明度を維持する
                 s.material.opacity = 1.0;
+                if (s.userData.halo) s.userData.halo.material.opacity = 0.5;
             } else {
                 // --- Category-specific Movement Animations ---
                 const category = s.userData.category || 'default';
@@ -1933,15 +1994,24 @@ export class SongOrchestra extends BaseSong {
                 } else if (age > s.userData.life - 200) {
                     opacity = Math.max(0, (s.userData.life - age) / 200);
                 }
-                if (s.position.y > 1.2) {
-                    const heightFade = Math.max(0, 1.0 - (s.position.y - 1.2) / 1.2);
-                    opacity *= heightFade;
+                // 上端フェード/カリングは「その奥行きでの可視領域」基準にする。
+                // 以前は絶対値 y>1.2 でフェード・y>2.4 で破棄していたが、出現範囲は ±0.24×可視高(奥行き-16で約±9.6)
+                // あるため、上側に出た歌詞が出現フレームで即破棄→毎フレーム別位置へ作り直し(テクスチャ再生成)となり、
+                // 同じ歌詞が別の場所に現れる二重表示とチラつきの原因になっていた(#129)。
+                const halfVis = this._lyricVisibleHalfHeight(s.position.z);
+                const relY = (s.position.y - this.camera.position.y) / halfVis; // 画面中央0・上端1
+                const FADE_START = 0.7, CULL_AT = 0.98;
+                if (relY > FADE_START) {
+                    opacity *= Math.max(0, 1.0 - (relY - FADE_START) / (CULL_AT - FADE_START));
                 }
                 s.material.opacity = opacity;
+                // ハローは本体と一緒にフェードさせる(文字の無い所に光だけ残る/先に光る、を防ぐ)
+                if (s.userData.halo) s.userData.halo.material.opacity = opacity * 0.5;
 
-                if (age > s.userData.life || s.position.y > 2.4) {
-                    this.disposeSprite(s);
-                    this.activeSprites.splice(i, 1);
+                if (age > s.userData.life || relY > CULL_AT) {
+                    // 画面上端へ抜けた行は時間窓内でも再スポーンさせない
+                    this._retireLyricSprite(s);
+                    continue;
                 }
             }
         }
@@ -2792,6 +2862,7 @@ export class SongOrchestra extends BaseSong {
         });
         this.resonateOrbs = [];
         this.sublimatedGroupIndices = null;
+        this.retiredGroupIndices = null;
         if (this.orbGeometry) {
             this.orbGeometry.dispose();
             this.orbGeometry = null;
@@ -2836,7 +2907,6 @@ export class SongOrchestra extends BaseSong {
         if (this.starMaterial) this.starMaterial.dispose();
         if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
         
-        this.container.removeEventListener('click', this.boundOnClick);
         this.container.removeEventListener('mousemove', this._boundOnMouseMove);
         this.container.removeEventListener('pointerdown', this.boundOnPointerDown);
         this.container.removeEventListener('pointermove', this.boundOnPointerMove);
