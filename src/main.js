@@ -5,6 +5,7 @@ import { WorldUI } from './lake/WorldUI.js';
 import { clearRipples } from './lake/lakeMemory.js';
 import { PlayerControls } from './ui/PlayerControls.js';
 import { VolumeControl } from './ui/VolumeControl.js';
+import { safeGet } from './utils/storage.js';
 import { SONGS } from './config/songs.js';
 import { BaseSong } from './songs/BaseSong.js';
 import { CompletionScreen } from './ui/CompletionScreen.js';
@@ -218,7 +219,7 @@ class Application {
         };
 
         // 再訪(視聴済み)または ?skipIntro=1 のときはプロローグを丸ごと飛ばす。
-        const seenIntro = localStorage.getItem('mm_seen_intro') === '1';
+        const seenIntro = safeGet('mm_seen_intro') === '1';
         const skipParam = new URLSearchParams(location.search).get('skipIntro') === '1';
 
         // 「更新」バナーのタップ、または曲選択時のチャンク失敗による自動リロードで

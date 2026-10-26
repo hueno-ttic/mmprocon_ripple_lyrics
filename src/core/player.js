@@ -1,6 +1,7 @@
 import { Player } from 'textalive-app-api';
 import { eventBus } from './eventBus.js';
 import { appState } from './appState.js';
+import { safeGet } from '../utils/storage.js';
 
 class PlayerManager {
     constructor() {
@@ -214,8 +215,8 @@ class PlayerManager {
 
     // ── 音量フェード(ユーザー設定値はlocalStorageが真実) ──
     _storedVolume() {
-        if (localStorage.getItem('appMuted') === '1') return 0;
-        const v = parseInt(localStorage.getItem('appVolume'), 10);
+        if (safeGet('appMuted') === '1') return 0;
+        const v = parseInt(safeGet('appVolume'), 10);
         return Number.isFinite(v) ? v : 80;
     }
 

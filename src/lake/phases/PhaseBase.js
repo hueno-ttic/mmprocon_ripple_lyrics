@@ -68,5 +68,13 @@ export class PhaseBase {
                 }
             }
         });
+        // material.dispose() は map(テクスチャ)を解放しない。フェーズごとに生成する
+        // インスタンス専用の雲パフ CanvasTexture(PhaseClouds/PhaseRain/PhasePuddles の
+        // _puffTexes)はここで明示的に破棄する。sceneKit の glowTex/streakTex は
+        // 全フェーズ共有のキャッシュなので破棄しない(次フェーズで再利用される)。
+        if (Array.isArray(this._puffTexes)) {
+            this._puffTexes.forEach(t => t?.dispose?.());
+            this._puffTexes = null;
+        }
     }
 }

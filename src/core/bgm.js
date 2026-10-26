@@ -17,6 +17,7 @@
  */
 import { eventBus } from './eventBus.js';
 import { appState } from './appState.js';
+import { safeGet } from '../utils/storage.js';
 
 const BASE = (import.meta.env && import.meta.env.BASE_URL) || '/';
 
@@ -63,8 +64,8 @@ class Bgm {
 
     // ユーザー設定音量(0..1)。VolumeControl と同じ localStorage キーを参照。
     _userVol() {
-        if (localStorage.getItem('appMuted') === '1') return 0;
-        const v = parseInt(localStorage.getItem('appVolume'), 10);
+        if (safeGet('appMuted') === '1') return 0;
+        const v = parseInt(safeGet('appVolume'), 10);
         return (Number.isFinite(v) ? v : 80) / 100;
     }
 

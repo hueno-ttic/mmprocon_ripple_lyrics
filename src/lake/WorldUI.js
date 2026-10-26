@@ -9,6 +9,7 @@ import { appState } from '../core/appState.js';
 import { PHASE_CLASSES } from './phases/index.js';
 import { screenFade } from '../ui/ScreenFade.js';
 import { quality } from '../core/quality.js';
+import { safeGet } from '../utils/storage.js';
 
 // 全曲解放後に背景セレクタで選んだ過去フェーズを保持する localStorage キー。
 const BG_OVERRIDE_KEY = 'bgPhaseOverride';
@@ -727,7 +728,7 @@ export class WorldUI {
     // 通常曲5曲を全てクリアし、湖にシークレット曲(こたえて)が現れた時の静かな告知。
     // エンディング(CompletionScreen)の後ろにそっと残る控えめなテキスト。一度だけ表示。
     _maybeRevealSecret() {
-        if (localStorage.getItem('kotaeteRevealed')) return;
+        if (safeGet('kotaeteRevealed')) return;
         try { localStorage.setItem('kotaeteRevealed', '1'); } catch (e) { /* storage失敗は致命的でない */ }
 
         const toast = document.createElement('div');

@@ -19,6 +19,26 @@
 
 ---
 
+## 📅 2026-10-26: [共通コア] localStorage 安全化・PC短窓のステージ誤発動修正・フェーズ雲テクスチャのリーク解消
+
+### 変更内容
+* **localStorage の安全ラッパー導入** (`src/utils/storage.js`: safeGet/safeSet/safeRemove/safeGetJSON/safeSetJSON)
+  * Safari プライベート/ストレージブロック時の SecurityError や壊れた JSON で例外が出ないよう、`appState`(起動時の completedSongs 読込=モジュール評価時/クリア登録=暗転カーテン中)、`VolumeControl`、`player`(音量フェード)、`bgm`、`sfx`、`main`(mm_seen_intro)、`WorldUI`(kotaeteRevealed)、`song-orchestra`(色保持) を置換。completedSongs は壊れていたら `[]`、配列かつ文字列IDのみに正規化。
+* **スマホ用 16:9 ステージの発動条件を修正** (`src/core/stage.js`)
+  * 「短辺<=768」だけだと 1366x768 ノートPC 等の背の低いPCウィンドウでも黒帯ステージになっていたため、主ポインタが coarse(タッチ主体)であることを併せて要求。PCは素のまま、スマホ縦横は従来通り発動。
+* **フェーズ切替時の CanvasTexture リーク解消** (`src/lake/phases/PhaseBase.js`)
+  * `material.dispose()` は map を解放しないため、PhaseClouds/PhaseRain/PhasePuddles がインスタンスごとに生成する `_puffTexes` を dispose で破棄。共有キャッシュ(sceneKit の glowTex/streakTex)は破棄しない。
+
+### 影響範囲
+* 永続化の読み書き経路(挙動は正常系で不変、異常系で既定値へフォールバック)。
+* タッチ非対応のPCでは短いウィンドウでもステージシムが無効化される(座標シムなしの素の画面)。
+* 選曲画面のフェーズ切替時のGPUメモリ解放。
+
+### 確認結果
+* `npm run build` 成功。
+
+---
+
 ## 📅 2026-06-27: [UI/レスポンシブ] プレイ領域コンテナクエリ化によるモバイル・タブレット自動スケーリング対応
 
 ### 変更内容
