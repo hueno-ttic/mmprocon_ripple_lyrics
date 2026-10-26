@@ -1063,9 +1063,11 @@ export class SongOrchestra extends BaseSong {
 
     spawnText(lyricEntity, spawnTime) {
         // 同じ文言の行(リフレイン)が前の行の余韻(extraLife)と重なると、同じ歌詞が二つ並んで見える(#129)。
-        // 新しい行が出る時点で、同文の古い行(タップ中を除く)は退場させて一つだけにする。
+        // 新しい行が出る時点で、歌い終えて余韻だけ残っている同文の古い行(タップ中を除く)は退場させて一つだけにする。
+        // まだ歌唱中の行(同文が間を置かず続く場合)は途中で消さず、通常どおり順に入れ替わらせる。
         const sameText = this.activeSprites.filter(s => !s.userData.isNode && !s.userData.isBeingTapped
-            && s.userData.text === lyricEntity.text && s.userData.groupIndex !== lyricEntity.index);
+            && s.userData.text === lyricEntity.text && s.userData.groupIndex !== lyricEntity.index
+            && typeof s.userData.sungEnd === 'number' && spawnTime >= s.userData.sungEnd);
         sameText.forEach(s => this._retireLyricSprite(s));
 
         // フレーズ単位なので同時出現数を最大5個に制限する
@@ -1275,6 +1277,7 @@ export class SongOrchestra extends BaseSong {
             baseScale: scale,
             aspect: aspect,
             groupIndex: lyricEntity.index, // Store the index of the word group
+            sungEnd: birthTime + duration, // 歌唱区間の終端(以降は余韻 extraLife)
             baseY: foundY,
             marchDirection: marchDirection,
             halo: haloSprite

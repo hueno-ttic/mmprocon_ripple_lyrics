@@ -39,8 +39,6 @@ export class SongAfter extends BaseSong {
 
         this.themeColor = '#1D9E75';
         this.mouse = new THREE.Vector2(0, 0);
-        this._beamDir = new THREE.Vector3();   // スポットライトのビーム軸(毎フレーム再利用)
-        this._toLyric = new THREE.Vector3();   // ビーム始点→歌詞ベクトル(毎フレーム再利用)
         // ミクの「顔だけ」注視: 最も強く照らされている歌詞の方を向く(本体は正面のまま)
         this._lyricFocus = new THREE.Vector3(0, 3, 0); // 注視対象(照らされている歌詞)のワールド位置
         this._lyricFocusW = 0;                         // 注視の重み(=照射度)。0で正面へ戻る
@@ -90,8 +88,12 @@ export class SongAfter extends BaseSong {
         this.NEAR_BURST_TREMBLE = 0.035;    // 破裂間近の震え(加算のみ=縮まない)
         this.PRIME_DUR = 0.22;              // 閾値到達→破裂までの「最大まで張り詰める」溜め(秒)
         this.PRIME_EXTRA = 0.12;            // 溜めの間にさらに膨らむ量
-        // 歌詞配置で想定する最大スケール(実際に到達しうる大きさ。小さく見積もると膨らんだ歌詞が画面外へ切れる)
-        this.LYRIC_SCALE_MAX = (1 + this.HOVER_SWELL + this.SWELL_RANGE) * (1 + this.NEAR_BURST_TREMBLE) * (1 + this.PRIME_EXTRA);
+        // 歌詞配置で想定するスケール。最大膨張(≒2.2倍)で見積もると平常時の歌詞が小さく・密集してしまうため
+        // 配置は従来の1.5倍見積もりとし、膨らんで画面端を越える分は膨張時に内側へ寄せて収める(_keepInFrame)。
+        this.LYRIC_PLACE_SCALE = 1.5;
+        this.EDGE_MARGIN = 0.3;             // 膨張時に画面端から保つ余白(ワールド)
+        this._pickCands = [];               // レイキャスト候補(毎フレーム再利用)
+        this._pickHits = [];                // レイキャスト結果(毎フレーム再利用)
         // ポインタ直下の歌詞をカメラからのレイキャストで特定する(照準・照射・タップ対象を一致させる)
         this._raycaster = new THREE.Raycaster();
         this._pointerNdc = new THREE.Vector2();
@@ -765,10 +767,24 @@ export class SongAfter extends BaseSong {
         this._pointerNdc.set(((clientX - l) / w) * 2 - 1, -((clientY - t) / h) * 2 + 1);
     }
 
+    // 膨らんだ歌詞が画面の左右端を越える場合だけ、x を内側へ寄せて全体を画面内に収める。
+    // (膨らみは単調増加なので寄せも一方向に進み、ガタつかない)
+    _keepInFrame(mesh, grow) {
+        const ud = mesh.userData;
+        if (ud.baseX === undefined) return;
+        const halfW = ud.restHalfW * grow;
+        const limit = ud.bndHalfW - this.EDGE_MARGIN;
+        const sign = ud.baseX < 0 ? -1 : 1;
+        mesh.position.x = (Math.abs(ud.baseX) + halfW > limit)
+            ? sign * Math.max(0, limit - halfW)
+            : ud.baseX;
+    }
+
     // ポインタ直下の歌詞(風船)をレイキャストで求める。文字の描かれた範囲(+余白)だけを当たりとする。
     pickLyricAtPointer() {
         if (!this._pointerActive || !this.camera || !this.activeSprites.length) return null;
-        const cands = [];
+        const cands = this._pickCands;
+        cands.length = 0;
         for (const m of this.activeSprites) {
             const ud = m.userData;
             if (ud.bursting || ud.kindled) continue;
@@ -777,7 +793,9 @@ export class SongAfter extends BaseSong {
         }
         if (!cands.length) return null;
         this._raycaster.setFromCamera(this._pointerNdc, this.camera);
-        const hits = this._raycaster.intersectObjects(cands, false);
+        const hits = this._pickHits;
+        hits.length = 0;
+        this._raycaster.intersectObjects(cands, false, hits);
         const planeW = 1024 / 110, planeH = 128 / 110;
         const pad = this._pointerIsTouch ? 0.6 : 0.3; // 指は太いので当たりを広めに
         for (const h of hits) {
@@ -1107,7 +1125,7 @@ export class SongAfter extends BaseSong {
         const mesh = new THREE.Mesh(geo, material);
 
         // ── 画面いっぱいに散らしつつ、フレーム外へはみ出さないように配置する ──
-        const SCALE_MAX = this.LYRIC_SCALE_MAX; // 膨らみ切り(破裂直前の溜め込み)まで含めた実際の最大拡大率
+        const SCALE_MAX = this.LYRIC_PLACE_SCALE; // 配置用の見積もり拡大率(超過分は _keepInFrame で内側へ寄せる)
         const MARGIN = 0.5;      // 端からの余白(ワールド)
         const z = Math.random() * 4.6 - 0.6;            // -0.6〜4.0(ミク前方=客席側)
         const bnd = this.visibleBoundsAtZ(z);
@@ -1146,6 +1164,9 @@ export class SongAfter extends BaseSong {
             kindled: false,    // 照らし切り済みフラグ
             kindleFlash: 0,
             baseY: mesh.position.y,
+            baseX: x,          // 配置時のx(膨張で画面端を越える時だけ内側へ寄せる基準)
+            bndHalfW: bnd.halfW, // 配置した奥行きでの可視半幅
+            restHalfW: textW / 2, // 平常時(膨らみ0)のテキスト半幅(fitScale込み)
             spinFactor: (Math.random() - 0.5) * 0.15,
             fitScale,          // はみ出し防止の基準スケール(毎フレームの拡縮はこれに乗算)
             widthFrac,         // テキストがプレーン幅に占める割合(検証/はみ出し判定用)
@@ -1559,6 +1580,7 @@ export class SongAfter extends BaseSong {
                 const jit = this.NEAR_BURST_TREMBLE * (0.5 + 0.5 * Math.sin(rel * 95 + ud.birth));
                 const base = ud.primeBase * grow;
                 mesh.scale.set(base * (1 + jit), base * (1 + this.NEAR_BURST_TREMBLE - jit), 1);
+                this._keepInFrame(mesh, (base / (ud.fitScale || 1)) * (1 + this.NEAR_BURST_TREMBLE));
                 mesh.rotation.z = Math.sin(rel * 70 + ud.birth) * 0.035 * k;
                 mesh.material.opacity = 1;
                 mesh.material.emissive.setHSL(0.1, 0.9, Math.min(0.95, 0.6 + 0.3 * k));
@@ -1626,6 +1648,7 @@ export class SongAfter extends BaseSong {
             const trem = nearK * this.NEAR_BURST_TREMBLE * (0.5 + 0.5 * Math.sin(rel * 60 + ud.birth));
             const s = fit * (1.0 + shown);
             mesh.scale.set(s * (1 + trem), s * (1 + nearK * this.NEAR_BURST_TREMBLE - trem), 1);
+            this._keepInFrame(mesh, (1.0 + shown) * (1 + this.NEAR_BURST_TREMBLE));
 
             // 発光: 暗いステージでも黒くつぶれないよう常にほのかに自己発光。
             // 照らし切るほど暖色へ寄り、スポット/歌唱で強く光る。
@@ -1641,7 +1664,7 @@ export class SongAfter extends BaseSong {
             let targetOpacity;
             if (age < fadeInMs) {
                 targetOpacity = age / fadeInMs;
-            } else if (isPicked || (ud.litTime > 0 && age <= singHold + 6000) || age <= singHold) {
+            } else if (litBySpot || (ud.litTime > 0 && age <= singHold + 6000) || age <= singHold) {
                 targetOpacity = 1.0;
             } else {
                 targetOpacity = Math.max(0, 1 - (age - singHold) / fadeOutMs);
@@ -1649,7 +1672,7 @@ export class SongAfter extends BaseSong {
             mesh.material.opacity += (targetOpacity - mesh.material.opacity) * Math.min(1, dt * 6);
 
             // フェードし切った歌詞、または終演で除去(照らしている間は残す)
-            if ((mesh.material.opacity <= 0.02 && !isPicked && age > singHold) || age > ud.life || f >= 1) {
+            if ((mesh.material.opacity <= 0.02 && !litBySpot && age > singHold) || age > ud.life || f >= 1) {
                 this.scene.remove(mesh);
                 mesh.material.map.dispose();
                 mesh.material.dispose();
