@@ -40,8 +40,8 @@ const FILES = {
     trick_choose: 'assets/sfx/trick_choose.mp3',
     takeover_decode: 'assets/sfx/takeover_decode.mp3',
     takeover_reclaim: 'assets/sfx/takeover_reclaim.mp3',
-    takeover_warning: 'assets/sfx/takeover_warning.mp3',
-    takeover_fail: 'assets/sfx/takeover_fail.mp3',
+    // takeover_warning / takeover_fail は音源ファイル未収録のため読込対象から外す
+    // (毎回の404を避ける。play() は buffers 未登録で無音になる)。音源を追加したら戻す。
 };
 const SFX_MASTER = 0.5; // 音楽より一段下げる
 
