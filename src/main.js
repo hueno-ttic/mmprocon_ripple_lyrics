@@ -5,6 +5,7 @@ import { WorldUI } from './lake/WorldUI.js';
 import { clearRipples } from './lake/lakeMemory.js';
 import { PlayerControls } from './ui/PlayerControls.js';
 import { VolumeControl } from './ui/VolumeControl.js';
+import { safeGet } from './utils/storage.js';
 import { SONGS } from './config/songs.js';
 import { BaseSong } from './songs/BaseSong.js';
 import { CompletionScreen } from './ui/CompletionScreen.js';
@@ -218,7 +219,7 @@ class Application {
         };
 
         // 再訪(視聴済み)または ?skipIntro=1 のときはプロローグを丸ごと飛ばす。
-        const seenIntro = localStorage.getItem('mm_seen_intro') === '1';
+        const seenIntro = safeGet('mm_seen_intro') === '1';
         const skipParam = new URLSearchParams(location.search).get('skipIntro') === '1';
 
         // 「更新」バナーのタップ、または曲選択時のチャンク失敗による自動リロードで
@@ -306,8 +307,11 @@ class Application {
         });
 
         // 歌詞データの読込失敗 — 無言の停止を避け、原因とリトライ/戻る導線を示す
-        eventBus.on('songLoadError', ({ song } = {}) => {
+        eventBus.on('songLoadError', ({ song, reason } = {}) => {
+            // 湖へ戻る途中/戻った後に届いた読込失敗は表示しない(湖の上にエラー画面が残るのを防ぐ)
+            if (this._leavingSong || appState.currentSongId === null) return;
             this._revealOnLoad = false;
+            this._loadTimeoutShown = reason === 'timeout';
             screenFade.fadeIn(400); // カーテンを開けてエラーを見せる
             const target = song || SONGS.find(s => s.id === appState.currentSongId);
             this.errorScreen.show({
@@ -320,6 +324,14 @@ class Application {
                     { label: '湖へ戻る', onClick: () => eventBus.emit('backToLake', { markComplete: false }) },
                 ],
             });
+        });
+
+        // タイムアウト表示の後に読込が遅れて完了した場合 — 曲は準備済みなので
+        // エラー画面を閉じてスタートボタンを押せるようにする
+        eventBus.on('timerReady', () => {
+            if (!this._loadTimeoutShown) return;
+            this._loadTimeoutShown = false;
+            this.errorScreen.hide();
         });
 
         eventBus.on('loadSong', (song) => {
@@ -355,7 +367,11 @@ class Application {
         });
 
         eventBus.on('songEnd', () => {
-            const toResult = () => this._showSongEndOverlay(() => {
+            // 湖へ戻る遷移の最中(曲末尾で Escape 等)に届いた songEnd では、湖の上に
+            // リザルトを出さない(締めの間の後に届くケースも toResult 側で再確認する)。
+            const leaving = () => this._leavingSong || appState.currentSongId === null;
+            if (leaving()) return;
+            const toResult = () => !leaving() && this._showSongEndOverlay(() => {
                 eventBus.emit('backToLake', { markComplete: true });
             });
             // 曲固有の「締めの間」（例: シャッターチャンスの写真選択コンタクトシート）を
@@ -369,8 +385,11 @@ class Application {
         });
 
         eventBus.on('backToLake', ({ markComplete = false } = {}) => {
+            // 既に湖へ戻る遷移中なら二重に走らせない(連打/Escape 連打で cover が重複するのを防ぐ)
+            if (this._leavingSong) return;
+            this._leavingSong = true;
             // Fade to the curtain, swap the song scene out for the world, fade back.
-            screenFade.cover(() => {
+            screenFade.cover(() => { try {
                 // 曲を抜けるたびに使い捨ての堆積データを掃除して localStorage を肥大させない。
                 // シャッターチャンスの写真(波紋)は再利用しないので、選択画面へ戻る時点で破棄する。
                 clearRipples();
@@ -385,6 +404,10 @@ class Application {
 
                 appState.setCurrentSong(null);
                 appState.setLoading(false);
+                // 前曲の再生準備完了状態を落とす(湖での Space/Escape が前曲に作用しないように)
+                playerManager.releaseForLake();
+                // どの経路で戻っても曲終了リザルトは必ず片付ける(湖の上に残さない)
+                this._removeSongEndOverlay();
 
                 if (this.currentSongScene) {
                     this.currentSongScene.destroy();
@@ -404,11 +427,27 @@ class Application {
                 }
 
                 this.lakeUI.show();
-            }, { out: 450, in: 650 });
+            } finally { this._leavingSong = false; } }, { out: 450, in: 650 });
         });
     }
 
+    // 曲終了リザルト表示中なら、その「楽曲選択画面へ」と同じ経路(完了登録あり)で戻す。
+    // ヘッダーの「湖へ戻る」/Escape から呼ばれる。処理したら true。
+    finishSongEndOverlay() {
+        if (!this._songEndOverlay) return false;
+        this._songEndOverlay.finish();
+        return true;
+    }
+
+    _removeSongEndOverlay() {
+        const cur = this._songEndOverlay;
+        if (!cur) return;
+        this._songEndOverlay = null;
+        if (cur.el.parentNode) cur.el.parentNode.removeChild(cur.el);
+    }
+
     _showSongEndOverlay(onDone) {
+        this._removeSongEndOverlay(); // 念のため前回分が残っていれば片付ける
         const songConfig = SONGS.find(s => s.id === appState.currentSongId);
         const color = songConfig ? songConfig.color : '#ffffff';
         // こたえて(ひまわり登攀)のフィナーレは暗転させず、満開の大輪を見せ続ける。
@@ -526,6 +565,7 @@ class Application {
         const finish = () => {
             if (finished) return;
             finished = true;
+            if (this._songEndOverlay && this._songEndOverlay.el === overlay) this._songEndOverlay = null;
             // Hand off to backToLake, whose curtain fades over this overlay;
             // remove the overlay once it's hidden behind the curtain.
             onDone();
@@ -533,6 +573,8 @@ class Application {
                 if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
             }, 500);
         };
+
+        this._songEndOverlay = { el: overlay, finish };
 
         // 自動では戻らず、ボタンを押したときだけ楽曲選択画面へ戻る。
         backBtn.addEventListener('pointerdown', (e) => e.stopPropagation());

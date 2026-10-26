@@ -39,8 +39,6 @@ export class SongAfter extends BaseSong {
 
         this.themeColor = '#1D9E75';
         this.mouse = new THREE.Vector2(0, 0);
-        this._beamDir = new THREE.Vector3();   // スポットライトのビーム軸(毎フレーム再利用)
-        this._toLyric = new THREE.Vector3();   // ビーム始点→歌詞ベクトル(毎フレーム再利用)
         // ミクの「顔だけ」注視: 最も強く照らされている歌詞の方を向く(本体は正面のまま)
         this._lyricFocus = new THREE.Vector3(0, 3, 0); // 注視対象(照らされている歌詞)のワールド位置
         this._lyricFocusW = 0;                         // 注視の重み(=照射度)。0で正面へ戻る
@@ -81,8 +79,28 @@ export class SongAfter extends BaseSong {
         // 残光システム
         this.kindledCount = 0;              // 照らし切った歌詞の累計
         this.litThreshold = 2200;           // 照らし切り判定に必要な累計照射時間(ms)(しっかり当てないと弾けない)
-        this.pressBoostMs = 360;            // タップ(押下)1回ごとに上乗せする照射量 — 押す毎に段階的に膨らむ手応え
-        this._pressBoostFrames = 0;         // 押下直後、spotOnの立ち上がりを待つ猶予フレーム(当たった時点で一度だけ消費)
+        this.pressBoostMs = 480;            // タップ(押下)1回ごとに上乗せする照射量 — 押す毎に段階的に膨らむ手応え(約5タップで破裂)
+        // ─── 風船(歌詞)の膨らみ (issue #128) ───
+        // 表示スケール = fit × (1 + swell)。swell は「ホバーの一段」＋「照射量に比例した段階的な膨らみ」。
+        // タップ/長押しで得た膨らみはラチェット(しぼまない)。ホバーだけの膨らみは未タップ時のみ戻る。
+        this.HOVER_SWELL = 0.18;            // マウスオーバー/押下で即座に見える一段
+        this.SWELL_RANGE = 0.72;            // 照射0→破裂閾値までに増える量(1タップ ≒ 0.157)
+        this.NEAR_BURST_TREMBLE = 0.035;    // 破裂間近の震え(加算のみ=縮まない)
+        this.PRIME_DUR = 0.22;              // 閾値到達→破裂までの「最大まで張り詰める」溜め(秒)
+        this.PRIME_EXTRA = 0.12;            // 溜めの間にさらに膨らむ量
+        // 歌詞配置で想定するスケール。最大膨張(≒2.2倍)で見積もると平常時の歌詞が小さく・密集してしまうため
+        // 配置は従来の1.5倍見積もりとし、膨らんで画面端を越える分は膨張時に内側へ寄せて収める(_keepInFrame)。
+        this.LYRIC_PLACE_SCALE = 1.5;
+        this.EDGE_MARGIN = 0.3;             // 膨張時に画面端から保つ余白(ワールド)
+        this._pickCands = [];               // レイキャスト候補(毎フレーム再利用)
+        this._pickHits = [];                // レイキャスト結果(毎フレーム再利用)
+        // ポインタ直下の歌詞をカメラからのレイキャストで特定する(照準・照射・タップ対象を一致させる)
+        this._raycaster = new THREE.Raycaster();
+        this._pointerNdc = new THREE.Vector2();
+        this._pointerActive = false;        // ポインタ位置が有効か(マウスはホバー中、タッチは押下中のみ)
+        this._pointerIsTouch = false;
+        this._pickLyric = null;             // 現フレームでポインタ直下にある歌詞
+        this._hitLocal = new THREE.Vector3();
         this.maxSeatLights = this.isMobile ? 60 : 100;
 
         // バラ
@@ -115,6 +133,7 @@ export class SongAfter extends BaseSong {
         this.boundOnPointerMove = this.onPointerMove.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
         this.boundOnPointerUp = this.onPointerUp.bind(this);
+        this.boundOnPointerLeave = this.onPointerLeave.bind(this);
         this.boundOnContextMenu = (e) => e.preventDefault();
         this.boundOnPlay = () => this.onPlayEvent();
     }
@@ -137,6 +156,7 @@ export class SongAfter extends BaseSong {
         // pointermove/pointerdown でマウス・タッチを統一処理
         this.songWrapper.addEventListener('pointermove', this.boundOnPointerMove);
         this.songWrapper.addEventListener('pointerdown', this.boundOnPointerDown);
+        this.songWrapper.addEventListener('pointerleave', this.boundOnPointerLeave);
         // 押下の解除はウィンドウ全体で拾う(要素外で離しても確実に消灯)
         window.addEventListener('pointerup', this.boundOnPointerUp);
         window.addEventListener('pointercancel', this.boundOnPointerUp);
@@ -736,17 +756,85 @@ export class SongAfter extends BaseSong {
         this._spotTargetGoal.set(this.mouse.x * 12, 0.1, -this.mouse.y * 6);
     }
 
-    onPointerMove(event) {
-        if (!this.isActive || this.finaleP > 0.05) return;
-        if (this.actPhase !== 'show') return; // イントロ(カーテン降下中)は操作を受けない
-        // 押している(クリック/タップ)間だけスポットライトが追尾する
-        if (!this.isPointerDown) return;
-        this.updateSpotFromClient(event.clientX, event.clientY);
+    // クライアント座標 → 3Dキャンバス上のNDC(レイキャスト用)。
+    // stage.js の座標系シムで clientX と getBoundingClientRect は同じ論理座標系に揃っている。
+    setPointerNdc(clientX, clientY) {
+        const el = this.renderer && this.renderer.domElement;
+        const r = el ? el.getBoundingClientRect() : null;
+        const w = (r && r.width) || window.innerWidth;
+        const h = (r && r.height) || window.innerHeight;
+        const l = r ? r.left : 0, t = r ? r.top : 0;
+        this._pointerNdc.set(((clientX - l) / w) * 2 - 1, -((clientY - t) / h) * 2 + 1);
     }
 
-    onPointerUp() {
-        // 指/ボタンを離したら消灯(spotOnが滑らかに0へ落ちる)
+    // 膨らんだ歌詞が画面の左右端を越える場合だけ、x を内側へ寄せて全体を画面内に収める。
+    // (膨らみは単調増加なので寄せも一方向に進み、ガタつかない)
+    _keepInFrame(mesh, grow) {
+        const ud = mesh.userData;
+        if (ud.baseX === undefined) return;
+        const halfW = ud.restHalfW * grow;
+        const limit = ud.bndHalfW - this.EDGE_MARGIN;
+        const sign = ud.baseX < 0 ? -1 : 1;
+        mesh.position.x = (Math.abs(ud.baseX) + halfW > limit)
+            ? sign * Math.max(0, limit - halfW)
+            : ud.baseX;
+    }
+
+    // ポインタ直下の歌詞(風船)をレイキャストで求める。文字の描かれた範囲(+余白)だけを当たりとする。
+    pickLyricAtPointer() {
+        if (!this._pointerActive || !this.camera || !this.activeSprites.length) return null;
+        const cands = this._pickCands;
+        cands.length = 0;
+        for (const m of this.activeSprites) {
+            const ud = m.userData;
+            if (ud.bursting || ud.kindled) continue;
+            if ((m.material.opacity || 0) < 0.08) continue;
+            cands.push(m);
+        }
+        if (!cands.length) return null;
+        this._raycaster.setFromCamera(this._pointerNdc, this.camera);
+        const hits = this._pickHits;
+        hits.length = 0;
+        this._raycaster.intersectObjects(cands, false, hits);
+        const planeW = 1024 / 110, planeH = 128 / 110;
+        const pad = this._pointerIsTouch ? 0.6 : 0.3; // 指は太いので当たりを広めに
+        for (const h of hits) {
+            const ud = h.object.userData;
+            const lp = h.object.worldToLocal(this._hitLocal.copy(h.point));
+            if (Math.abs(lp.x) <= planeW * (ud.widthFrac || 1) / 2 + pad
+                && Math.abs(lp.y) <= planeH * 0.42 + pad * 0.5) {
+                return h.object;
+            }
+        }
+        return null;
+    }
+
+    onPointerMove(event) {
+        if (!this.isActive || !this.renderer) return;
+        this._pointerIsTouch = event.pointerType === 'touch' || event.pointerType === 'pen';
+        this.setPointerNdc(event.clientX, event.clientY);
+        if (this.finaleP > 0.05 || this.actPhase !== 'show') return; // イントロ(カーテン降下中)は操作を受けない
+        if (this.isPointerDown) {
+            // 押している間はスポットライトが追尾する
+            this._pointerActive = true;
+            this.updateSpotFromClient(event.clientX, event.clientY);
+        } else if (!this._pointerIsTouch) {
+            // マウス(ファインポインタ)はホバーで照準。3Dキャンバス直上のときだけ(UI上では無効)
+            this._pointerActive = event.target === this.renderer.domElement;
+            if (this._pointerActive) this.updateSpotFromClient(event.clientX, event.clientY);
+        }
+    }
+
+    onPointerLeave() {
+        if (!this.isPointerDown) this._pointerActive = false;
+    }
+
+    onPointerUp(event) {
+        // 指/ボタンを離したら消灯(spotOnが滑らかに0へ落ちる)。タッチはホバーが無いので照準も解除
         this.isPointerDown = false;
+        if (this._pointerIsTouch || (event && event.pointerType && event.pointerType !== 'mouse')) {
+            this._pointerActive = false;
+        }
     }
 
     onPointerDown(event) {
@@ -762,8 +850,9 @@ export class SongAfter extends BaseSong {
 
         // 押下開始: ここから照射が点灯し、ドラッグで追尾する
         this.isPointerDown = true;
-        // この押下を「一段ぶんの膨らみ」として消費させる(spotOn立ち上がりを待つ猶予つき)
-        this._pressBoostFrames = 8;
+        this._pointerIsTouch = event.pointerType === 'touch' || event.pointerType === 'pen';
+        this._pointerActive = true;
+        this.setPointerNdc(event.clientX, event.clientY);
         if (event.pointerId != null && this.songWrapper.setPointerCapture) {
             try { this.songWrapper.setPointerCapture(event.pointerId); } catch (e) { /* noop */ }
         }
@@ -771,6 +860,27 @@ export class SongAfter extends BaseSong {
         // タップ位置にもスポットライトを即移動 (タッチではmoveより先にdownが来る)
         // 紙吹雪はタップでは降らせない。歌詞を照らし切って破裂したときだけ舞い降りる。
         this.updateSpotFromClient(event.clientX, event.clientY);
+
+        // タップした歌詞(風船)にその場で一段ぶんの膨らみを与え、ビームも即座にそこへ合わせる。
+        // (以前はビームの追従待ち＋数フレームの猶予窓だったため、外れたり別の歌詞に当たったりした)
+        const hit = this.pickLyricAtPointer();
+        if (hit) {
+            this.tapLyric(hit);
+            this._pickLyric = hit;
+            this._spotTargetGoal.copy(hit.position);
+            this.mouseLight.target.position.copy(hit.position);
+            this.mouseLight.target.updateMatrixWorld();
+            this.spotOn = Math.max(this.spotOn, 0.6);
+        }
+    }
+
+    // タップ1回ぶんの段階的な膨らみ。照射量を一段積み、ラチェットで以後しぼまない。
+    tapLyric(mesh) {
+        const ud = mesh.userData;
+        if (ud.kindled || ud.bursting) return;
+        ud.litTime = Math.min(this.litThreshold, (ud.litTime || 0) + this.pressBoostMs);
+        ud.tapFlash = 1;
+        ud.taps = (ud.taps || 0) + 1;
     }
 
     // BaseSong既定のクリック波紋(DOM)との二重処理を抑止 — pointerdownに一本化
@@ -934,9 +1044,14 @@ export class SongAfter extends BaseSong {
         // 各チャンクに TextAlive の実歌唱タイミング(先頭文字の startTime)を割り当て、
         // その時刻に出現させる(固定刻みではなく歌唱に同期)。
         const timed = this.assignChunkTimes(phrase, chunks, fallbackTime);
-        for (const { text, startTime, wordCount } of timed) {
-            this.spawnTextChunk(text, startTime, wordCount);
-        }
+        // 各チャンクの歌唱区間[startTime, singEnd)=次チャンクの開始(末尾はフレーズ終端)。
+        // 歌唱パルスの対象判定を文字列一致ではなく「このチャンクの区間」で行うため。
+        const phraseEnd = (phrase && typeof phrase.endTime === 'number') ? phrase.endTime : Infinity;
+        timed.forEach(({ text, startTime, wordCount }, idx) => {
+            const next = timed[idx + 1];
+            const singEnd = next && next.startTime > startTime ? next.startTime : phraseEnd;
+            this.spawnTextChunk(text, startTime, wordCount, singEnd);
+        });
     }
 
     // ─── 各チャンクに TextAlive の歌唱タイミングを割り当てる ───
@@ -990,7 +1105,7 @@ export class SongAfter extends BaseSong {
         return result;
     }
 
-    spawnTextChunk(text, spawnTime, wordCount) {
+    spawnTextChunk(text, spawnTime, wordCount, singEnd) {
         const { texture, widthFrac } = this.createTextTexture(text);
 
         const material = new THREE.MeshStandardMaterial({
@@ -1010,7 +1125,7 @@ export class SongAfter extends BaseSong {
         const mesh = new THREE.Mesh(geo, material);
 
         // ── 画面いっぱいに散らしつつ、フレーム外へはみ出さないように配置する ──
-        const SCALE_MAX = 1.5;   // 照射/歌唱でこの程度まで拡大しうる
+        const SCALE_MAX = this.LYRIC_PLACE_SCALE; // 配置用の見積もり拡大率(超過分は _keepInFrame で内側へ寄せる)
         const MARGIN = 0.5;      // 端からの余白(ワールド)
         const z = Math.random() * 4.6 - 0.6;            // -0.6〜4.0(ミク前方=客席側)
         const bnd = this.visibleBoundsAtZ(z);
@@ -1041,10 +1156,17 @@ export class SongAfter extends BaseSong {
             life: 14000,        // 安全上限(通常は発話後フェードで消える)
             hoverProgress: 0,
             litTime: 0,        // 累計照射時間(ms)
-            swell: 0,          // 膨らみ量(照らすほど増え、しぼまない=ratchet)
+            swell: 0,          // 膨らみ量の目標(照らす/タップするほど増え、しぼまない=ratchet)
+            swellShown: 0,     // 表示中の膨らみ(目標へ下から追従=単調増加)
+            hoverAmt: 0,       // ホバー(照準)の膨らみ 0→1
+            tapFlash: 0,       // タップ直後の発光
+            singEnd: typeof singEnd === 'number' ? singEnd : Infinity, // このチャンクの歌唱区間の終端
             kindled: false,    // 照らし切り済みフラグ
             kindleFlash: 0,
             baseY: mesh.position.y,
+            baseX: x,          // 配置時のx(膨張で画面端を越える時だけ内側へ寄せる基準)
+            bndHalfW: bnd.halfW, // 配置した奥行きでの可視半幅
+            restHalfW: textW / 2, // 平常時(膨らみ0)のテキスト半幅(fitScale込み)
             spinFactor: (Math.random() - 0.5) * 0.15,
             fitScale,          // はみ出し防止の基準スケール(毎フレームの拡縮はこれに乗算)
             widthFrac,         // テキストがプレーン幅に占める割合(検証/はみ出し判定用)
@@ -1297,8 +1419,10 @@ export class SongAfter extends BaseSong {
         const f = this.finaleP;
         const stageDim = 1 - f;
 
-        // 押している間だけ点灯。離すと滑らかに消灯する
-        const spotGoal = (this.isPointerDown && f < 0.05) ? 1 : 0;
+        // 押している間だけ点灯。離すと滑らかに消灯する。
+        // マウスで歌詞にホバーしている間は「照準」としてうっすら点ける(照射量は積まない)。
+        const hoverAim = !this.isPointerDown && !this._pointerIsTouch && !!this._pickLyric;
+        const spotGoal = f < 0.05 ? (this.isPointerDown ? 1 : (hoverAim ? 0.3 : 0)) : 0;
         this.spotOn += (spotGoal - this.spotOn) * Math.min(1, dt * 8);
 
         // 照明フェード (スポット以外はさらに薄暗く保ち、全体を沈ませる)
@@ -1388,6 +1512,11 @@ export class SongAfter extends BaseSong {
         this.spotLight.target.position.x = Math.sin(rel * 0.8) * 4;
         this.spotLight.target.updateMatrixWorld();
 
+        // ポインタ直下の歌詞(レイキャスト)。照準・照射・ホバーの膨らみはすべてこの1つに対して行う。
+        this._pickLyric = (this.actPhase === 'show' && f < 0.05) ? this.pickLyricAtPointer() : null;
+        // 歌詞に当たっていればビームはその歌詞へ直接向ける(床への線形写像だと奥行き違いの歌詞を外す)
+        if (this._pickLyric) this._spotTargetGoal.copy(this._pickLyric.position);
+
         // ポインタライトの滑らかな追従
         this.mouseLight.target.position.lerp(this._spotTargetGoal, Math.min(1, dt * 10));
         this.mouseLight.position.x += (this._spotTargetGoal.x * 0.4 - this.mouseLight.position.x) * Math.min(1, dt * 5);
@@ -1412,47 +1541,51 @@ export class SongAfter extends BaseSong {
         const word = playerManager.player.video.findWord(position)
                   || playerManager.player.video.findChar(position);
 
-        // スポットライトが実際に照らしている円錐(ビーム)を毎フレーム1回求める。
-        // 始点(ライト位置)→狙点(target)が軸。当たり判定は甘め: コーン半頂角に
-        // 少し余裕(×1.2)を持たせ、ビーム周縁の薄明かりに入った歌詞も照射とみなす。
-        const beamPos = this.mouseLight.position;
-        const beamDir = this._beamDir.copy(this.mouseLight.target.position).sub(beamPos).normalize();
-        const spotCos = Math.cos(Math.min(Math.PI / 2, this.mouseLight.angle * 1.2));
-
         // 2. Update Interactive 3D Lyrics
+        const pick = this._pickLyric;
         let focusW = 0; // このフレームで最も強く照らされている歌詞の照射度(ミクの注視対象選び)
         let softW = 0, newestBirth = -Infinity; // 照らしていないとき、出たばかりの歌詞へ送る視線
-        // タップ1回ぶんの照射上乗せ。押下からspotOnが立ち上がるまで数フレーム待ち、
-        // ビーム内の歌詞に当たった最初のフレームで一度だけ消費する(押す毎に段階的に膨らむ)。
-        const pressBoost = this._pressBoostFrames > 0 ? this.pressBoostMs : 0;
-        let pressBoostUsed = false;
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const mesh = this.activeSprites[i];
             const ud = mesh.userData;
             const age = Math.max(0, position - ud.birth);
 
-            // スポットライトのビーム(円錐)の中に歌詞が入っているかで判定する。
-            // クリック位置(カーソル)ではなく、実際に光が当たっている範囲を使う。
-            // ビーム始点から歌詞へのベクトルが、軸方向の前方かつコーン半頂角内にあれば照射。
-            const toLyric = this._toLyric.copy(mesh.position).sub(beamPos);
-            const along = toLyric.dot(beamDir);                 // ビーム軸方向の前方距離
-            const cosToAxis = along > 0 ? along / toLyric.length() : -1;
-            // スポットライトは押下中のみ有効(spotOn)。サビは舞台全体が照らされ、
-            // すべての歌詞が浮かび上がる(受動的に聴いていても見せ場が伝わる)。
-            const litBySpot = this.spotOn > 0.25 && along > 0 && cosToAxis > spotCos;
-            const isIlluminated = (litBySpot || this.isClimax) && f < 0.3;
+            // 照射判定はレイキャストで特定したポインタ直下の歌詞だけ(どの歌詞でも同じ挙動)。
+            // 押している間(タップ/長押し)だけ照射量が積もる。ホバーは照準と膨らみの予告のみ。
+            const isPicked = mesh === pick;
+            const litBySpot = isPicked && this.isPointerDown && f < 0.3;
+            // サビは舞台全体が照らされ、すべての歌詞が浮かび上がる(発光/浮遊のみ。膨らみには使わない)
+            const isIlluminated = (isPicked || this.isClimax) && f < 0.3;
             const targetProgress = isIlluminated ? 1.0 : 0.0;
             ud.hoverProgress += (targetProgress - ud.hoverProgress) * 0.08;
             const p = ud.hoverProgress;
 
             // 照射時間の蓄積 → 照らし切り(kindle)判定
-            // 蓄積は「スポットライトで照らした時間」だけ。サビで全体が明るくなっても
-            // 自動的に弾けない(自分で照らした歌詞だけが紙吹雪になる)。
-            if (litBySpot && f < 0.3) {
-                ud.litTime += dtMs;
-                if (pressBoost > 0) { ud.litTime += pressBoost; pressBoostUsed = true; } // 押下1回ぶんの段階的な膨らみ
-                if (!ud.kindled && ud.litTime >= this.litThreshold) {
-                    ud.kindled = true;
+            // 蓄積は「自分で照らした(押した)時間＋タップ毎の一段」だけ。サビで全体が明るくなっても自動的に弾けない。
+            if (litBySpot) ud.litTime = Math.min(this.litThreshold, ud.litTime + dtMs);
+            if (!ud.kindled && ud.litTime >= this.litThreshold && f < 0.3) {
+                // 閾値到達: すぐ割らず、最大まで張り詰めて震える短い「溜め」を経てから破裂する
+                ud.kindled = true;
+                ud.primeT = 0;
+                ud.primeBase = mesh.scale.x;
+            }
+            ud.kindleFlash *= 0.94;
+            ud.tapFlash = (ud.tapFlash || 0) * Math.max(0, 1 - dt * 5);
+
+            // 破裂直前の溜め: 膨らみ切った大きさからさらに張り詰め、小刻みに震えてから弾ける
+            if (ud.kindled && !ud.bursting) {
+                ud.primeT += dt;
+                const k = Math.min(1, ud.primeT / this.PRIME_DUR);
+                const grow = 1 + this.PRIME_EXTRA * (1 - (1 - k) * (1 - k));   // ease-out で最大へ
+                const jit = this.NEAR_BURST_TREMBLE * (0.5 + 0.5 * Math.sin(rel * 95 + ud.birth));
+                const base = ud.primeBase * grow;
+                mesh.scale.set(base * (1 + jit), base * (1 + this.NEAR_BURST_TREMBLE - jit), 1);
+                this._keepInFrame(mesh, (base / (ud.fitScale || 1)) * (1 + this.NEAR_BURST_TREMBLE));
+                mesh.rotation.z = Math.sin(rel * 70 + ud.birth) * 0.035 * k;
+                mesh.material.opacity = 1;
+                mesh.material.emissive.setHSL(0.1, 0.9, Math.min(0.95, 0.6 + 0.3 * k));
+                if (k >= 1) {
+                    mesh.rotation.z = 0;
                     ud.kindleFlash = 1.0;
                     ud.bursting = true;
                     ud.burstT = 0;
@@ -1460,8 +1593,8 @@ export class SongAfter extends BaseSong {
                     this.burstLyricToConfetti(mesh.position.clone(), ud.wordCount);
                     this.spawnSeatLight(mesh.position.clone());
                 }
+                continue;
             }
-            ud.kindleFlash *= 0.94;
 
             // 破裂演出: 膨らんで強く発光しながら弾け飛び、紙吹雪を残して消える
             if (ud.bursting) {
@@ -1490,28 +1623,38 @@ export class SongAfter extends BaseSong {
             // 照らしていなくても、出たばかり(最新)の歌詞の方へ自然に視線を送る
             if (ud.birth > newestBirth) { newestBirth = ud.birth; this._softFocus.copy(mesh.position); softW = mesh.material.opacity || 0; }
 
-            // 歌唱パルス
-            const isWordActive = word && ud.text && ud.text.includes(word.text)
+            // 歌唱パルス: このチャンクの歌唱区間内で、いま歌われている単語に合わせて光る。
+            // (旧: ud.text.includes(word.text) は1文字の単語で無関係な歌詞まで反応していた)
+            // 膨らみ(スケール)には使わない=単語の切れ目で縮む揺れを出さない。
+            const isWordActive = !!word && word.startTime >= ud.birth - 1 && word.startTime < ud.singEnd
                               && position >= word.startTime && position <= word.endTime;
             if (!ud.pulseProgress) ud.pulseProgress = 0;
             ud.pulseProgress += ((isWordActive ? 1 : 0) - ud.pulseProgress) * 0.2;
             const pulse = ud.pulseProgress;
             const fit = ud.fitScale || 1;
             // ── 膨らみ(照らす手応え) ──
-            // 照らした瞬間にはっきり一段(hoverBump)、さらに照射を重ねるほど(litRatio)進行的に膨らみ、
-            // 照らし切る寸前まで膨らみ続けてそのまま破裂へ繋ぐ。いちど膨らんだらしぼまない(ratchet)。
+            // ホバー/押下した瞬間にはっきり一段(HOVER_SWELL)、タップ/長押しで照射を重ねるほど(litRatio)
+            // 段階的に膨らみ、破裂の寸前まで膨らみ続ける。照射を受けた歌詞はしぼまない(ratchet)。
             const litRatio = Math.min(1, ud.litTime / this.litThreshold);
-            const hoverBump = isIlluminated ? 0.16 : 0;       // 照射中のはっきりした膨らみ
-            const targetSwell = hoverBump + litRatio * 0.62;  // 破裂へ向けた段階的な増大
-            ud.swell = Math.max(ud.swell || 0, targetSwell);  // 一度膨らんだ段階からしぼまない
-            const s = fit * (1.0 + ud.swell) * (1.0 + pulse * 0.20) * (1.0 + ud.kindleFlash * 0.15);
-            mesh.scale.set(s, s, 1);
+            if (ud.litTime > 0) {
+                ud.swell = Math.max(ud.swell, this.HOVER_SWELL + litRatio * this.SWELL_RANGE);
+            }
+            // 表示は目標へ下から素早く追従(イーズ)するだけ=単調増加
+            ud.swellShown += (ud.swell - ud.swellShown) * Math.min(1, dt * 14);
+            ud.hoverAmt += ((isPicked ? 1 : 0) - ud.hoverAmt) * Math.min(1, dt * 12);
+            const shown = Math.max(ud.swellShown, this.HOVER_SWELL * ud.hoverAmt);
+            // 破裂が近い(照射7割超)ほど小刻みに震えて張り詰める(加算のみ=縮まない)
+            const nearK = Math.max(0, Math.min(1, (litRatio - 0.7) / 0.3));
+            const trem = nearK * this.NEAR_BURST_TREMBLE * (0.5 + 0.5 * Math.sin(rel * 60 + ud.birth));
+            const s = fit * (1.0 + shown);
+            mesh.scale.set(s * (1 + trem), s * (1 + nearK * this.NEAR_BURST_TREMBLE - trem), 1);
+            this._keepInFrame(mesh, (1.0 + shown) * (1 + this.NEAR_BURST_TREMBLE));
 
             // 発光: 暗いステージでも黒くつぶれないよう常にほのかに自己発光。
             // 照らし切るほど暖色へ寄り、スポット/歌唱で強く光る。
             const hue = 0.46 + pulse * 0.05 - litRatio * 0.38; // 緑 → 暖色
             const baseGlow = 0.26;                              // 常時のほのかな白光(発話後も黒くならない)
-            let lum = Math.min(0.92, baseGlow + 0.5 * p + pulse * 0.4 + ud.kindleFlash * 0.5 + (ud.kindled ? 0.15 : 0));
+            let lum = Math.min(0.92, baseGlow + 0.5 * p + pulse * 0.4 + ud.tapFlash * 0.45 + litRatio * 0.12);
             lum *= (0.4 + 0.6 * stageDim);                      // 終演のみ少し沈ませる
             mesh.material.emissive.setHSL(Math.max(0.06, hue), 0.7, lum);
 
@@ -1521,7 +1664,7 @@ export class SongAfter extends BaseSong {
             let targetOpacity;
             if (age < fadeInMs) {
                 targetOpacity = age / fadeInMs;
-            } else if (litBySpot || age <= singHold) {
+            } else if (litBySpot || (ud.litTime > 0 && age <= singHold + 6000) || age <= singHold) {
                 targetOpacity = 1.0;
             } else {
                 targetOpacity = Math.max(0, 1 - (age - singHold) / fadeOutMs);
@@ -1537,10 +1680,6 @@ export class SongAfter extends BaseSong {
                 this.activeSprites.splice(i, 1);
             }
         }
-        // 押下の猶予フレームを消化。ビーム内の歌詞に当たって消費したら即打ち切り、
-        // 当たらないまま(空タップ)なら時間切れで自然に失効させる。
-        if (this._pressBoostFrames > 0) this._pressBoostFrames = pressBoostUsed ? 0 : this._pressBoostFrames - 1;
-
         // 照らされた歌詞があればそれを強く注視。無ければ最新の歌詞へ控えめに視線を送る。
         // どちらも無ければ重み0 → ミクは正面へ戻る。
         if (focusW > 0.12) {
@@ -1695,6 +1834,7 @@ export class SongAfter extends BaseSong {
         if (this.songWrapper) {
             this.songWrapper.removeEventListener('pointermove', this.boundOnPointerMove);
             this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
+            this.songWrapper.removeEventListener('pointerleave', this.boundOnPointerLeave);
             this.songWrapper.removeEventListener('contextmenu', this.boundOnContextMenu);
         }
 

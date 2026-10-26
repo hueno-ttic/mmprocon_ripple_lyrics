@@ -3,6 +3,7 @@ import { LyricRenderer } from '../ui/LyricRenderer.js';
 import { SONGS } from '../config/songs.js';
 import { appState } from '../core/appState.js';
 import { playerManager } from '../core/player.js';
+import { unlockAudio } from '../core/audioUnlock.js';
 import { quality } from '../core/quality.js';
 
 export class BaseSong {
@@ -81,23 +82,7 @@ export class BaseSong {
      */
     _autoStartPlayback() {
         if (!playerManager.isTimerReady) return;
-        try {
-            const audioCtx = window.AudioContext || window.webkitAudioContext;
-            if (audioCtx) {
-                const dummyCtx = new audioCtx();
-                if (dummyCtx.state === 'suspended') {
-                    dummyCtx.resume();
-                }
-            }
-            if (playerManager.player && playerManager.player.audioContext) {
-                const ctx = playerManager.player.audioContext;
-                if (ctx.state === 'suspended') {
-                    ctx.resume();
-                }
-            }
-        } catch (err) {
-            console.warn('[Ripple Lyrics] Web Audio unlock failed safely: ', err);
-        }
+        unlockAudio(); // 共有 AudioContext を resume(押下ごとの new によるリークを防ぐ)
         playerManager.seek(0);
         playerManager.fadeIn(1200); // 曲の頭出しをなめらかに
         playerManager.play();

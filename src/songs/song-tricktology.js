@@ -1210,8 +1210,16 @@ export class SongTricktology extends BaseSong {
         cache.forEach((e) => { e.material.transparent = true; });
         // 光の粒は少し遅れて湧かせ、薄れていく輪郭から立ち上るように
         const ySign = rejectedWorld === 'ground' ? 1 : -1;
-        setTimeout(() => this.spawnCollapseBurst(null, ySign), 900);
-        setTimeout(() => this.spawnCollapseBurst(null, ySign), 1700);
+        // タイマーIDを保持し destroy で解除する(曲離脱後に発火してGPUオブジェクトを確保しないように)。
+        if (!this._burstTimers) this._burstTimers = [];
+        [900, 1700].forEach((delay) => {
+            const id = setTimeout(() => {
+                this._burstTimers = (this._burstTimers || []).filter((t) => t !== id);
+                if (!this.isActive || !this.scene) return;
+                this.spawnCollapseBurst(null, ySign);
+            }, delay);
+            this._burstTimers.push(id);
+        });
     }
 
     spawnCollapseBurst(group, ySign) {
@@ -1700,6 +1708,10 @@ export class SongTricktology extends BaseSong {
         window.removeEventListener('pointercancel', this.boundOnPointerUp);
 
         if (this._captionTimer) clearTimeout(this._captionTimer);
+        if (this._burstTimers) {
+            this._burstTimers.forEach((id) => clearTimeout(id));
+            this._burstTimers = [];
+        }
 
         this.lyrics.forEach((l) => this.disposeLyric(l));
         this.lyrics = [];

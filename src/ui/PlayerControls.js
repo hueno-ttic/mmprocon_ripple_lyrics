@@ -1,4 +1,5 @@
 import { playerManager } from '../core/player.js';
+import { unlockAudio } from '../core/audioUnlock.js';
 import { appState } from '../core/appState.js';
 import { eventBus } from '../core/eventBus.js';
 
@@ -44,25 +45,8 @@ export class PlayerControls {
     }
 
     bindEvents() {
-        const unlockAudioContext = () => {
-            try {
-                const audioCtx = window.AudioContext || window.webkitAudioContext;
-                if (audioCtx) {
-                    const dummyCtx = new audioCtx();
-                    if (dummyCtx.state === 'suspended') {
-                        dummyCtx.resume();
-                    }
-                }
-                if (playerManager.player && playerManager.player.audioContext) {
-                    const ctx = playerManager.player.audioContext;
-                    if (ctx.state === 'suspended') {
-                        ctx.resume();
-                    }
-                }
-            } catch (err) {
-                console.warn('[Ripple Lyrics] Web Audio unlock failed safely: ', err);
-            }
-        };
+        // 共有 AudioContext を resume するだけ(押下ごとに new してリークさせない)
+        const unlockAudioContext = unlockAudio;
 
         this.playPauseBtn.addEventListener('click', () => {
             if (window.app?.currentSongScene?.isSelectingCast) return; // 被写体選択中は再生させない(shutter)
@@ -108,6 +92,9 @@ export class PlayerControls {
         window.addEventListener('pointercancel', endScrub);
 
         const backWithFade = () => {
+            // 曲終了のリザルト表示中は、その「楽曲選択画面へ」と同じ経路(完了登録あり)で戻す。
+            // ここで素の backToLake を出すと完了が記録されず、オーバーレイも残ってしまう。
+            if (window.app?.finishSongEndOverlay?.()) return;
             // 押下と同時に遷移(カーテン+transition SE)を起動し、押下フィードバックを即返す。
             // 音楽はカーテンの裏で並行フェードアウトしてから停止する(ブツ切り防止)。
             // 以前は「フェード→その後 backToLake」と直列化していたため、SE/カーテンが約450ms遅れていた。
@@ -122,6 +109,9 @@ export class PlayerControls {
         this._backWithFade = backWithFade;
 
         window.addEventListener('keydown', (e) => {
+            // 曲シーン中だけ反応する。湖(選曲画面)では Space/Escape を WorldUI 側に任せ、
+            // 前曲の音声再生や backToLake の再実行に化けないようにする。
+            if (appState.currentSongId === null) return;
             if (!playerManager.isTimerReady) {
                 // Guard keyboard inputs during load
                 if (e.code === 'Space' || e.code === 'Escape') {
@@ -132,6 +122,7 @@ export class PlayerControls {
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (window.app?.currentSongScene?.isSelectingCast) return; // 被写体選択中はSpaceで再生させない(shutter)
+                if (playerManager._songEndLocked) return; // 曲の終了後は Space で再生し直さない(songEnd 再発火防止)
                 unlockAudioContext();
                 if (appState.isPlaying) {
                     playerManager.pause();

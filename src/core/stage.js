@@ -19,7 +19,9 @@
 //   回転は軸整列を保つ(90°)ので getBoundingClientRect の AABB も軸整列のまま、
 //   座標は単純な線形変換で論理↔デバイスを往復できる(下記 toLocal / rect パッチ)。
 //
-//   シムは active(=端末の短辺がスマホ幅)時のみ作用。PC は完全に素のまま(挙動不変)。
+//   シムは active(=タッチ主体の端末 かつ 短辺がスマホ幅)時のみ作用。PC は完全に素のまま(挙動不変)。
+//   ※短辺だけで判定すると 1366x768 ノートPC(ブラウザUI込みで可視高 ~650px)など
+//     「背の低いPCウィンドウ」まで黒帯ステージになってしまうため、タッチ主体判定を併用する。
 // ─────────────────────────────────────────────────────────────
 
 const LANDSCAPE_RATIO = 16 / 9;  // 論理ステージの 幅/高さ (常に横長)
@@ -49,10 +51,34 @@ function realVH() {
     return Math.round((window.visualViewport && window.visualViewport.height) || document.documentElement.clientHeight);
 }
 
+// タッチ主体の端末(スマホ/タブレット)か。主ポインタが coarse(指)なら真。
+// coarse を報告しない古いブラウザ向けに「hover不可＋タッチ点あり」も許容する。
+// マウス主体のPC(タッチ対応ノート含む: 主ポインタは fine)は偽 → ステージを使わない。
+function isTouchPrimary() {
+    try {
+        if (window.matchMedia) {
+            if (window.matchMedia('(pointer: coarse)').matches) return true;
+            if (window.matchMedia('(hover: none)').matches && (navigator.maxTouchPoints || 0) > 0) return true;
+            return false;
+        }
+    } catch (e) { /* matchMedia 不可環境は下のフォールバックへ */ }
+    return (navigator.maxTouchPoints || 0) > 0 || 'ontouchstart' in window;
+}
+
+// モバイルOSの端末か。トラックパッド/マウス接続の iPad (主ポインタが fine になる) も
+// 従来どおりステージ対象に含めるための補助判定。iPadOS のデスクトップ表示は UA が
+// Macintosh になるため、タッチ点の有無で見分ける。
+function isMobileOS() {
+    const ua = navigator.userAgent || '';
+    if (/iPhone|iPad|iPod|Android/i.test(ua)) return true;
+    return /Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1;
+}
+
 function recompute() {
     const vw = realVW(), vh = realVH();
-    // 短辺がスマホ幅以下なら「モバイル」とみなす(縦横どちらの持ち方でも)
-    active = Math.min(vw, vh) <= MOBILE_MAX_WIDTH;
+    // タッチ主体の端末で、短辺がスマホ幅以下なら「モバイル」とみなす(縦横どちらの持ち方でも)。
+    // 背の低いPCウィンドウ(短辺<=768でもマウス操作)は素のまま。
+    active = (isTouchPrimary() || isMobileOS()) && Math.min(vw, vh) <= MOBILE_MAX_WIDTH;
     if (!active) { SW = vw; SH = vh; dL = 0; dT = 0; dW = vw; dH = vh; rotated = false; scale = 1; return; }
 
     // モバイルは論理寸法を固定基準(16:9)にし、画面へは scale で縮小して内接させる。

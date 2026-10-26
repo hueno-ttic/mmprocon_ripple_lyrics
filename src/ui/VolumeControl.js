@@ -1,6 +1,7 @@
 import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
 import { stageRoot } from '../core/stage.js';
+import { safeGet, safeSet } from '../utils/storage.js';
 
 /**
  * 全楽曲共通の音量コントロール(画面右下に常設)。
@@ -33,7 +34,7 @@ export class VolumeControl {
     }
 
     _load(key, fallback) {
-        const v = parseInt(localStorage.getItem(key), 10);
+        const v = parseInt(safeGet(key), 10);
         return Number.isFinite(v) ? v : fallback;
     }
 
@@ -46,8 +47,8 @@ export class VolumeControl {
     }
 
     _save() {
-        localStorage.setItem('appVolume', String(this.volume));
-        localStorage.setItem('appMuted', this.muted ? '1' : '0');
+        safeSet('appVolume', String(this.volume));
+        safeSet('appMuted', this.muted ? '1' : '0');
     }
 
     _build() {

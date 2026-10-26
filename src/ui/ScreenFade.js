@@ -9,7 +9,11 @@ import { stageRoot } from '../core/stage.js';
 class ScreenFade {
     constructor() {
         this.el = null;
-        this._timer = null;
+        // フェードの世代番号。フェードが重なったとき、後発が古いタイマーを clearTimeout して
+        // 先発の Promise が永遠に resolve されない(=待っている側が固まる)事故を防ぐため、
+        // 各フェードは自分のタイマーで必ず resolve し、副作用(入力ブロック解除)だけを
+        // 最新のフェードに限定する。
+        this._seq = 0;
     }
 
     _ensure() {
@@ -34,8 +38,8 @@ class ScreenFade {
         el.style.pointerEvents = 'auto'; // block interaction mid-transition
         void el.offsetWidth;             // commit current opacity so the change animates
         el.style.opacity = '1';
-        clearTimeout(this._timer);
-        return new Promise(resolve => { this._timer = setTimeout(resolve, ms); });
+        ++this._seq;
+        return new Promise(resolve => { setTimeout(resolve, ms); });
     }
 
     /** Fade the curtain back to transparent (reveal the new screen). */
@@ -45,9 +49,13 @@ class ScreenFade {
         el.style.transition = `opacity ${ms}ms ease`;
         void el.offsetWidth;
         el.style.opacity = '0';
-        clearTimeout(this._timer);
+        const seq = ++this._seq;
         return new Promise(resolve => {
-            this._timer = setTimeout(() => { el.style.pointerEvents = 'none'; resolve(); }, ms);
+            setTimeout(() => {
+                // 途中で別のフェードに置き換わっていたら入力ブロックはそちらに任せる
+                if (seq === this._seq) el.style.pointerEvents = 'none';
+                resolve();
+            }, ms);
         });
     }
 
