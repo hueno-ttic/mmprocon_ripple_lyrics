@@ -61,7 +61,6 @@ export class WorldUI {
         this.bgPhaseOverride = this._loadBgOverride();
         this.currentPhaseIndex = this._desiredPhase();
         this.isTransitioning = false;
-        this.hoveredIndex = -1;
 
         // DOM labels
         this.labelsContainer = document.createElement('div');

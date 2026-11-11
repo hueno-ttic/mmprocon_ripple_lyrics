@@ -28,16 +28,6 @@ export function safeSet(key, value) {
     }
 }
 
-/** 値を削除。失敗しても無害。 */
-export function safeRemove(key) {
-    try {
-        localStorage.removeItem(key);
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
 /**
  * JSON として取得。未保存・壊れたJSON・ストレージ不可のときは fallback を返す。
  * validate を渡すと、パース結果がそれを満たさない場合も fallback に倒す

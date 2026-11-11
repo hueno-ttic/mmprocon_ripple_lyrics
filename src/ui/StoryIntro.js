@@ -11,7 +11,7 @@ export class StoryIntro {
         this.container.style.left = '0';
         this.container.style.width = '100%';
         this.container.style.height = '100%';
-        this.container.style.backgroundColor = 'transparent'; // Shows LakeUI behind if it is already there
+        this.container.style.backgroundColor = 'transparent'; // Shows the lake (WorldUI) behind if it is already there
         this.container.style.color = '#ffffff';
         this.container.style.display = 'flex';
         this.container.style.justifyContent = 'center';
@@ -32,7 +32,6 @@ export class StoryIntro {
     }
 
     async start() {
-        this._skipped = false;
         this._skipResolve = null;
 
         // Enable pointer events so clicks are captured
@@ -41,7 +40,6 @@ export class StoryIntro {
 
         const skipPromise = new Promise(resolve => { this._skipResolve = resolve; });
         const onSkip = () => {
-            this._skipped = true;
             if (this._skipResolve) this._skipResolve();
         };
         this.container.addEventListener('click', onSkip, { once: true });

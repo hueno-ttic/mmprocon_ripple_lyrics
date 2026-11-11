@@ -6,7 +6,7 @@ import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
-import { settleSpringBones } from '../utils/vrm.js';
+import { settleSpringBones, disposeVRM } from '../utils/vrm.js';
 
 /**
  * アフター・ザ・カーテン — 「終わりの後に何が残るのか」
@@ -362,7 +362,7 @@ export class SongAfter extends BaseSong {
             import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
             (gltf) => {
                 if (!this.isActive) {
-                    this.disposeVRM(gltf.userData.vrm);
+                    disposeVRM(gltf.userData.vrm);
                     return;
                 }
                 const vrm = gltf.userData.vrm;
@@ -378,7 +378,6 @@ export class SongAfter extends BaseSong {
                 });
                 this.setupRelaxedPose(vrm);
                 settleSpringBones(vrm); // 開幕時にツインテールが逆立たないよう静止状態へ
-                console.log('[AFTER] Miku VRM loaded.');
             },
             undefined,
             (error) => {
@@ -482,7 +481,7 @@ export class SongAfter extends BaseSong {
         } catch (e) { /* noop */ }
     }
 
-    // ─── 幕間の湖背景(夜→晴天) — kotaeteLakes を参考にした self-contained 実装 ───
+    // ─── 幕間の湖背景(夜→晴天) — 旧こたえて用湖背景(kotaeteLakes、現在は削除済み)を参考にした self-contained 実装 ───
     // カーテン背後(Z=-72〜-96)に夜空と水面を置き、uDay(0=夜,1=晴天)で色を切り替える。
     // 共有モジュールへは依存せず、afterシーン内で完結させる(fog:false で常にクリア)。
     initLake() {
@@ -992,7 +991,6 @@ export class SongAfter extends BaseSong {
         const aspect = cam.aspect || (window.innerWidth / window.innerHeight);
         const tanH = tanV * aspect;
         const edgeY = (ry) => {
-            const dx = fwd.x + ry * tanV * up.x;
             const dy = fwd.y + ry * tanV * up.y;
             const dz = fwd.z + ry * tanV * up.z;
             const t = (zc - cp.z) / dz;
@@ -1828,22 +1826,6 @@ export class SongAfter extends BaseSong {
         }
     }
 
-    disposeVRM(vrm) {
-        if (!vrm) return;
-        vrm.scene.traverse((obj) => {
-            if (obj.geometry) obj.geometry.dispose();
-            if (obj.material) {
-                const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-                mats.forEach((m) => {
-                    if (m.map) m.map.dispose();
-                    if (m.normalMap) m.normalMap.dispose();
-                    if (m.emissiveMap) m.emissiveMap.dispose();
-                    m.dispose();
-                });
-            }
-        });
-    }
-
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
         window.removeEventListener('pointerup', this.boundOnPointerUp);
@@ -1907,7 +1889,7 @@ export class SongAfter extends BaseSong {
         // VRM
         if (this.currentVRM) {
             this.scene.remove(this.currentVRM.scene);
-            this.disposeVRM(this.currentVRM);
+            disposeVRM(this.currentVRM);
             this.currentVRM = null;
         }
 

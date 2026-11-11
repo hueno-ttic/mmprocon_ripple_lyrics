@@ -73,36 +73,6 @@
     text-shadow: 0 0 3px rgba(0,0,0,0.9), 0 1px 3px rgba(0,0,0,0.95);
 }
 
-/* Anchor div positioned at water surface (y=0) — independent of floating label */
-.song-ripple-anchor {
-    position: absolute;
-    top: 0;
-    left: 0;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-}
-
-/* CSS water-ripple rings below each song label */
-.song-ripple-indicator {
-    position: relative;
-    height: 30px;
-    margin: 0;
-    pointer-events: none;
-}
-
-.song-ripple-indicator span {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    border-radius: 50%;
-    border: 2px solid currentColor;
-    box-shadow: 0 0 6px 1px currentColor;
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
 /* ミュートボタンは見た目30pxのまま、擬似要素で44pxの当たり判定を確保(タップ対象44px化) */
 .app-volume-mute {
     position: relative;
@@ -724,91 +694,6 @@
         padding: 7px 24px;
         font-size: 12px;
         letter-spacing: 2px;
-    }
-}
-
-/* ── Kotaete Choice Announcement ─────────────────────────── */
-.kotaete-choice-announcement {
-    position: absolute;
-    top: 38%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    color: rgba(255, 255, 255, 0.9);
-    font-family: 'Inter', 'Noto Sans JP', sans-serif;
-    font-size: 15px;
-    letter-spacing: 5px;
-    font-weight: 300;
-    opacity: 0;
-    transition: opacity 0.7s ease;
-    pointer-events: none;
-    text-align: center;
-    text-shadow: 0 0 24px rgba(127, 119, 221, 0.9);
-    z-index: 50;
-    white-space: nowrap;
-}
-
-/* ── Kotaete Choice Buttons ───────────────────────────────── */
-.kotaete-choice-container {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    gap: 32px;
-    z-index: 50;
-    opacity: 0;
-    transition: opacity 0.5s ease;
-}
-
-.kotaete-choice-container.visible {
-    opacity: 1;
-}
-
-.kotaete-choice-btn {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 6px;
-    padding: 20px 36px;
-    font-family: 'Inter', 'Noto Sans JP', sans-serif;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.5);
-    border-radius: 10px;
-    cursor: pointer;
-    backdrop-filter: blur(10px);
-    transition: background 0.3s ease, box-shadow 0.3s ease, transform 0.2s ease;
-}
-
-.kotaete-choice-btn:hover {
-    transform: translateY(-3px);
-}
-
-.kotaete-choice-btn .choice-main {
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: 1px;
-}
-
-.kotaete-choice-btn .choice-sub {
-    font-size: 11px;
-    letter-spacing: 1.5px;
-    opacity: 0.7;
-    font-weight: 400;
-}
-
-@container (max-width: 600px) {
-    .kotaete-choice-container {
-        flex-direction: column;
-        gap: 16px;
-        width: 80%;
-    }
-
-    .kotaete-choice-btn {
-        padding: 16px 24px;
-    }
-
-    .kotaete-choice-btn .choice-main {
-        font-size: 18px;
     }
 }
 

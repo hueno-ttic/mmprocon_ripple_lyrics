@@ -97,10 +97,9 @@ Antigravityのマルチエージェントで開発しても、設計が壊れた
 - 完了済み波紋の刻印表示
 
 **担当ファイル**:
-- src/lake/LakeUI.js
-- src/lake/RippleSystem.js
-- src/lake/LakeShader.js
-- src/lake/Transition.js
+- src/lake/WorldUI.js
+- src/lake/sceneKit.js
+- src/lake/phases/
 - src/styles/theme.css
 
 **注意**:
@@ -146,8 +145,6 @@ Antigravityのマルチエージェントで開発しても、設計が壊れた
 - src/ui/PlayerControls.js
 - src/ui/LoadingScreen.js
 - src/ui/ErrorScreen.js
-- src/ui/ShareButton.js
-- src/utils/input.js
 - src/styles/responsive.css
 
 **注意**:
@@ -163,13 +160,11 @@ Antigravityのマルチエージェントで開発しても、設計が壊れた
 - FPS維持
 - LOD
 - メモリリーク防止
-- WebGL/PixiJSリソース管理
+- WebGL(Three.js)リソース管理
 - スマホ負荷対策
 
 **担当ファイル**:
-- src/core/performance.js
-- src/core/resourceTracker.js
-- src/utils/canvas.js
+- src/core/quality.js
 - 各曲のdestroy処理
 
 **チェック項目**:

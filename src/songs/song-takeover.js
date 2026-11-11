@@ -4,7 +4,7 @@ import { VRMLoaderPlugin } from '@pixiv/three-vrm';
 import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { BaseSong } from './BaseSong.js';
-import { settleSpringBones } from '../utils/vrm.js';
+import { settleSpringBones, disposeVRM } from '../utils/vrm.js';
 import { playerManager } from '../core/player.js';
 import { unlockAudio } from '../core/audioUnlock.js';
 import { groupPhraseWordsByMinLength, findGroupForWord } from '../utils/lyricGroups.js';
@@ -35,7 +35,6 @@ export class SongTakeover extends BaseSong {
 
         this._debrisEdgesGeo = null;
         this._debrisMat = null;
-        this.cardMargin = 0; // no extra margin for decoded tiles
         this.allGroups = [];
         this.bgTiles = {};
         this.lyricCardBuilt = false; // 歌詞カード構築済みフラグ（update内で遅延構築・成功時にtrue）
@@ -255,7 +254,7 @@ export class SongTakeover extends BaseSong {
         loader.load(
             import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
             (gltf) => {
-                if (!this.isActive) { this.disposeVRM(gltf.userData.vrm); return; }
+                if (!this.isActive) { disposeVRM(gltf.userData.vrm, { skipMaterials: [this.mikuSilhouetteMat] }); return; }
                 const vrm = gltf.userData.vrm;
                 this.currentVRM = vrm;
                 vrm.scene.position.set(0, this._mikuVrmBaseY, this._mikuVrmBaseZ);
@@ -282,7 +281,6 @@ export class SongTakeover extends BaseSong {
 
                 this.scene.add(vrm.scene);
                 this.mikuVrmReady = true;
-                console.log('[TAKEOVER] Miku VRM loaded.');
             },
             undefined,
             (error) => { console.error('[TAKEOVER] Failed to load Miku VRM:', error); }
@@ -360,27 +358,6 @@ export class SongTakeover extends BaseSong {
         if (spine) spine.rotation.x = breathe * 0.03 - 0.015;
 
         this._tickVrm();
-    }
-
-    disposeVRM(vrm) {
-        if (!vrm) return;
-        vrm.scene.traverse((obj) => {
-            if (obj.geometry) obj.geometry.dispose();
-            // シルエット表示中は obj.material が共有のダーク材質なので、退避してある
-            // 本来のマテリアルも併せて解放する（取りこぼし防止）。
-            const all = [];
-            if (obj.material) all.push(...(Array.isArray(obj.material) ? obj.material : [obj.material]));
-            if (obj.userData && obj.userData._origMat) all.push(...(Array.isArray(obj.userData._origMat) ? obj.userData._origMat : [obj.userData._origMat]));
-            if (all.length) {
-                all.forEach((m) => {
-                    if (!m || m === this.mikuSilhouetteMat) return; // 共有材質は destroy 側で解放
-                    if (m.map) m.map.dispose();
-                    if (m.normalMap) m.normalMap.dispose();
-                    if (m.emissiveMap) m.emissiveMap.dispose();
-                    m.dispose();
-                });
-            }
-        });
     }
 
     initUI() {
@@ -1794,7 +1771,6 @@ export class SongTakeover extends BaseSong {
         `;
         this.songWrapper.appendChild(overlay);
         this.warningEl = overlay;
-        sfx.play('takeover_warning');
         // 退場（ノイズで左右に散る）は _scatterWarning() が制御する。
         // 自動では消さず、ホールド時間ぶん表示し続ける。
     }
@@ -2073,7 +2049,6 @@ export class SongTakeover extends BaseSong {
         this._completeFired = true;
         this._outcome = 'failed';
         this._erosionStage = 0;
-        sfx.play('takeover_fail');
 
         // 未解読のまま残った暗号歌詞を一掃（リザルトに居座るのを防ぐ／#120）
         this._clearRemainingTargets();
@@ -2246,17 +2221,6 @@ export class SongTakeover extends BaseSong {
         }
         // 遷移を戻す（スケール値は確定済みなのでここでアニメは起きない）
         c.classList.remove('to-fitting');
-    }
-
-    // Called externally (phrase boundary expire)
-    decodeTarget(target) {
-        if (target.state !== 'scrambled') return;
-        clearInterval(target.scrambleTimer);
-        target.state = 'expired';
-        target.el.className = 'to-phrase expired';
-        setTimeout(() => {
-            if (target.el.parentNode) target.el.parentNode.removeChild(target.el);
-        }, 400);
     }
 
     expireTarget(target) {
@@ -2545,7 +2509,7 @@ export class SongTakeover extends BaseSong {
         // 3DミクVRM・専用ライト・シルエット材質を除去・解放
         if (this.currentVRM) {
             this.scene.remove(this.currentVRM.scene);
-            this.disposeVRM(this.currentVRM);
+            disposeVRM(this.currentVRM, { skipMaterials: [this.mikuSilhouetteMat] });
             this.currentVRM = null;
         }
         this.mikuVrmReady = false;

@@ -2,7 +2,6 @@ import { appState } from './core/appState.js';
 import { eventBus } from './core/eventBus.js';
 import { playerManager } from './core/player.js';
 import { WorldUI } from './lake/WorldUI.js';
-import { clearRipples } from './lake/lakeMemory.js';
 import { PlayerControls } from './ui/PlayerControls.js';
 import { VolumeControl } from './ui/VolumeControl.js';
 import { safeGet } from './utils/storage.js';
@@ -15,15 +14,10 @@ import './core/sfx.js'; // 全曲共通UIの効果音(eventBus/DOM購読で自�
 import './core/bgm.js'; // 選曲画面のフェーズ別BGM(eventBus購読で自己登録)
 import { DEV_TOOLS_ENABLED } from './core/featureFlags.js'; // デプロイ単位で開発者向け機能を出し分け
 
-// 曲シーンは1曲ずつしか遊ばないので、静的importで全曲(+pixi/three-vrm)を
+// 曲シーンは1曲ずつしか遊ばないので、静的importで全曲(+three-vrm/MMD)を
 // 初回バンドルに同梱するのは無駄。曲ごとに dynamic import() し、選んだ曲の
 // チャンクだけを遅延ロードする(初回ロードを大幅に軽量化)。
 // 遷移はカーテン(ScreenFade)で覆われているため、このロード待ちは隠れる。
-// issue #30 改修版トリツクロジー。true にすると改修前のリズムゲーム版へ即座に戻せる。
-const TRICKTOLOGY_LEGACY = false;
-// こたえては現在ひまわり登攀版(song-kotaete.js)。true にすると水鏡版へいつでも戻せる
-// (song-kotaete.mizukagami.js)。どちらも class SongKotaete を export する。
-const KOTAETE_MIZUKAGAMI = false;
 // 各曲: チャンクを動的 import する load() と、その中から取り出す class 名。
 // あえてモジュール名前空間ごと受け取り、_loadSongClass 側で class を取り出す。
 // 本番ビルドでは Vite が vite:preloadError を握り潰してモジュールを undefined で
@@ -32,15 +26,11 @@ const KOTAETE_MIZUKAGAMI = false;
 // BaseSong(黒画面+白歌詞)へ落ちてしまう。モジュールを丸ごと受け取れば、
 // 「解決したが class が無い = 実質ロード失敗」を確実に検知してリトライ/案内できる。
 const SONG_LOADERS = {
-    kotaete: { load: () => (KOTAETE_MIZUKAGAMI
-        ? import('./songs/song-kotaete.mizukagami.js')
-        : import('./songs/song-kotaete.js')), cls: 'SongKotaete' },
+    kotaete: { load: () => import('./songs/song-kotaete.js'), cls: 'SongKotaete' },
     after: { load: () => import('./songs/song-after.js'), cls: 'SongAfter' },
     shutter: { load: () => import('./songs/song-shutter.js'), cls: 'SongShutter' },
     orchestra: { load: () => import('./songs/song-orchestra.js'), cls: 'SongOrchestra' },
-    tricktology: { load: () => (TRICKTOLOGY_LEGACY
-        ? import('./songs/song-tricktology.legacy.js')
-        : import('./songs/song-tricktology.js')), cls: 'SongTricktology' },
+    tricktology: { load: () => import('./songs/song-tricktology.js'), cls: 'SongTricktology' },
     takeover: { load: () => import('./songs/song-takeover.js'), cls: 'SongTakeover' },
 };
 import { TitleScreen } from './ui/TitleScreen.js';
@@ -210,7 +200,6 @@ class Application {
         const initWorld = () => {
             // Intro finished — fade through the curtain into the lake world
             // so the 3D scene cross-dissolves in instead of popping.
-            console.log("Intro finished. Initializing LakeUI...");
             screenFade.cover(() => {
                 this.lakeUI = new WorldUI(this.sceneContainer);
                 if (uiContainer) uiContainer.style.pointerEvents = 'none'; // Keep none so clicks pass through to canvas
@@ -408,10 +397,6 @@ class Application {
             this._leavingSong = true;
             // Fade to the curtain, swap the song scene out for the world, fade back.
             screenFade.cover(() => { try {
-                // 曲を抜けるたびに使い捨ての堆積データを掃除して localStorage を肥大させない。
-                // シャッターチャンスの写真(波紋)は再利用しないので、選択画面へ戻る時点で破棄する。
-                clearRipples();
-
                 const wasAllComplete = appState.areAllSongsComplete();
                 const phaseBefore = appState.getPhase();
                 // 曲は最後まで流れた(songEnd 済み)のに、締めの間(シャッターの写真選択など)の途中で

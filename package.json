@@ -16,14 +16,12 @@
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.3",
     "mmd-parser": "^1.0.4",
-    "pixi.js": "^8.18.1",
     "textalive-app-api": "^0.4.0",
     "three": "^0.184.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
     "gh-pages": "^6.3.0",
-    "puppeteer": "^25.0.2",
     "vite": "^5.4.21"
   }
 }

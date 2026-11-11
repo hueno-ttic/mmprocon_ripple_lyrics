@@ -6,11 +6,10 @@ import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { groupPhraseWords } from '../utils/lyricGroups.js';
 import { SHUTTER_DANCE_PRESETS, SHUTTER_DANCE_DEFAULT } from './shutterDancePresets.js';
-import { ShutterPoseEditor, loadUserPoses, saveUserPoses, BASE_POSE as POSE_EDITOR_BASE } from './shutterPoseEditor.js';
-import { addRipple } from '../lake/lakeMemory.js';
+import { ShutterPoseEditor, loadUserPoses, saveUserPoses, USER_POSE_MAX, BASE_POSE as POSE_EDITOR_BASE } from './shutterPoseEditor.js';
 
 // 「湖／水の循環」要素のオン/オフを束ねる単一フラグ。
-// false にすると本ファイルの湖関連（夕暮れ水面・撮影波紋・ベスト1枚を湖へ流す）は
+// false にすると本ファイルの湖関連（夕暮れ水面・撮影波紋・ベスト決定の締めの一行）は
 // すべて初期化・更新・破棄ごと無効化され、従来の挙動に完全に戻る（即リバート用）。
 const SHUTTER_LAKE_ENABLED = true;
 
@@ -261,10 +260,7 @@ export class SongShutter extends BaseSong {
         this.lastPhrase = null;
         
         // 歌詞の単語レベル（助詞連結）＆被り回避管理
-        this.currentPhraseGroups = [];
-        this.spawnedGroupIndices = new Set();
         this.occupiedCells = new Set();
-        this.lastWordText = '';
         this.customStyleElement = null;
         
         this.isClimax = false;
@@ -289,7 +285,6 @@ export class SongShutter extends BaseSong {
         this.filmStripVisible = false;
         this.filmStripEl = null;
         // ベストショットはコンタクトシート上でプレイヤーが「候補」から1枚選ぶ方式。
-        this.chosenBestIndex = null; // プレイヤーが選んだベストショットのphotoLog内index
         this.bestChosenTimeStr = null; // 選定したベストの撮影タイム（結果表示用）
         this._bestChosen = false;    // 選定済みフラグ（多重選択ガード）
 
@@ -303,7 +298,7 @@ export class SongShutter extends BaseSong {
         this._lakeRingGeo = null;    // 波紋リングの共有ジオメトリ
         this._lakeFade = 0;          // 水面のフェードイン度(0..0.92)
         this._lakeLastT = 0;         // 水面アニメ用の前フレーム時刻(ms)
-        this._bestRippleSaved = false; // ベスト1枚を湖へ流した多重ガード
+        this._bestShotSealed = false;  // ベスト決定済み(リザルトに締めの一行を添える)
 
         // 「かわいいポーズ」ボタンで一時的に指定ポーズをホールドする状態
         this.poseOverride = null;    // { pose, until(performance.now基準のms), id } or null
@@ -340,7 +335,6 @@ export class SongShutter extends BaseSong {
         this.shownKey = 'miku';      // 現在表示中の被写体
         this.selectedKey = null;     // 曲開始前に選んだ被写体（ミク/リン）。選択後は曲中固定
         this.swap = null;            // 被写体の切替トランジション { from, to, t }
-        this.swapDuration = 0.42;    // 光りながら消える/出てくる演出の長さ（秒）
 
         // --- ビート同期グルーヴ（こたえての applyGroove を踏襲。被写体を曲に合わせて踊らせる） ---
         this.grooveConfig = {
@@ -362,7 +356,6 @@ export class SongShutter extends BaseSong {
         this._groove = 0;     // 拍頭で素早く立ち上がるパルス(0..1)
         this._beatStep = 1;   // 体重移動の向き(±1。拍ごとに反転)
         this._beatIndex = -1; // 直近の拍インデックス(進んだ瞬間の検出)
-        this._beatFrac = 0;   // 拍内位相(0=拍頭)
         this._barAccent = 0;  // 小節頭アクセント(発火→減衰)
         this._swayCur = 0;    // 体重移動の平滑値
         this._climaxAmt = 0;  // サビ強度の平滑値(0..1。振幅スナップ防止)
@@ -389,7 +382,6 @@ export class SongShutter extends BaseSong {
         // スコープ上に被写体ワードが吸着している間 _lockReady=1 へ滑らかに上がり、
         // スコープが赤→緑＋NOW! 表示で「今撮ると高得点」を直感させる。
         this._lockReady = 0;              // ロック可能度(0..1の平滑値)
-        this._lockHot = false;           // 直近フレームでロック圏内か
 
         // --- ボーカルパート色（歌詞・被写体ハイライトの同期に共通利用） ---
         this.VOCAL_COLORS = {
@@ -551,17 +543,11 @@ export class SongShutter extends BaseSong {
     }
 
     init() {
-        console.log("[SHUTTER] init start");
         this.initThree();
-        console.log("[SHUTTER] initThree done");
         this.initEnvironment();
-        console.log("[SHUTTER] initEnvironment done");
         this.loadSubjects();
-        console.log("[SHUTTER] loadSubjects done");
         this.injectCustomStyles();
-        console.log("[SHUTTER] injectCustomStyles done");
         this.createViewfinderUI();
-        console.log("[SHUTTER] createViewfinderUI done");
         
         // ズームスライダーのイベント登録
         const slider = document.getElementById('shutter-zoom-slider');
@@ -613,7 +599,6 @@ export class SongShutter extends BaseSong {
 
         // 曲終了オーバーレイに表示される撮影成果を初期登録
         this.updateResultSummary();
-        console.log("[SHUTTER] init finished completely");
     }
 
     // 撮影成果サマリーの登録（撮影のたび／ベスト選定時に最新値で上書き）
@@ -623,7 +608,7 @@ export class SongShutter extends BaseSong {
             // プレイヤーが「決定的な1枚」を選んだ後
             lines.push(`★ ベストショット、決定！(${this.bestChosenTimeStr})`);
             lines.push(`撮影 ${this.totalShots}枚 ・ ベスト候補 ${this.starShots}枚`);
-            if (SHUTTER_LAKE_ENABLED && this._bestRippleSaved) {
+            if (SHUTTER_LAKE_ENABLED && this._bestShotSealed) {
                 lines.push('この瞬間を、永遠に閉じ込めた');
             }
         } else {
@@ -715,16 +700,12 @@ export class SongShutter extends BaseSong {
 
     // 被写体MMD（ミク&リン）をステージ奥にロードして横並びに配置（orchestraの実績パターンを踏襲）
     loadSubjects() {
-        console.log("[SHUTTER] loadSubjects start, layout:", this.subjectLayout);
         this.subjectLayout.forEach((def) => {
             const modelUrl = import.meta.env.BASE_URL + 'assets/models/' + def.model;
-            console.log(`[SHUTTER] Starting load for ${def.key} from URL: ${modelUrl}`);
             const loader = new MMDLoader();
             loader.load(
                 modelUrl,
                 (mesh) => {
-                    console.log(`[SHUTTER] Loaded mesh successfully for ${def.key}`);
-                    
                     // Convert MMDToonMaterial to standard MeshPhongMaterial to prevent WebGL shader compilation errors
                     mesh.traverse((child) => {
                         if (child.isMesh && child.material) {
@@ -761,7 +742,6 @@ export class SongShutter extends BaseSong {
                     });
 
                     if (!this.isActive) {
-                        console.log(`[SHUTTER] Scene inactive, disposing loaded mesh for ${def.key}`);
                         this.disposeMMD(mesh);
                         return;
                     }
@@ -773,13 +753,11 @@ export class SongShutter extends BaseSong {
                     const box = new THREE.Box3().setFromObject(mesh);
                     const size = new THREE.Vector3();
                     box.getSize(size);
-                    console.log(`[SHUTTER] Loaded model native size for ${def.key}:`, size);
 
                     const targetHeight = 5.6;
                     let scaleFactor = def.scale;
                     if (size.y > 0.1) {
                         scaleFactor = targetHeight / size.y;
-                        console.log(`[SHUTTER] Auto-scaled ${def.key} by factor: ${scaleFactor} to achieve height ${targetHeight}`);
                     }
                     mesh.scale.setScalar(scaleFactor);
 
@@ -796,21 +774,13 @@ export class SongShutter extends BaseSong {
                     this.applySubjectPoseImmediate(subject, SHUTTER_MIKU_POSES[0]);
                     this.subjects.push(subject);
                     if (def.key === 'miku') this.mikuVRM = mesh; // ライト/破棄の後方互換参照
-                    console.log(`[SHUTTER] ${def.key} MMD loaded and initialized successfully.`);
                 },
-                (xhr) => {
-                    if (xhr.total) {
-                        console.log(`[SHUTTER] Loading progress for ${def.key}: ${(xhr.loaded / xhr.total * 100).toFixed(1)}%`);
-                    } else {
-                        console.log(`[SHUTTER] Loading progress for ${def.key}: ${xhr.loaded} bytes`);
-                    }
-                },
+                undefined,
                 (error) => {
                     console.error(`[SHUTTER] Failed to load ${def.key} MMD:`, error);
                 }
             );
         });
-        console.log("[SHUTTER] loadSubjects trigger loop completed");
     }
 
     getMMDBone(subject, vrmBoneName) {
@@ -911,24 +881,6 @@ export class SongShutter extends BaseSong {
         return cache;
     }
 
-    // opacity(0..1) と glow(0..1) を適用。glowで白く発光させながらフェードさせる
-    applyFadeGlow(subject, opacity, glow) {
-        const fading = opacity < 0.999;
-        subject.matCache.forEach((c) => {
-            const m = c.material;
-            m.transparent = fading ? true : c.baseTransparent;
-            m.depthWrite = fading ? false : c.baseDepthWrite;
-            m.opacity = c.baseOpacity * opacity;
-            if (c.baseEmissive && m.emissive) {
-                m.emissive.setRGB(
-                    Math.min(1, c.baseEmissive.r + glow),
-                    Math.min(1, c.baseEmissive.g + glow),
-                    Math.min(1, c.baseEmissive.b + glow)
-                );
-            }
-        });
-    }
-
     // マテリアルを基準値へ戻す（トランジション終了時）
     restoreSubjectMaterials(subject) {
         subject.matCache.forEach((c) => {
@@ -938,22 +890,6 @@ export class SongShutter extends BaseSong {
             m.opacity = c.baseOpacity;
             if (c.baseEmissive && m.emissive) m.emissive.copy(c.baseEmissive);
         });
-    }
-
-    advanceSubjectPose(subject) {
-        // 歌っている側は表情豊かなポーズ(1..4)、スタンバイ側は控えめ(0..2)
-        const isSinging = this.activeVocal === 'duet' || this.activeVocal === subject.key;
-        let next = isSinging
-            ? 1 + Math.floor(Math.random() * (SHUTTER_MIKU_POSES.length - 1))
-            : Math.floor(Math.random() * 3);
-        if (next === subject.poseIndex) {
-            next = (next + 1) % SHUTTER_MIKU_POSES.length;
-        }
-        subject.poseIndex = next;
-        // ポーズ切替時に髪の物理が暴れないようリセット
-        if (subject.mesh && subject.mesh.springBoneManager) {
-            subject.mesh.springBoneManager.reset();
-        }
     }
 
     // 「可愛い動き」ストックからプリセットを適用（grooveConfig と armStyle を切替）
@@ -1005,7 +941,9 @@ export class SongShutter extends BaseSong {
     refreshPoseBar() {
         const bar = this.viewfinder && this.viewfinder.querySelector('#shutter-pose-bar');
         if (!bar) return;
-        const esc = (s) => String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        const esc = (s) => String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         const btn = (p) => `
             <button class="shutter-pose-btn${p.user ? ' is-user' : ''}" data-pose="${esc(p.id)}" title="${esc(p.label)}">
                 <span class="pose-emoji">${esc(p.emoji || '⭐')}</span>
@@ -1043,7 +981,7 @@ export class SongShutter extends BaseSong {
     // エディタから渡された自作ポーズを永続化し、ポーズバーへ反映。
     saveUserPose(entry) {
         if (!entry || !entry.id || !entry.pose) return;
-        this.userPoses = [...(this.userPoses || []), entry];
+        this.userPoses = [...(this.userPoses || []), entry].slice(-USER_POSE_MAX);
         saveUserPoses(this.userPoses);
         this.refreshPoseBar();
     }
@@ -1675,27 +1613,6 @@ export class SongShutter extends BaseSong {
         }
     }
 
-    // --- B-4: 選ばれたベスト1枚を「波紋」として湖(lakeMemory)に流す ----------
-    // 写真ゲームの仕様は変えず、決定的1枚の選定後に1回だけ堆積させる。
-    // 流れた波紋は別の曲・別プレイで「かつて切り取った光」として再来し得る（水の循環）。
-    depositBestShotToLake() {
-        if (!SHUTTER_LAKE_ENABLED || this._bestRippleSaved) return;
-        this._bestRippleSaved = true;
-        const colorByKey = { miku: '#39C5BB', rin: '#FFEE11' };
-        const color = colorByKey[this.selectedKey] || '#FF7A4D';
-        try {
-            addRipple({
-                songId: 'shutter', type: 'bestshot', text: '', color,
-                meta: {
-                    timeStr: this.bestChosenTimeStr, subject: this.selectedKey,
-                    totalShots: this.totalShots, starShots: this.starShots,
-                },
-            });
-        } catch (e) {
-            console.warn('[SHUTTER] lake deposit failed:', e);
-        }
-    }
-
     injectCustomStyles() {
         this.customStyleElement = document.createElement('style');
         this.customStyleElement.innerHTML = `
@@ -2214,7 +2131,6 @@ export class SongShutter extends BaseSong {
         }
         
         this.allWordGroups.sort((a, b) => a.startTime - b.startTime);
-        console.log(`Successfully cached ${this.allWordGroups.length} word groups and pre-rendered ${this.lyricTexturesCache.size} textures for Shutter Chance.`);
         this.lyricsCacheBuilt = true;
         return true;
     }
@@ -2728,7 +2644,6 @@ export class SongShutter extends BaseSong {
                 }
             }
         }
-        this._lockHot = lockHot;
         this._lockReady += ((lockHot ? 1 : 0) - this._lockReady) * 0.25;
 
         // ターゲットスコープのパルス脈動（Beatシンクロ） ＆ 回転 ＆ パート色/ロック合図
@@ -2797,7 +2712,6 @@ export class SongShutter extends BaseSong {
             if (poseBeat && poseBeat.duration > 0) {
                 const p = Math.min(1, Math.max(0, (position - poseBeat.startTime) / poseBeat.duration));
                 beatPulse = Math.pow(1 - p, 2.2);  // 拍頭で跳ねて減衰
-                this._beatFrac = p;
                 if (poseBeat.index !== this._beatIndex) {
                     this._beatIndex = poseBeat.index;
                     this._beatStep = -this._beatStep;                       // 体重移動の向きを反転
@@ -3306,7 +3220,6 @@ export class SongShutter extends BaseSong {
     chooseBestShot(index, cellEl) {
         if (this._bestChosen || !this.filmStripEl) return;
         this._bestChosen = true;
-        this.chosenBestIndex = index;
         const p = this.photoLog[index];
         this.bestChosenTimeStr = p ? p.timeStr : null;
         try { sfx.play('shutter_star'); } catch (e) { /* 無害 */ }
@@ -3349,8 +3262,8 @@ export class SongShutter extends BaseSong {
         if (prompt) prompt.textContent = '';
         if (stats) stats.innerHTML = `★ <b>BEST SHOT 決定！</b> ・ 撮影 <b>${this.totalShots}</b>枚`;
 
-        // 決定的1枚を「波紋」として湖に流す（B-4。水の循環ループへ接続）
-        this.depositBestShotToLake();
+        // ベスト決定をリザルトの締めの一行に反映させる
+        if (SHUTTER_LAKE_ENABLED) this._bestShotSealed = true;
 
         // 最終リザルトにも反映
         this.updateResultSummary();

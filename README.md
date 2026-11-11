@@ -14,7 +14,7 @@
 | 審査の観点 | 本作で見ていただきたい点 | 対応セクション |
 |---|---|---|
 | **クリエイティビティ** | 6曲を6アプリとして作り分けた表現、曲ごとの「問い」、水の循環という一本の筋 | [コンセプト](#コンセプト) / [設計を貫く2つの方針](#設計を貫く2つの方針) / [各楽曲の詳細仕様](#各楽曲の詳細仕様隠し要素まで) |
-| **イノベーション** | 本物のAES暗号を解読するインタラクション、ミクを破綻させない独自トゥーンシェーダー＋SpringBone制御、画像素材ゼロ・手続き生成で育つ湖の景色、サーバなしで完結する創作の循環 | [技術的な挑戦と工夫](#技術的な挑戦と工夫) |
+| **イノベーション** | 本物のAES暗号を解読するインタラクション、ミクを破綻させない独自トゥーンシェーダー＋SpringBone制御、画像素材ゼロ・手続き生成で育つ湖の景色 | [技術的な挑戦と工夫](#技術的な挑戦と工夫) |
 | **完成度** | 曲ごとの専用チュートリアル、全曲自動E2E検証、歌詞見切れ監査、リソース破棄の徹底、モバイル最適化、レギュレーション遵守 | [完成度への作り込み](#完成度への作り込み) / [レギュレーション遵守](#レギュレーション遵守) |
 
 
@@ -131,22 +131,19 @@ TextAlive App API のタイマーは 100〜1000ms 間隔で更新されます。
 TAKEOVER の歌詞は、見た目だけ暗号風にしたのではなく、**Web Crypto API の AES-256-GCM で実際に暗号化**しています（[song-takeover.js](src/songs/song-takeover.js) — 毎回ランダムな96bit IV で暗号化、シーン内で生成した鍵で復号）。クリックするたびに本物の暗号文が復号され、歌詞が姿を現します。「世界を奪還する」というテーマを、演出ではなく**実装そのもの**で裏打ちしています。
 
 ### 3. 6曲を「6つのアプリ」として遅延ロードする
-全曲を初回バンドルに含めると重くなるため、各曲シーン（＋Three.js / PixiJS / VRM）を**動的 `import()` でチャンク分割し、選曲した瞬間だけ取得**しています（[main.js](src/main.js) `SONG_LOADERS` / `switchToSongScene`）。ロード待ちは選曲→楽曲シーンの**遷移カーテンで隠蔽**。さらに、再デプロイでハッシュが変わった古いチャンクの 404 を検知して自動リロード復帰する仕組み（無限ループ防止ガード付き）も入れています。
+全曲を初回バンドルに含めると重くなるため、各曲シーン（＋Three.js / VRM）を**動的 `import()` でチャンク分割し、選曲した瞬間だけ取得**しています（[main.js](src/main.js) `SONG_LOADERS` / `switchToSongScene`）。ロード待ちは選曲→楽曲シーンの**遷移カーテンで隠蔽**。さらに、再デプロイでハッシュが変わった古いチャンクの 404 を検知して自動リロード復帰する仕組み（無限ループ防止ガード付き）も入れています。
 
 ### 4. VRMモデルの「開幕暴れ」を抑える SpringBone 制御
 VRMにスケールやポーズを当てた直後、SpringBone（揺れもの物理）が初期状態とのズレで**ツインテールが逆立つ**現象が起きます。これをロード直後にワールド行列を更新してから揺れものを静止状態へスナップさせて解消しています（[vrm.js](src/utils/vrm.js) `settleSpringBones`）。あわせて、初音ミクの陶器のような質感のために Phong + Toon + Matcap を融合した独自シェーダー（[MMDToonShader.js](src/utils/MMDToonShader.js)）も用意しています。
 
-### 5. サーバなしで成立する「創作の循環」（lakeMemory）
-「ユーザーの創作が次の創作を呼ぶ」擬似循環を、**サーバを一切使わず localStorage だけ**で実装しています（[lakeMemory.js](src/lake/lakeMemory.js)）。現在は「シャッターチャンス」で選んだベスト1枚が波紋として湖に堆積し、別の曲の湖に再来します（上限を設けて古いものから自動廃棄）。静的Webアプリの制約の中で「世界が続いていく感触」を作る試みです。
-
-### 6. スマホ縦持ちを「座標系シム」で支える
+### 5. スマホ縦持ちを「座標系シム」で支える
 スマートフォンでは9:16の縦ステージに黒帯レターボックスで最適化しています。各曲の演出コードを書き換えずにこれを成立させるため、`window.innerWidth/Height`・`clientX/Y`・`getBoundingClientRect` を `Object.defineProperty` で論理座標へ**透過的に横取りする座標系シム**を用意しました（[stage.js](src/core/stage.js)）。縦持ち時は `#app` を90°回転させて画面に内接させます。曲側は「常に16:9で動いている」つもりのまま、スマホに対応できます。
 
-### 7. 選曲画面の湖と、育っていく景色
-選曲画面は3Dの夜の湖（[WorldUI.js](src/lake/WorldUI.js) / [LakeShader.js](src/lake/LakeShader.js) / [RippleSystem.js](src/lake/RippleSystem.js)）。6曲が波紋として浮かびます。クリアした曲数に応じて、霧・雲・雨・水たまり・小川…と**水の循環の景色が手続き的に育って**いきます（[phases/](src/lake/phases/)）。
+### 6. 選曲画面の湖と、育っていく景色
+選曲画面は3Dの夜の湖（[WorldUI.js](src/lake/WorldUI.js)）。6曲が波紋として浮かびます。クリアした曲数に応じて、霧・雲・雨・水たまり・小川…と**水の循環の景色が手続き的に育って**いきます（[phases/](src/lake/phases/)）。
 
-### 8. クラッシュさせない堅牢化
-Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列ロード競合は、ユーザーにとってはクラッシュではありません。これらを `unhandledrejection` ハンドラで握りつぶし、強制終了扱いにしないようにしています（[main.js](src/main.js)）。各曲は `destroy()` で rAF 停止・リスナー解除・Three.js / PixiJS リソースの dispose を徹底し、曲切替でのメモリリークを防いでいます。
+### 7. クラッシュさせない堅牢化
+Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列ロード競合は、ユーザーにとってはクラッシュではありません。これらを `unhandledrejection` ハンドラで握りつぶし、強制終了扱いにしないようにしています（[main.js](src/main.js)）。各曲は `destroy()` で rAF 停止・リスナー解除・Three.js リソースの dispose を徹底し、曲切替でのメモリリークを防いでいます。
 
 ---
 
@@ -268,7 +265,7 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 - **回帰チェックリスト** — 改修時の手動確認項目を [docs/regression-checklist.md](docs/regression-checklist.md) / [docs/visual-review-checklist.md](docs/visual-review-checklist.md) に整理。
 
 ### 最後まで破綻させない堅牢性
-- 全レイヤー（曲・フェーズ・湖）で `destroy()` を実装し、`cancelAnimationFrame`・リスナー解除・Three.js/PixiJS リソースの dispose を徹底（曲切替時のメモリリーク防止）。
+- 全レイヤー（曲・フェーズ・湖）で `destroy()` を実装し、`cancelAnimationFrame`・リスナー解除・Three.js リソースの dispose を徹底（曲切替時のメモリリーク防止）。
 - iOS Safari の自動再生ポリシーに対応（AudioContext をユーザー操作後に開始）。
 
 ### モバイルとアクセシビリティ
@@ -283,9 +280,9 @@ Chrome / iOS のメディア割り込み（AbortError）や TextAlive の並列�
 |---|---|
 | ビルド | Vite（静的Webアプリ。GitHub Pagesデプロイ） |
 | 歌詞・タイミング | TextAlive App API（`textalive-app-api`） |
-| 3D / 描画 | Three.js / PixiJS / @pixiv/three-vrm（ミクモデル） |
+| 3D / 描画 | Three.js / @pixiv/three-vrm（ミクモデル） |
 | 暗号 | Web Crypto API（AES-256-GCM／TAKEOVER） |
-| 永続化 | localStorage（クリア状況・創作の波紋・プロローグ視聴済み） |
+| 永続化 | localStorage（クリア状況・プロローグ視聴済み） |
 | テスト | Playwright（ビジュアル / E2E） |
 
 アーキテクチャの詳細・各曲の実装方針・レビュー手順は [docs/ONBOARDING.md](docs/ONBOARDING.md) にまとめています。
