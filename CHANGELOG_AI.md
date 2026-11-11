@@ -19,6 +19,30 @@
 
 ---
 
+## 📅 2026-11-11: [リファクタリング] 不要コード削除・依存整理・セキュリティ修正
+
+### 変更内容
+* **旧版の削除**（オーナー承認済み・git履歴から復元可）: `song-tricktology.legacy.js` / `song-kotaete.mizukagami.js` と、それだけが使う `kotaeteLakes.js`、`main.js` のフラグ分岐（TRICKTOLOGY_LEGACY / KOTAETE_MIZUKAGAMI）。
+* **未参照ファイルの削除**: `LakeUI` / `RippleSystem` / `LakeShader` / `Transition` / `lakeMemory`（書き込むだけで誰も読まず、湖へ戻るたび消していた）/ `PhaseRiver` / `NatureKit` / `SkyDome` / `glowTexture` / `core/performance` / `core/resourceTracker` / `utils/{canvas,color,easing,input,math}` / `kotaete/emojiReactions`。
+* **ファイル内の不要コード**: 未使用メソッド（takeover `decodeTarget`、tricktology `setBrightness`、shutter `applyFadeGlow`/`advanceSubjectPose`、kotaete `_showModeIntro`/`_finaleCaption`/`_currentLyricText`、appState `getPreviousPhase`）、書き込むだけのフィールド、未使用 import/定数/CSS、購読者のいないイベント（appReady/videoReady/throttledTimeUpdate）、鳴らない効果音呼び出し、未再生の `kotaete_choice` の事前読込、デバッグ用 `console.log`。
+* **共通化**: 5曲に散っていた VRM 破棄を `utils/vrm.js` の `disposeVRM(vrm, { skipMaterials })` に統一（テクスチャ・`_origMat` まで解放）。
+* **依存**: 未使用の `pixi.js` / `puppeteer` を削除。`npm audit fix`（非破壊）で axios 等を更新し、本番依存の脆弱性 0。
+* **セキュリティ**:
+  * シャッターの自作ポーズ名（localStorage 由来）を `innerHTML` に混ぜていた箇所を DOM 組み立てに変更。読込時に型・長さ(12)を検証し、絵文字は固定、保存は最大30件。ポーズバーのエスケープも `& < > " '` の完全版に。
+  * 開発サーバ専用 `/__save_shot` に Origin 検査（他サイトからの書き込み拒否）。
+  * `index.html` に最小 CSP（`object-src 'none'; base-uri 'self'`）。TextAlive/Songle の動的読込には影響しない範囲に限定。
+* README / ONBOARDING / AGENTS.md の参照ファイル・技術スタック記述を実態に合わせて更新。
+
+### 影響範囲
+* 動作変更なし（リーク解消とセキュリティ強化を除く）。49ファイル、約6,500行削減。
+
+### 確認結果
+* `npm run build`／`VITE_DEV_TOOLS=1` ビルドとも成功。
+* 全6曲を実歌詞で再生（各曲の操作と曲末リザルトまで）。縦持ちスマホでの表示、6曲の出入りでWebGLコンテキストが増えないこと、シルエット共有マテリアルの再入場表示、ポーズ名へのHTML注入が無害化されること、ポーズエディタ/デバッグパネル、BGM/効果音を確認し全項目 PASS。CSP違反・コンソールエラー・404 は 0。
+* 未対応: 開発サーバ側の esbuild/vite の警告（vite 6 への破壊的更新が必要。本番の静的配信には無関係）。`bgm_river.mp3` / `bgm_lake.mp3`（未使用・約5.5MB）は素材として残置。
+
+---
+
 ## 📅 2026-11-11: [総点検] 全体バグ洗い出しと一括修正（ピアプロ復旧後の実歌詞で再検証）
 
 ### 変更内容
