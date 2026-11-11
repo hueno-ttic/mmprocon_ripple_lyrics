@@ -915,6 +915,11 @@ export class WorldUI {
 
     onKeyDown(e) {
         if (appState.currentSongId !== null || this.renderer.domElement.style.display === 'none') return;
+        // 選曲の暗転中は選択を動かさない(戻ったとき遊んだ曲と違う曲が選ばれて見える)。
+        // 音量スライダー等の入力欄の矢印キー操作も、カルーセルへは流さない。
+        if (this.isTransitioning) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
         const N = this.songs.length;
         if (e.code === 'ArrowRight') {
             e.preventDefault();

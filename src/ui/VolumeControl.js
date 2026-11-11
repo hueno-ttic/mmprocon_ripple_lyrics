@@ -2,6 +2,7 @@ import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
 import { stageRoot } from '../core/stage.js';
 import { safeGet, safeSet } from '../utils/storage.js';
+import { DEFAULT_VOLUME } from '../config/constants.js';
 
 /**
  * 全楽曲共通の音量コントロール(画面右下に常設)。
@@ -11,7 +12,7 @@ import { safeGet, safeSet } from '../utils/storage.js';
  */
 export class VolumeControl {
     constructor() {
-        this.volume = this._load('appVolume', 35);
+        this.volume = this._load('appVolume', DEFAULT_VOLUME);
         this.muted = this._load('appMuted', 0) === 1;
 
         this._injectStyles();

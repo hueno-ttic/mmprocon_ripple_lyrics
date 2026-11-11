@@ -15,3 +15,6 @@ export const PHASES = [
 ];
 
 export const PHASE_TRANSITION_DURATION = 3000;
+
+// 音量の初期値(0..100)。VolumeControl のスライダーと、曲/BGM/効果音の実音量で共通にする。
+export const DEFAULT_VOLUME = 35;

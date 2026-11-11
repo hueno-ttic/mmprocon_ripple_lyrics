@@ -2,6 +2,7 @@ import { Player } from 'textalive-app-api';
 import { eventBus } from './eventBus.js';
 import { appState } from './appState.js';
 import { safeGet } from '../utils/storage.js';
+import { DEFAULT_VOLUME } from '../config/constants.js';
 
 class PlayerManager {
     constructor() {
@@ -226,7 +227,7 @@ class PlayerManager {
                     appState.setLoading(false);
                     eventBus.emit('songLoadError', { song: this._currentSong, reason: 'timeout' });
                 }
-            }, 15000);
+            }, 30000); // 実測で本番ビルドでも13〜15秒かかる回があり、15秒だと正常読込中に偽のエラーが出た
 
             const options = {};
             if (song.video) {
@@ -243,6 +244,8 @@ class PlayerManager {
     _startCreate(songUrl, options, seq) {
         const PREV_WAIT_MS = 3000;
         const RETRY_MS = 500;
+        const MAX_RETRIES = 240; // 最大~2分
+        let retries = 0;
         const prev = this._createPromise;
         const waitPrev = prev
             ? Promise.race([prev, new Promise(r => setTimeout(r, PREV_WAIT_MS))])
@@ -265,8 +268,10 @@ class PlayerManager {
                 const msg = (err && err.message) || String(err || '');
                 if (msg.includes('cannot run in parallel')) {
                     if (this._createPromise === settled) this._createPromise = null;
-                    // 読込待ち(タイムアウト前)で、まだ最新の要求なら再試行する
-                    if (seq === this._loadSeq && appState.isLoading && !this.isTimerReady) {
+                    // まだ最新の要求なら、先行の読込が終わるまで再試行する。タイムアウトで
+                    // isLoading が落ちても続ける(止めると先行=湖へ戻った前曲の完了後に
+                    // この曲が二度と要求されず、エラー画面のまま固まる)。
+                    if (seq === this._loadSeq && !this.isTimerReady && (++retries) <= MAX_RETRIES) {
                         setTimeout(attempt, RETRY_MS);
                     }
                     return;
@@ -331,7 +336,7 @@ class PlayerManager {
     _storedVolume() {
         if (safeGet('appMuted') === '1') return 0;
         const v = parseInt(safeGet('appVolume'), 10);
-        return Number.isFinite(v) ? v : 80;
+        return Number.isFinite(v) ? v : DEFAULT_VOLUME;
     }
 
     _clearFade() {

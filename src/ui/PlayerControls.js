@@ -115,10 +115,10 @@ export class PlayerControls {
             // 入力欄(シャッターのポーズ名など)への文字入力・IME変換中はショートカットにしない
             if (e.isComposing || isEditableTarget(e.target)) return;
             if (!playerManager.isTimerReady) {
-                // Guard keyboard inputs during load
-                if (e.code === 'Space' || e.code === 'Escape') {
-                    e.preventDefault();
-                }
+                // 読込中は再生させない。ただし Escape は湖へ戻れるようにする
+                // (読込中は幕が戻るボタンを覆うので、他に抜け道が無い)
+                if (e.code === 'Space') e.preventDefault();
+                else if (e.code === 'Escape') { e.preventDefault(); this._backWithFade(); }
                 return;
             }
             if (e.code === 'Space') {

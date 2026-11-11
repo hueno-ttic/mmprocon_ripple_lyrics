@@ -319,7 +319,17 @@ class Application {
                 message: '通信状況をご確認のうえ、もう一度お試しください。',
                 actions: [
                     { label: 'もう一度試す', primary: true, onClick: () => {
-                        if (target) { this._revealOnLoad = true; playerManager.loadSong(target); }
+                        if (!target) return;
+                        // 通信失敗後の TextAlive は同じ曲URLの createFromSongUrl を通信なしで即解決し、
+                        // 二度と読込完了が来ない。リロードしてこの曲へ自動復帰させる(タイトルは飛ばす)。
+                        try {
+                            sessionStorage.setItem(RELOAD_RECOVER_KEY, '1');
+                            sessionStorage.setItem(RECOVER_SONG_KEY, target.id);
+                            location.reload();
+                            return;
+                        } catch (_) { /* 復帰フラグを残せない環境はその場で読み直す */ }
+                        this._revealOnLoad = true;
+                        playerManager.loadSong(target);
                     } },
                     { label: '湖へ戻る', onClick: () => eventBus.emit('backToLake', { markComplete: false }) },
                 ],
