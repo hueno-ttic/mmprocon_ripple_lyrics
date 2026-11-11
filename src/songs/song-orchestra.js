@@ -1061,6 +1061,34 @@ export class SongOrchestra extends BaseSong {
         return Math.max(1, this.camera.position.z - z) * Math.tan(fovRad / 2);
     }
 
+    // 歌詞を置いてよい横方向の安全帯の半幅(ワールド単位・奥行きzでの値)。
+    // 画面端と左右のHUD(左=共鳴オーブゲージ、右=音量パネル)に掛からないよう、
+    // 可視幅から左右それぞれ最低6%(狭い画面では約76px相当)の余白を差し引く。
+    _lyricSafeHalfWidth(z) {
+        const aspect = this.camera ? this.camera.aspect : 1.6;
+        const halfW = this._lyricVisibleHalfHeight(z) * aspect;
+        const vw = Math.max(1, window.innerWidth || 1280);
+        const marginFrac = Math.min(0.2, Math.max(0.06, 76 / vw));
+        return halfW * (1 - marginFrac * 2);
+    }
+
+    // 歌詞スプライトを「現在のカメラ」基準の安全帯に収める(毎フレーム)。
+    // スポーン時の1回クランプだけでは、サビ明けのカメラ前進(z16→10)・サビ中の拡散・マーチの横滑りで
+    // 後から画面端やHUDの下へはみ出していたため。安全帯より横に長い行は縮小して収める。
+    _clampLyricToSafeBand(s) {
+        const safeHalf = this._lyricSafeHalfWidth(s.position.z);
+        if (s.scale.x > safeHalf * 2) {
+            const k = (safeHalf * 2) / s.scale.x;
+            s.scale.x *= k;
+            s.scale.y *= k;
+        }
+        const camX = this.camera ? this.camera.position.x : 0;
+        const maxX = Math.max(0, safeHalf - s.scale.x * 0.5);
+        const relX = s.position.x - camX;
+        if (relX > maxX) s.position.x = camX + maxX;
+        else if (relX < -maxX) s.position.x = camX - maxX;
+    }
+
     spawnText(lyricEntity, spawnTime) {
         // 同じ文言の行(リフレイン)が前の行の余韻(extraLife)と重なると、同じ歌詞が二つ並んで見える(#129)。
         // 新しい行が出る時点で、同文の古い行(タップ中を除く)は退場させて一つだけにする。
@@ -1121,8 +1149,9 @@ export class SongOrchestra extends BaseSong {
         const SIZE_FRAC = 0.085;            // スプライト高 = 可視高のこの割合(大きめ=読みやすい)
         const chorusBoost = this.isClimax ? 1.35 : 1.0;
         let scale = _visH * SIZE_FRAC * (0.95 + Math.random() * 0.1) * chorusBoost;
-        // 横に長いフレーズが画面からはみ出さないよう、可視幅の90%に収まる高さでクランプする(見切れ防止)。
-        const _maxScaleByWidth = (_visW * 0.9) / aspect;
+        // 横に長いフレーズが画面からはみ出さないよう、安全帯(HUD余白込み)に収まる高さでクランプする(見切れ防止)。
+        // 歌唱パルス(最大1.25倍)でも安全帯を越えないよう、その分を見込んでおく。
+        const _maxScaleByWidth = Math.min(_visW * 0.9, this._lyricSafeHalfWidth(_layerZ) * 2 / 1.25) / aspect;
         if (scale > _maxScaleByWidth) scale = _maxScaleByWidth;
         
         // Ensure camera matrices are updated before projecting
@@ -1257,7 +1286,7 @@ export class SongOrchestra extends BaseSong {
 
         // スプライト全体が画面内に収まるよう最終クランプ(左右/上下の見切れ防止)。
         const _hw = (scale * aspect) * 0.5, _hh = scale * 0.5;
-        const _maxX = Math.max(0, visibleWidth * 0.5 - _hw - 0.3);
+        const _maxX = Math.max(0, this._lyricSafeHalfWidth(_layerZ) - _hw);
         const _maxY = Math.max(0, visibleHeight * 0.5 - _hh - 0.3);
         foundX = Math.max(-_maxX, Math.min(_maxX, foundX));
         foundY = Math.max(-_maxY, Math.min(_maxY, foundY));
@@ -1916,6 +1945,10 @@ export class SongOrchestra extends BaseSong {
 
         // Update sprites
         const currentWord = playerManager.player.video.findWord(position);
+        // 漂い・拡散を描画フレームレートに依存させないための係数(60fps=1)。120/144Hzで速く流れないように。
+        const _nowMs = performance.now();
+        const frameK = this._lyricLastFrameMs ? Math.min(2, Math.max(0, (_nowMs - this._lyricLastFrameMs) / (1000 / 60))) : 1;
+        this._lyricLastFrameMs = _nowMs;
         for (let i = this.activeSprites.length - 1; i >= 0; i--) {
             const s = this.activeSprites[i];
             
@@ -1980,7 +2013,7 @@ export class SongOrchestra extends BaseSong {
                     
                     // March direction sliding
                     const marchDir = s.userData.marchDirection || 1;
-                    s.position.x += marchDir * 0.008;
+                    s.position.x += marchDir * 0.008 * frameK;
                 } else if (category === 'sadness') {
                     s.position.y += 0.005; // Slow rise
                     // Shiver (shake) text
@@ -1996,8 +2029,9 @@ export class SongOrchestra extends BaseSong {
                 }
 
                 if (this.isClimax) {
-                    s.position.x *= 1.003;
-                    s.position.y *= 1.003;
+                    const expand = Math.pow(1.003, frameK);
+                    s.position.x *= expand;
+                    s.position.y *= expand;
                 }
 
                 const age = Math.max(0, position - s.userData.birth);
@@ -2041,6 +2075,8 @@ export class SongOrchestra extends BaseSong {
             const s = this.activeSprites[i];
             if (!s || s.userData.isNode || s.userData.isBeingTapped) continue;
             s.position.z += (targetLyricZ - s.position.z) * 0.08;
+            // 奥行き・カメラ位置が確定した後で、現在のカメラ基準の安全帯へ収める(見切れ防止)。
+            this._clampLyricToSafeBand(s);
         }
 
         // Update drawn/constellation lines
