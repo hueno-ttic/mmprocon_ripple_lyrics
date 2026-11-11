@@ -39,7 +39,11 @@
 ### 確認結果
 * `npm run build`／`VITE_DEV_TOOLS=1` ビルドとも成功。
 * 全6曲を実歌詞で再生（各曲の操作と曲末リザルトまで）。縦持ちスマホでの表示、6曲の出入りでWebGLコンテキストが増えないこと、シルエット共有マテリアルの再入場表示、ポーズ名へのHTML注入が無害化されること、ポーズエディタ/デバッグパネル、BGM/効果音を確認し全項目 PASS。CSP違反・コンソールエラー・404 は 0。
-* 未対応: 開発サーバ側の esbuild/vite の警告（vite 6 への破壊的更新が必要。本番の静的配信には無関係）。`bgm_river.mp3` / `bgm_lake.mp3`（未使用・約5.5MB）は素材として残置。
+* 追補（オーナー指示で対応）:
+  * vite 5 → 6.4.6 へ更新し、開発サーバ側（esbuild）の脆弱性も解消（`npm audit` 全体で 0）。dev/preview/両ビルドで曲の再生まで確認。
+  * 未使用素材 `bgm_river.mp3` / `bgm_lake.mp3` / `sfx/kotaete_choice.mp3` を削除（配信物 48MB → 43MB）。
+  * `.gitignore` を実態に合わせ、`tests/`・`playwright.config.js`・`eval_drive.cjs`/`eval_master.js` を追跡対象に。古い `reports/` は追跡から外した（ローカルには残る）。
+  * 手動デプロイ用の `gh-pages` と `npm run deploy` を削除（デプロイは GitHub Actions のみ）。公開サイトの開発ツール（ポーズエディタ/デバッグ）は審査用として維持。
 
 ---
 

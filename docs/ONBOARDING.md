@@ -38,7 +38,7 @@
 ## 2. 技術スタックと制約（レギュレーション）
 
 ### 2-1. スタック
-- ビルド: **Vite**（`npm run dev` / `npm run build` / `npm run preview`）。静的Webアプリ（GitHub Pages デプロイ: `npm run deploy`）。
+- ビルド: **Vite**（`npm run dev` / `npm run build` / `npm run preview`）。静的Webアプリ（GitHub Pages へは main への push で GitHub Actions〈`.github/workflows/deploy.yml`〉が自動デプロイ）。
 - 歌詞・タイミング: **TextAlive App API**（`textalive-app-api`）のみ。
 - 3D/描画: **Three.js**、ミクモデルに **@pixiv/three-vrm**。
 - テスト: **Playwright**（`npm run test:visual` / `test:e2e`）。

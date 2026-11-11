@@ -30,8 +30,6 @@ const FILES = {
     3: 'assets/bgm/bgm_puddles.mp3', // 水たまり — おもちゃのピアノ
     4: 'assets/bgm/bgm_stream.mp3',  // 小川   — 夏休みの探検
     5: 'assets/bgm/bgm_lake_sonare.m4a', // 湖   — 静かな海鳴り(DOVA-SYNDROME/蒲鉾さちこ。160kbps AACへ軽量化）
-    // public/assets/bgm/ の bgm_river.mp3(廃止した「川」フェーズ用)と
-    // bgm_lake.mp3(旧・湖BGM プラネット・ナイン)はどこからも参照されない(ファイルのみ残置)。
 };
 
 const BGM_MASTER = 0.5; // 環境音として控えめに(曲本編より主張しすぎない)

@@ -46,19 +46,20 @@ scratch/
 src/**/*.draft.js
 src/**/*.bak.js
 
-# Local Tests, Playwright Config & E2E Run Artifacts
+# E2E Run Artifacts（tests/ と playwright.config.js は npm run test:* で使うため追跡する）
 coverage/
 playwright-report/
 test-results/
 evidence/
 reports/
-playwright.config.js
-tests/
 
 # Local Agent Evaluation Outputs and Run Scripts
 eval_output*/
 eval_*.cjs
 eval_*.js
+# README/ONBOARDING から参照している評価ドライバは追跡する
+!eval_drive.cjs
+!eval_master.js
 
 # Claude Design 連携用(参照素材・下書き — アプリ本体に含めない)
 design_refs/
