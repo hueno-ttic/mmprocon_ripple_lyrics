@@ -177,6 +177,10 @@ class PlayerManager {
                     return;
                 }
 
+                // 湖へ戻った後/次曲の読込中に届く前曲タイマーの残りティックは捨てる。
+                // (曲末で止まらなかったタイマーが currentTime を前曲の末尾に書き戻し、ロック解除後の
+                //  新曲に対して前曲 duration で偽の songEnd を出していた)
+                if (!this.managed && (this._expectedSongUrl === null || !this.isTimerReady)) return;
                 appState.currentTime = position;
                 const dur = this.player?.video?.duration;
                 // TextAlive v0.4.x stops the timer at song end without firing onEnd or onStop.
@@ -294,6 +298,10 @@ class PlayerManager {
         // TextAlive ホスト管理下(managed)では曲の再読込が起きないため準備状態は保持する
         if (!this.managed) this.isTimerReady = false;
         appState.currentTime = 0;
+        // 曲末(リザルト経由)で戻った場合はタイマーが止まっていないことがあるので明示的に止める
+        if (!this.managed && this.player && this.player.isPlaying) {
+            try { this.player.requestStop(); } catch (_) { /* 停止失敗は無害 */ }
+        }
         this._songEndEmitted = false;
         this._songEndLocked = false;
         this._loadSeq++;
