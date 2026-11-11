@@ -20,7 +20,8 @@ function loadAll() {
         const raw = localStorage.getItem(STORAGE_KEY);
         if (!raw) return [];
         const list = JSON.parse(raw);
-        return Array.isArray(list) ? list : [];
+        // 壊れた要素([null] 等)で getRipples の r.songId が落ちないよう、オブジェクトだけ残す
+        return Array.isArray(list) ? list.filter(r => r && typeof r === 'object') : [];
     } catch (e) {
         console.warn('[lakeMemory] load failed, resetting:', e);
         return [];

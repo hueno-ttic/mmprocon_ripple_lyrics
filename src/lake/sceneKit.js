@@ -8,8 +8,10 @@
 // calls from its own update().
 import * as THREE from 'three';
 import { Reflector } from 'three/addons/objects/Reflector.js';
+import { quality } from '../core/quality.js';
 
-const isMobile = () => window.innerWidth < 768;
+// スマホではステージ(stage.js)が innerWidth を論理幅1280に差し替えるため、innerWidth では判定できない
+export const isMobile = () => quality.isMobile;
 
 /* ---------- textures (cached by key) ---------- */
 const _glowCache = new Map();

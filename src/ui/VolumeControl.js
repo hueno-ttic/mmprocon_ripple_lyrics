@@ -20,7 +20,9 @@ export class VolumeControl {
         this.hide(); // タイトル画面では非表示(タイトル通過後にshow()される)
 
         // 曲のロード完了ごとに保存値を適用(プレイヤーが作り直されても維持)
-        this._boundApply = () => this._applyToPlayer();
+        // 音量フェード中(曲退出のフェードアウト等)は割り込まない。割り込むと停止直前に
+        // 一瞬だけ設定音量に戻って鳴る。フェード側も保存値を目標にしているので齟齬は出ない。
+        this._boundApply = () => { if (!playerManager._fadeTimer) this._applyToPlayer(); };
         eventBus.on('timerReady', this._boundApply);
         eventBus.on('songChange', this._boundApply);
     }

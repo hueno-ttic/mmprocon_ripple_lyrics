@@ -339,6 +339,11 @@ class Application {
             // reveal the scene once loading completes.
             this._revealOnLoad = true;
             playerManager.loadSong(song);
+            // TextAlive ホスト管理下(managed)では読込完了イベントが来ないので、その場で幕を上げる
+            if (playerManager.managed) {
+                this._revealOnLoad = false;
+                screenFade.fadeIn(650);
+            }
         });
 
         eventBus.on('songChange', (songId) => {
@@ -371,12 +376,15 @@ class Application {
             // リザルトを出さない(締めの間の後に届くケースも toResult 側で再確認する)。
             const leaving = () => this._leavingSong || appState.currentSongId === null;
             if (leaving()) return;
+            // 勝敗のある曲(TAKEOVER)は敗北で終わった回をクリア登録しない
+            const scene = this.currentSongScene;
+            const markComplete = !(scene && typeof scene.shouldMarkComplete === 'function'
+                && !scene.shouldMarkComplete());
             const toResult = () => !leaving() && this._showSongEndOverlay(() => {
-                eventBus.emit('backToLake', { markComplete: true });
+                eventBus.emit('backToLake', { markComplete });
             });
             // 曲固有の「締めの間」（例: シャッターチャンスの写真選択コンタクトシート）を
             // 自然終了後に挟めるようにする。シーンが用意していればそれが終わってからリザルトへ。
-            const scene = this.currentSongScene;
             if (scene && typeof scene.runEndInterlude === 'function') {
                 scene.runEndInterlude(toResult);
             } else {
@@ -395,12 +403,21 @@ class Application {
                 clearRipples();
 
                 const wasAllComplete = appState.areAllSongsComplete();
+                const phaseBefore = appState.getPhase();
+                // 曲は最後まで流れた(songEnd 済み)のに、締めの間(シャッターの写真選択など)の途中で
+                // 「湖へ戻る」/Escape した場合もクリアとして数える(敗北で終わった曲は除く)
+                const scene = this.currentSongScene;
+                const sceneAllows = !(scene && typeof scene.shouldMarkComplete === 'function'
+                    && !scene.shouldMarkComplete());
+                if (!markComplete && playerManager._songEndLocked && sceneAllows) markComplete = true;
                 if (markComplete && appState.currentSongId) {
                     appState.markSongComplete(appState.currentSongId);
                 }
                 // この復帰で通常曲を全クリアした瞬間だけは、全曲制覇の祝福
                 // (CompletionScreen)を潰さないよう裏リロードを見送る。
                 const justCompletedAll = !wasAllComplete && appState.areAllSongsComplete();
+                // 天候フェーズが進んだ回も、湖側の「水は○○になった」遷移演出を見せるためリロードしない
+                const phaseChanged = appState.getPhase() !== phaseBefore;
 
                 appState.setCurrentSong(null);
                 appState.setLoading(false);
@@ -409,6 +426,8 @@ class Application {
                 // どの経路で戻っても曲終了リザルトは必ず片付ける(湖の上に残さない)
                 this._removeSongEndOverlay();
 
+                // 曲チャンクの読込待ちが残っていたら、その結果は湖の上に出さず捨てる
+                this._sceneToken = (this._sceneToken || 0) + 1;
                 if (this.currentSongScene) {
                     this.currentSongScene.destroy();
                     this.currentSongScene = null;
@@ -420,7 +439,7 @@ class Application {
                 // 累積で重くなる前に、カーテンが覆っている黒い間に裏リロードして
                 // 全リソース(three.js/VRM/MMD/TextAlive)を一掃する。リロード後は
                 // 復帰フラグでタイトルを飛ばし湖へ直帰するので、体感は黒い間の一瞬だけ。
-                if (!justCompletedAll && this._shouldBackgroundReload()) {
+                if (!justCompletedAll && !phaseChanged && this._shouldBackgroundReload()) {
                     console.warn('[Ripple Lyrics] 区切りで裏リロードしてリソースをリセットします');
                     location.reload();
                     return; // この後の lakeUI.show() は不要(リロードする)
@@ -602,8 +621,8 @@ class Application {
         const entry = SONG_LOADERS[songConfig.id];
         if (entry) {
             const Loaded = await this._loadSongClass(entry, songConfig.id);
-            // ロード中に別の曲へ切り替わっていたら、この結果は捨てる
-            if (token !== this._sceneToken) return;
+            // ロード中に別の曲へ切り替わった/湖へ戻っていたら、この結果は捨てる
+            if (token !== this._sceneToken || appState.currentSongId !== songConfig.id) return;
             if (!Loaded) {
                 // 実曲のシーンチャンクをどうしても取得できなかった。BaseSong の
                 // 「黒画面+白い歌詞だけ」という壊れて見える状態は絶対に見せず、

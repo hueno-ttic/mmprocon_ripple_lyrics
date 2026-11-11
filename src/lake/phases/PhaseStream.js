@@ -17,7 +17,7 @@ export class PhaseStream extends PhaseBase {
         //  - Mobile: the tall, narrow frame's big centered card fills the whole
         //    valley, so we lift to an elevated vantage and look down at the
         //    meander — the brook winds through the open frame above the card.
-        const mobile = window.innerWidth < 768;
+        const mobile = K.isMobile();
         this.cameraRig = mobile
             ? { pos: [6, 27, 20], lookAt: [1, 0, -18], drift: { ax: 0.8, fx: 0.09, ay: 0.18, fy: 0.15 } }
             : { pos: [25, 10.5, 31], lookAt: [-9, 0.1, -30], drift: { ax: 1.0, fx: 0.09, ay: 0.16, fy: 0.15 } };
@@ -111,7 +111,7 @@ export class PhaseStream extends PhaseBase {
         const gB = new THREE.MeshStandardMaterial({ color: 0x6cbf45, flatShading: true, roughness: 1 });
         const tuft = (x, y, z, sc) => { const grp = new THREE.Group(); const n = 5 + (Math.random() * 4 | 0); for (let b = 0; b < n; b++) { const h = 0.5 + Math.random() * 0.7; const bl = new THREE.Mesh(new THREE.ConeGeometry(0.05, h, 3), Math.random() < 0.5 ? gA : gB); bl.position.set((Math.random() - 0.5) * 0.5, h / 2, (Math.random() - 0.5) * 0.5); bl.rotation.set((Math.random() - 0.5) * 0.4, Math.random() * 6.28, (Math.random() - 0.5) * 0.4); grp.add(bl); } grp.position.set(x, y, z); grp.scale.setScalar(sc); grp.userData.ph = Math.random() * 6.28; return grp; };
         this.tufts = [];
-        const tuftN = window.innerWidth < 768 ? 180 : 320;
+        const tuftN = K.isMobile() ? 180 : 320;
         for (let i = 0; i < tuftN; i++) { const x = (Math.random() - 0.5) * 120, z = -96 + Math.random() * 150; const { d, half } = nearStream(x, z); const e = d - half; if (e < 0.2 || e > 3.4) continue; const tf = tuft(x, terrainY(x, z) - 0.1, z, 0.7 + Math.random() * 0.8); g.add(tf); this.tufts.push(tf); }
         const fernMat = new THREE.MeshStandardMaterial({ color: 0x357a2b, flatShading: true, roughness: 1, side: THREE.DoubleSide });
         for (let i = 0; i < 30; i++) { const x = (Math.random() - 0.5) * 110, z = -90 + Math.random() * 150; const { d, half } = nearStream(x, z); const e = d - half; if (e < 0.3 || e > 2.4) { i--; continue; } const fr = new THREE.Group(); for (let f = 0; f < 6; f++) { const bl = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 1.5), fernMat); bl.position.y = 0.5; bl.rotation.z = (f - 2.5) * 0.32; bl.rotation.y = Math.random() * 0.4; fr.add(bl); } fr.position.set(x, terrainY(x, z), z); fr.rotation.y = Math.random() * 6.28; fr.scale.setScalar(0.8 + Math.random() * 0.6); g.add(fr); }
@@ -119,7 +119,7 @@ export class PhaseStream extends PhaseBase {
         // trees on higher ground, receding into mist
         const tm = K.treeMats({ a: 0x2F7A38, b: 0x3C9140, c: 0x245B2A });
         this.trees = [];
-        const treeN = window.innerWidth < 768 ? 64 : 110;
+        const treeN = K.isMobile() ? 64 : 110;
         for (let i = 0; i < treeN; i++) { const x = (Math.random() - 0.5) * 150, z = -100 + Math.random() * 150; const { d, half } = nearStream(x, z); if (d - half < 5.5) continue; const s = 1.0 + Math.random() * 1.0; const t = (Math.random() < 0.5) ? K.pineTree(s, tm) : K.roundTree(s, tm); t.position.set(x, terrainY(x, z) - 0.2, z); t.rotation.y = Math.random() * 6.28; t.userData.ph = Math.random() * 6.28; g.add(t); this.trees.push(t); }
 
         // mossy fallen log spanning a narrow bend

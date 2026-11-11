@@ -73,7 +73,7 @@ export class PhaseLake extends PhaseBase {
         };
         this.flowers = [];
         const colony = (cx, cz, n, spread) => { for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()); const x = cx + Math.cos(a) * spread * d, z = cz + Math.sin(a) * spread * d * 0.7; const f = makeSunflower(0.85 + Math.random() * 0.5); f.position.set(x, bankTopY - 0.1, z); f.rotation.y = Math.random() * Math.PI * 2; f.userData.head.rotation.z = (Math.random() - 0.5) * 0.3; g.add(f); this.flowers.push(f); } };
-        const n = window.innerWidth < 768 ? 8 : 13;
+        const n = K.isMobile() ? 8 : 13;
         colony(-15, 10, n, 7.5); colony(16, 8, n, 7.5);
     }
 

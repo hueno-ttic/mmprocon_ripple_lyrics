@@ -78,7 +78,7 @@ export class PhaseRain extends PhaseBase {
 
     _buildRain() {
         const g = this.group;
-        this.RAIN = window.innerWidth < 768 ? 420 : 820; this.RLEN = 2.1; this.rdir = new THREE.Vector3(-0.32, -1, 0.04).normalize();
+        this.RAIN = K.isMobile() ? 420 : 820; this.RLEN = 2.1; this.rdir = new THREE.Vector3(-0.32, -1, 0.04).normalize();
         this.rainPos = new Float32Array(this.RAIN * 2 * 3); this.anchor = new Float32Array(this.RAIN * 3); this.rlen = new Float32Array(this.RAIN);
         for (let i = 0; i < this.RAIN; i++) this._seedRain(i, true);
         this._writeRain();

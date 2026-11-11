@@ -55,6 +55,10 @@ export class CompletionScreen {
                 e.preventDefault();
                 e.stopImmediatePropagation();
                 this.hide();
+            } else if (e.code === 'Space' || e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+                // 裏の湖(WorldUI)で選曲・曲送りが走り、祝福画面の下で曲が始まるのを防ぐ
+                e.preventDefault();
+                e.stopImmediatePropagation();
             }
         };
         window.addEventListener('keydown', this._boundKeydown, true);

@@ -962,14 +962,18 @@ export class SongTakeover extends BaseSong {
         if (!this.scoreEl) return;
         const cov = this.greenCoverage;
         const pct = Math.round(cov * 100);
-        this.scoreEl.textContent = `RECLAIMED AREA: ${pct}%`;
-        // 制圧率に応じて 赤(敵) → 緑(奪還) へ
-        const cr = Math.round(255 - cov * 235);
-        const cg = Math.round(40 + cov * 215);
-        const cb = Math.round(40 + cov * 120);
-        const shadow = cov < this._clearThreshold ? '#ff3a3a' : '#00ffaa';
-        this.scoreEl.style.color = `rgb(${cr},${cg},${cb})`;
-        this.scoreEl.style.textShadow = `0 0 ${5 + cov*18}px ${shadow}`;
+        // 減衰で毎フレーム呼ばれるため、表示値が変わった時だけDOMへ書く（無駄なスタイル再計算を避ける）
+        if (pct !== this._gaugePct) {
+            this._gaugePct = pct;
+            this.scoreEl.textContent = `RECLAIMED AREA: ${pct}%`;
+            // 制圧率に応じて 赤(敵) → 緑(奪還) へ
+            const cr = Math.round(255 - cov * 235);
+            const cg = Math.round(40 + cov * 215);
+            const cb = Math.round(40 + cov * 120);
+            const shadow = cov < this._clearThreshold ? '#ff3a3a' : '#00ffaa';
+            this.scoreEl.style.color = `rgb(${cr},${cg},${cb})`;
+            this.scoreEl.style.textShadow = `0 0 ${5 + cov*18}px ${shadow}`;
+        }
 
         // 成果サマリー（曲終了オーバーレイ用、終局演出が出るまで何度でも上書き可）
         // 減衰で毎フレーム呼ばれるため ~250ms に間引く。
@@ -1104,7 +1108,7 @@ export class SongTakeover extends BaseSong {
         if (b.burstParticles.length > pcap) b.burstParticles.splice(0, b.burstParticles.length - pcap);
 
         // 信号線: クリック地点 → 直下の制圧境界へ。サビ/高コンボでは中央端末へも。
-        const greenH = this.territoryEl ? this.territoryEl.clientHeight : 0;
+        const greenH = this.territoryEl ? this.greenCoverage * b.h : 0;
         const boundaryY = b.h - greenH;
         b.signals.push({ x0: x, y0: y, x1: x, y1: boundaryY, age: 0, life: 0.26 });
         if (it.signalToCenter) {
@@ -1136,7 +1140,9 @@ export class SongTakeover extends BaseSong {
         const redDim = now < this._redDimUntil ? 0.3 : 1;
 
         // 緑領域の実描画高さ(CSSトランジション込み)から境界 y を求め、DOMと完全同期。
-        const greenH = this.territoryEl.clientHeight;
+        // clientHeight を読むと直前の style 書き込みで毎フレーム強制レイアウトになるため、
+        // 制圧率から算出する（CSSトランジション分の遅れは見た目上ほぼ差が出ない）。
+        const greenH = this.greenCoverage * H;
         const surgePush = this._boundarySurge * 26; // コンボで最大26px押し上げ
         const baseY = H - greenH - surgePush;
 
@@ -1370,7 +1376,7 @@ export class SongTakeover extends BaseSong {
         }
         // デブリのワイヤーフレームも 赤 → 緑 へ
         if (this._debrisMat) {
-            this._debrisMat.color.setHex(0x8c1430).lerp(new THREE.Color(0x00ffaa), cov);
+            this._debrisMat.color.setHex(0x8c1430).lerp(this._mikuColorCyan, cov);
         }
     }
 
@@ -1518,8 +1524,10 @@ export class SongTakeover extends BaseSong {
             const cl = Math.max(6, Math.min(regionLeft + col * cellW + jitterX, Math.max(6, 94 - widthPct)));
             const ct = Math.max(16, Math.min(regionTop + row * cellH + jitterY, Math.max(16, 81 - heightPct)));
 
-            // 既存ターゲットと重なる候補は除外
+            // 既存ターゲットと重なる候補は除外（解読済み/期限切れの残骸は画面に無いので数えない。
+            // 数えると数回の出現で全セルが「埋まり」、以降ずっと中央付近へ重なって湧く）
             const overlaps = this.phraseTargets.some(t =>
+                (t.state === 'scrambled' || t.state === 'decrypting') &&
                 Math.abs(t.leftPct - cl) < widthPct && Math.abs(t.topPct - ct) < heightPct);
             if (overlaps) continue;
 
@@ -1635,6 +1643,7 @@ export class SongTakeover extends BaseSong {
     }
 
     _revealTarget(target, plaintext) {
+        if (!this.isActive) return; // 復号(await)中に湖へ戻った
         if (target.state !== 'decrypting') return; // expired between click and decrypt resolve
         target.state = 'decoded';
         this.dismissFirstInteractable(); // 初回復号成功で誘導ガイドを片付ける
@@ -1900,6 +1909,11 @@ export class SongTakeover extends BaseSong {
 
     _unlockAudio() {
         unlockAudio(); // 共有 AudioContext を resume(押下ごとの new によるリークを防ぐ)
+    }
+
+    // 敗北(TAKEOVER FAILED)で終わった回はクリア登録しない（勝敗の意味を保つ）
+    shouldMarkComplete() {
+        return this._outcome !== 'failed';
     }
 
     // ── TAKEOVER COMPLETE: ブラックアウト→再起動風シーケンス→赤一色 ────
@@ -2311,7 +2325,8 @@ export class SongTakeover extends BaseSong {
         if (!this._completeFired) {
             const duration = playerManager.player.video.duration;
             if (duration > 0 && position >= duration - this._completeLeadMs) {
-                if (this.greenCoverage >= this._clearThreshold) {
+                // 歌詞が取得できず暗号カードを作れなかった場合は遊びようが無いので敗北にしない
+                if (!this.lyricCardBuilt || this.greenCoverage >= this._clearThreshold) {
                     this._triggerComplete();
                 } else {
                     this._triggerFailed();

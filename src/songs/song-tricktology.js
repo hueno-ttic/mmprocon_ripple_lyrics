@@ -1754,6 +1754,19 @@ export class SongTricktology extends BaseSong {
             this.surfaceLine.material.dispose();
         }
 
+        // 上下世界のワイヤーフレーム(ジオメトリは3種を共有、マテリアルは個別)
+        if (this.ambientShapes) {
+            const geos = new Set();
+            this.ambientShapes.forEach(({ up, lo }) => {
+                [up, lo].forEach((m) => {
+                    if (m.parent) m.parent.remove(m);
+                    geos.add(m.geometry);
+                    m.material.dispose();
+                });
+            });
+            geos.forEach((g) => g.dispose());
+            this.ambientShapes = [];
+        }
         if (this.starGeometry) this.starGeometry.dispose();
         if (this.starMaterial) this.starMaterial.dispose();
         if (this.glowTexture) this.glowTexture.dispose();

@@ -1270,6 +1270,7 @@ export class SongOrchestra extends BaseSong {
 
         sprite.userData = { 
             birth: birthTime, 
+            singEnd: birthTime + duration, // 歌唱区間の終端(歌唱パルスの判定用)
             life: lifeTime,
             text: lyricEntity.text,
             category: category,
@@ -1381,6 +1382,11 @@ export class SongOrchestra extends BaseSong {
         if (this.tapAnimation) {
             return;
         }
+        // 3Dキャンバス直上のクリックだけを受け付ける。songWrapper で click を受けているため、
+        // 上に重なるDOM UI(チュートリアルの「スタート」/.tut-btn 等)のクリックも伝播してきて、
+        // 背後のタイトル/歌詞スプライト(不透明度0のものも)をオーブ化してしまっていた。
+        // (歌詞・ガイド等の重なり表示は pointer-events:none なので、キャンバスへのタップはそのまま届く)
+        if (!this.renderer || event.target !== this.renderer.domElement) return;
 
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
@@ -1871,6 +1877,9 @@ export class SongOrchestra extends BaseSong {
             for (let i = this.activeSprites.length - 1; i >= 0; i--) {
                 const s = this.activeSprites[i];
                 if (s.userData.isNode) continue; // Skip constellation nodes
+                // タップ中の行はここで破棄しない(タップのピークで resonateLyricColor が破棄・オーブ化する)。
+                // 窓終端付近でタップされた行を途中で消すと、二重破棄＋何もない所からオーブが出ていた。
+                if (s.userData.isBeingTapped) continue;
 
                 const groupIndex = s.userData.groupIndex;
                 const isStillActive = activeGroups.some(g => g.index === groupIndex);
@@ -1913,8 +1922,10 @@ export class SongOrchestra extends BaseSong {
             // 星座ノードの残骸チェックがあればスキップ
             if (s.userData.isNode) continue;
 
-            // 現在歌唱中の単語とスプライトの文字が一致するかチェックし、歌唱パルス（バウンド拡大）をトリガー
-            const isWordActive = currentWord && s.userData.text && s.userData.text.includes(currentWord.text) 
+            // この行の歌唱区間内で、いま歌われている単語に合わせて歌唱パルス（バウンド拡大）をトリガー
+            // (旧: text.includes(word.text) は1文字の単語で無関係な行まで反応していた)
+            const singEnd = s.userData.singEnd !== undefined ? s.userData.singEnd : s.userData.birth + 2500;
+            const isWordActive = !!currentWord && currentWord.startTime >= s.userData.birth - 1 && currentWord.startTime < singEnd
                               && position >= currentWord.startTime && position <= currentWord.endTime;
             if (!s.userData.pulseProgress) s.userData.pulseProgress = 0;
             const targetPulse = isWordActive ? 1.0 : 0.0;
@@ -2858,11 +2869,27 @@ export class SongOrchestra extends BaseSong {
         this.premonitionOrbs = [];
 
         // 色彩交響オーブのクリーンアップ
+        // (子のハロー material も破棄。map は共有の glowTexture なので個別 dispose しない)
+        const disposeOrbHalo = (orb) => orb.children.forEach(c => { if (c.material) c.material.dispose(); });
         this.resonateOrbs.forEach(orb => {
             this.scene.remove(orb);
             if (orb.material) orb.material.dispose();
+            disposeOrbHalo(orb);
         });
         this.resonateOrbs = [];
+        // サビ打ち上げ用に退避したオーブ(打ち上げ中の尾=trail を含む)のクリーンアップ
+        // (geometry は共有の orbGeometry なので下でまとめて dispose する)
+        this.climaxOrbs.forEach(orb => {
+            this.scene.remove(orb);
+            if (orb.material) orb.material.dispose();
+            disposeOrbHalo(orb);
+            if (orb.userData.trail) {
+                this.scene.remove(orb.userData.trail);
+                orb.userData.trail.geometry.dispose();
+                orb.userData.trail.material.dispose();
+            }
+        });
+        this.climaxOrbs = [];
         this.sublimatedGroupIndices = null;
         this.retiredGroupIndices = null;
         if (this.orbGeometry) {
@@ -2910,9 +2937,6 @@ export class SongOrchestra extends BaseSong {
         if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
         
         this.container.removeEventListener('mousemove', this._boundOnMouseMove);
-        this.container.removeEventListener('pointerdown', this.boundOnPointerDown);
-        this.container.removeEventListener('pointermove', this.boundOnPointerMove);
-        window.removeEventListener('pointerup', this.boundOnPointerUp);
 
         if (this.constellationLineMesh) {
             this.scene.remove(this.constellationLineMesh);

@@ -214,6 +214,8 @@ export class ShutterPoseEditor {
   }
 
   destroy() {
+    // 曲から離脱する破棄時は再生を再開しない(湖へ戻った後に音楽が鳴り出すのを防ぐ)
+    this._wasPlaying = false;
     this.close();
     if (this._styleEl && this._styleEl.parentNode) this._styleEl.parentNode.removeChild(this._styleEl);
     this._styleEl = null;

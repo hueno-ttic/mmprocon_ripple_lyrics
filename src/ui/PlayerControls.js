@@ -112,6 +112,8 @@ export class PlayerControls {
             // 曲シーン中だけ反応する。湖(選曲画面)では Space/Escape を WorldUI 側に任せ、
             // 前曲の音声再生や backToLake の再実行に化けないようにする。
             if (appState.currentSongId === null) return;
+            // 入力欄(シャッターのポーズ名など)への文字入力・IME変換中はショートカットにしない
+            if (e.isComposing || isEditableTarget(e.target)) return;
             if (!playerManager.isTimerReady) {
                 // Guard keyboard inputs during load
                 if (e.code === 'Space' || e.code === 'Escape') {
@@ -122,6 +124,7 @@ export class PlayerControls {
             if (e.code === 'Space') {
                 e.preventDefault();
                 if (window.app?.currentSongScene?.isSelectingCast) return; // 被写体選択中はSpaceで再生させない(shutter)
+                if (window.app?._leavingSong) return; // 湖へ戻るフェード中に再生し直すと湖の上で曲が鳴り続ける
                 if (playerManager._songEndLocked) return; // 曲の終了後は Space で再生し直さない(songEnd 再発火防止)
                 unlockAudioContext();
                 if (appState.isPlaying) {
@@ -202,4 +205,10 @@ export class PlayerControls {
              this.playPauseBtn.style.cursor = 'pointer';
         });
     }
+}
+
+function isEditableTarget(el) {
+    if (!el || el === window || el === document) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el.isContentEditable;
 }
