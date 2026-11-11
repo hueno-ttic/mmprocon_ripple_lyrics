@@ -107,10 +107,14 @@ class PlayerManager {
             },
 
             onPause: () => {
+                const wasPlaying = appState.isPlaying;
                 appState.isPlaying = false;
                 eventBus.emit('pause');
                 // 曲末で onStop/onEnd も末尾50ms以内の timeUpdate も来ず、pause だけで終わる回がある
-                // (リザルトが出ず完了登録もできないまま固まる)。終端1秒以内の pause は自然終了として扱う。
+                // (リザルトが出ず完了登録もできないまま固まる)。再生中だった曲が終端1秒以内で
+                // pause したら自然終了として扱う(読込直後/チュートリアル中の pause は対象外)。
+                if (!wasPlaying) return;
+                if (window.app?.currentSongScene?.isTutorialActive) return;
                 const dur = this.player?.video?.duration;
                 if (!this._songEndEmitted && dur > 0 && appState.currentTime >= dur - 1000) {
                     this._songEndEmitted = true;
@@ -206,6 +210,7 @@ class PlayerManager {
 
     loadSong(song) {
         this.isTimerReady = false;
+        appState.currentTime = 0; // 前曲の再生位置を持ち越すと、新曲の pause/stop を曲末と誤判定する
         this._userStop = false;
         this._songEndEmitted = false;
         this._songEndLocked = false;
@@ -288,6 +293,7 @@ class PlayerManager {
     releaseForLake() {
         // TextAlive ホスト管理下(managed)では曲の再読込が起きないため準備状態は保持する
         if (!this.managed) this.isTimerReady = false;
+        appState.currentTime = 0;
         this._songEndEmitted = false;
         this._songEndLocked = false;
         this._loadSeq++;
