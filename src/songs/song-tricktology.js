@@ -1190,6 +1190,11 @@ export class SongTricktology extends BaseSong {
         // 選ばれなかった世界の自分 → 輪郭が揺れ、光の粒へ
         this.dissolveRejected(rejectedWorld);
 
+        // 反転キャプションがまだ残っていれば消す（シークで同時に到達すると同位置に重なるため）
+        if (this._invCap && this._invCap.parentNode) {
+            this._invCap.parentNode.removeChild(this._invCap);
+        }
+
         const cap = document.createElement('div');
         cap.className = 'tricktology-caption';
         cap.textContent = '満ちた月が、本物の世界を選んだ';
@@ -1257,6 +1262,55 @@ export class SongTricktology extends BaseSong {
         this.bursts.push(points);
     }
 
+    // 巻き戻しシーク時の状態復元。反転・決着は一方通行のフラグなので、
+    // 戻った位置より後で起きたものを取り消し、通常の前進処理で再発火させる。
+    // 見た目（明るさ・月・リンの向き・素材の透明度）は worldChosen / invertCount から
+    // 毎フレーム算出されるため、フラグを戻せば決着前の姿へ自然に戻る。
+    rewindStory(position) {
+        const duration = playerManager.player && playerManager.player.video
+                         ? playerManager.player.video.duration : 0;
+        const choiceAt = (duration && duration < T_CHOICE + 4000) ? Math.max(T_INVERT + 8000, duration - 6000) : T_CHOICE;
+
+        if (position < choiceAt && (this.worldChosen || this.choiceShown)) {
+            this.worldChosen = null;
+            this.choiceShown = false;
+            this.collapseStart = -1;
+            this.turnProgress = 0;
+            if (this._captionTimer) { clearTimeout(this._captionTimer); this._captionTimer = null; }
+            if (this.captionEl && this.captionEl.parentNode) {
+                this.captionEl.parentNode.removeChild(this.captionEl);
+            }
+            this.captionEl = null;
+            // 遅延の光の粒（溶ける演出）も取り消す
+            if (this._burstTimers) {
+                this._burstTimers.forEach((id) => clearTimeout(id));
+                this._burstTimers = [];
+            }
+            // 溶けた側の素材を元の透明度へ（applyWorldMaterial は opacity 差分時のみ戻すため明示）
+            this.realMatCache.forEach((e) => {
+                e.material.opacity = e.baseOpacity ?? 1;
+                e.material.transparent = e.baseTransparent ?? false;
+            });
+        }
+
+        if (position < T_INVERT && this.invertCount > 0) {
+            this.invertCount = 0; // flipProgress が追従して上下が戻る
+            if (this._invCap && this._invCap.parentNode) {
+                this._invCap.parentNode.removeChild(this._invCap);
+            }
+            this._invCap = null;
+        }
+
+        // 新しい位置より未来に生まれた歌詞は寿命計算が進まず残留するので片付ける
+        for (let i = this.lyrics.length - 1; i >= 0; i--) {
+            if (this.lyrics[i].birth > position) {
+                this.disposeLyric(this.lyrics[i]);
+                this.lyrics.splice(i, 1);
+            }
+        }
+        this.lastPhrase = null; // 現在位置のフレーズを再び出現させる
+    }
+
     // ───────────────────────── 毎フレーム更新 ─────────────────────────
 
     update(time) {
@@ -1265,6 +1319,12 @@ export class SongTricktology extends BaseSong {
         const position = (playerManager.player && playerManager.player.timer)
                          ? playerManager.player.timer.position
                          : this.getSmoothedTime();
+
+        // シークバーで巻き戻されたら、物語の状態（反転・決着）を新しい位置に合わせて戻す
+        if (this._lastPosition !== undefined && position < this._lastPosition - 1000) {
+            this.rewindStory(position);
+        }
+        this._lastPosition = position;
 
         const t = this.relSec();
         const nowReal = performance.now();
