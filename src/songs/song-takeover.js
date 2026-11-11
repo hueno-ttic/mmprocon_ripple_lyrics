@@ -1916,6 +1916,11 @@ export class SongTakeover extends BaseSong {
         return this._outcome !== 'failed';
     }
 
+    // 曲終了リザルトの見出し。敗北時に「向き合えた」と出ると結果と食い違うので差し替える
+    get resultHeadline() {
+        return this._outcome === 'failed' ? 'この問いは、まだ終わらない' : null;
+    }
+
     // ── TAKEOVER COMPLETE: ブラックアウト→再起動風シーケンス→赤一色 ────
     _triggerComplete() {
         if (this._completeFired) return;
@@ -2128,6 +2133,16 @@ export class SongTakeover extends BaseSong {
                 this.scoreEl.style.textShadow = '0 0 24px #ff3a3a, 0 0 48px #ff3a3a';
             }
         }, lineBase + bootLines.length * 520);
+        // 4) 暗転を明けて敗北ログを片付ける（残すと曲終了リザルトの文字と重なって読めない）
+        const failEndMs = lineBase + bootLines.length * 520 + 1200;
+        schedule(() => {
+            overlay.classList.remove('on');
+            overlay.classList.add('off');
+        }, failEndMs);
+        schedule(() => {
+            if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+            if (this.rebootEl === overlay) this.rebootEl = null;
+        }, failEndMs + 1600);
 
         this.setResultSummary({
             lines: [`制圧率 ${Math.round(this.greenCoverage * 100)}% ・ 最大コンボ ${this.maxCombo}`, 'TAKEOVER FAILED', '奪還ならず — 世界はまだ赤いまま'],

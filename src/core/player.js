@@ -108,6 +108,14 @@ class PlayerManager {
             onPause: () => {
                 appState.isPlaying = false;
                 eventBus.emit('pause');
+                // 曲末で onStop/onEnd も末尾50ms以内の timeUpdate も来ず、pause だけで終わる回がある
+                // (リザルトが出ず完了登録もできないまま固まる)。終端1秒以内の pause は自然終了として扱う。
+                const dur = this.player?.video?.duration;
+                if (!this._songEndEmitted && dur > 0 && appState.currentTime >= dur - 1000) {
+                    this._songEndEmitted = true;
+                    this._songEndLocked = true;
+                    eventBus.emit('songEnd');
+                }
             },
 
             onStop: () => {
@@ -285,6 +293,8 @@ class PlayerManager {
     play() {
         // 自然終了後は次の曲/湖へ戻るまで再生させない(songEnd 再発火の防止)
         if (this._songEndLocked) return;
+        // 湖へ戻った後(releaseForLake 済み)は、曲シーンの後始末などから呼ばれても鳴らさない
+        if (!this.managed && this._expectedSongUrl === null) return;
         this._songEndEmitted = false;
         if (this.player && this.player.isPlaying === false) {
             this.player.requestPlay();

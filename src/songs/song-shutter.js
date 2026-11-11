@@ -2108,9 +2108,9 @@ export class SongShutter extends BaseSong {
             <div style="${bracketStyle}; bottom: 40px; left: 40px; border-right: none; border-top: none;"></div>
             <div style="${bracketStyle}; bottom: 40px; right: 40px; border-left: none; border-top: none;"></div>
 
-            <!-- CAMERA SETTINGS (Zoom & Aperture) -->
-            <div style="position: absolute; top: 50px; left: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-zoom-label">ZOOM 1.0x</div>
-            <div style="position: absolute; top: 50px; right: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-aperture-label">F2.8 [OPEN]</div>
+            <!-- CAMERA SETTINGS (Zoom & Aperture) — 曲名/湖面へ戻るボタンの下へ(top:50px だと見出しに隠れて読めない) -->
+            <div style="position: absolute; top: 118px; left: 44px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-zoom-label">ZOOM 1.0x</div>
+            <div style="position: absolute; top: 118px; right: 44px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-aperture-label">F2.8 [OPEN]</div>
 
             <!-- 中央のAFフォーカスマーク(クロスヘア＋AUTO FOCUS表示)は廃止。
                  画面中央に貼り付くだけで実際のピント合わせには連動しておらず、

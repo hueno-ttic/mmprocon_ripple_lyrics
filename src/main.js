@@ -492,7 +492,8 @@ class Application {
         `;
 
         const text = document.createElement('div');
-        text.textContent = 'この問いと、向き合えた';
+        const scene = this.currentSongScene;
+        text.textContent = (scene && scene.resultHeadline) || 'この問いと、向き合えた';
         text.style.cssText = `
             color: rgba(255,255,255,0);
             font-size: clamp(14px, 3vw, 22px);
