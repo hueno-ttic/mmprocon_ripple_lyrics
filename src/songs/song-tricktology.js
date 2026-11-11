@@ -1301,9 +1301,12 @@ export class SongTricktology extends BaseSong {
             this._invCap = null;
         }
 
-        // 新しい位置より未来に生まれた歌詞は寿命計算が進まず残留するので片付ける
+        // 新しい位置より未来に生まれた歌詞は寿命計算が進まず残留するので片付ける。
+        // 戻り先フレーズの歌詞も消して出し直す(残すとフレーズ内の短い巻き戻しで二重に出る)
+        const seekPhrase = playerManager.player?.video?.findPhrase(position);
+        const phraseStart = seekPhrase ? seekPhrase.startTime : Infinity;
         for (let i = this.lyrics.length - 1; i >= 0; i--) {
-            if (this.lyrics[i].birth > position) {
+            if (this.lyrics[i].birth > position || this.lyrics[i].birth >= phraseStart) {
                 this.disposeLyric(this.lyrics[i]);
                 this.lyrics.splice(i, 1);
             }
@@ -1321,7 +1324,8 @@ export class SongTricktology extends BaseSong {
                          : this.getSmoothedTime();
 
         // シークバーで巻き戻されたら、物語の状態（反転・決着）を新しい位置に合わせて戻す
-        if (this._lastPosition !== undefined && position < this._lastPosition - 1000) {
+        if (this._lastPosition !== undefined && position < this._lastPosition - 1000
+            && playerManager.recentlySought()) {
             this.rewindStory(position);
         }
         this._lastPosition = position;

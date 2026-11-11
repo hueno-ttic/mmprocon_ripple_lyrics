@@ -335,8 +335,15 @@ class PlayerManager {
 
     seek(position) {
         if (this.player) {
+            this.lastSeekAt = performance.now();
             this.player.requestMediaSeek(position);
         }
+    }
+
+    // 直近にアプリから明示的なシーク(シークバー等)をしたか。タイマーの自然な揺れ(再同期で
+    // 数秒戻る等)を「巻き戻し」と誤認して曲側の状態を戻さないための判定に使う。
+    recentlySought(withinMs = 3000) {
+        return !!this.lastSeekAt && performance.now() - this.lastSeekAt < withinMs;
     }
 
     setVolume(value) {
