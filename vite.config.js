@@ -10,6 +10,12 @@ const saveShotPlugin = () => ({
   configureServer(server) {
     server.middlewares.use('/__save_shot', (req, res) => {
       if (req.method !== 'POST') { res.statusCode = 405; return res.end(); }
+      // 他サイトからの書き込み(CORS の simple request はプリフライト無しで届く)を拒否する
+      const origin = req.headers.origin;
+      const host = req.headers.host;
+      if (origin && origin !== `http://${host}` && origin !== `https://${host}`) {
+        res.statusCode = 403; return res.end();
+      }
       let body = '';
       req.on('data', (c) => { body += c; });
       req.on('end', () => {

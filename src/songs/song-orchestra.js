@@ -5,10 +5,9 @@ import { BaseSong } from './BaseSong.js';
 import { safeGet, safeSet } from '../utils/storage.js';
 import { SONGS } from '../config/songs.js';
 import { playerManager } from '../core/player.js';
-import { groupPhraseWords, findGroupForWord } from '../utils/lyricGroups.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
-import { settleSpringBones, anchorSpringBonesToModel } from '../utils/vrm.js';
+import { settleSpringBones, anchorSpringBonesToModel, disposeVRM } from '../utils/vrm.js';
 
 export class SongOrchestra extends BaseSong {
     constructor(container, songId) {
@@ -32,10 +31,8 @@ export class SongOrchestra extends BaseSong {
         this.lastGroupStartTime = -1;
         this.colorPickerShown = false;
         this.hasResonatedColor = false;
-        this.drawUiShown = false;
         this.isClimax = false;
         
-        this.colorPickerContainer = null;
         this.fireworks = [];
         this._tutCard = null;
         
@@ -56,7 +53,6 @@ export class SongOrchestra extends BaseSong {
         this.introTitleSprites = []; // イントロでタップ可能なタイトル文字スプライト(ふれるとオーブ化)
         this.introFinaleFired = false; // イントロ終端の花火を一度だけ発火するフラグ
         this._finaleQueue = null; // イントロ終端の花火を時間差で夜空に咲かせるための予約列
-        this._mousePos = null;
         
         // 歌詞の単語キャッシュステート
         this.lyricsCacheBuilt = false;
@@ -87,13 +83,6 @@ export class SongOrchestra extends BaseSong {
         // クリックは BaseSong が songWrapper に登録する this.boundOnClick(=this.onClick) で受ける。
         // 以前はここで boundOnClick を上書きし container にも登録していたため、
         // 1回のクリックが songWrapper→container のバブリングで2回処理されていた(#129 周辺の二重処理)。
-
-        this._boundOnMouseMove = (e) => {
-            this._mousePos = new THREE.Vector2(
-                (e.clientX / window.innerWidth) * 2 - 1,
-                -(e.clientY / window.innerHeight) * 2 + 1
-            );
-        };
     }
 
     init() {
@@ -106,7 +95,6 @@ export class SongOrchestra extends BaseSong {
         this.createIntroTitle();    // イントロ中に曲名・作者・遊び方を歌詞風に提示
         this.updateResultSummary(); // 0個の状態でも成果サマリーを初期登録
         window.addEventListener('resize', this.boundOnResize);
-        this.container.addEventListener('mousemove', this._boundOnMouseMove);
         
         // VRM model loading setup
         this.currentVRM = null;
@@ -134,7 +122,7 @@ export class SongOrchestra extends BaseSong {
             import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
             (gltf) => {
                 if (!this.isActive) {
-                    this.disposeVRM(gltf.userData.vrm);
+                    disposeVRM(gltf.userData.vrm);
                     return;
                 }
                 const vrm = gltf.userData.vrm;
@@ -175,8 +163,6 @@ export class SongOrchestra extends BaseSong {
                     leftLowerArm: leftLower ? leftLower.quaternion.clone() : new THREE.Quaternion(),
                     rightLowerArm: rightLower ? rightLower.quaternion.clone() : new THREE.Quaternion()
                 };
-
-                console.log('[ORCHESTRA] Miku VRM loaded successfully.');
             },
             undefined,
             (error) => {
@@ -1018,7 +1004,6 @@ export class SongOrchestra extends BaseSong {
         }
         
         this.allWordGroups.sort((a, b) => a.startTime - b.startTime);
-        console.log(`[ORCHESTRA] Pre-cached ${this.allWordGroups.length} phrases.`);
         this.lyricsCacheBuilt = true;
         return true;
     }
@@ -1271,10 +1256,7 @@ export class SongOrchestra extends BaseSong {
                 }
                 if (found) break;
             }
-            if (found) {
-                console.log(`[ORCHESTRA] Spawned "${lyricEntity.text}" at (${foundX.toFixed(2)}, ${foundY.toFixed(2)}) using pass (H:${pass.padH}, V:${pass.padV})`);
-                break;
-            }
+            if (found) break;
         }
         
         if (!found) {
@@ -1503,12 +1485,10 @@ export class SongOrchestra extends BaseSong {
 
         if (semanticHex) {
             nextColorHex = semanticHex;
-            console.log(`[ORCHESTRA] Semantic color match: "${text}" -> ${semanticHex}`);
         } else {
             // 意味キーワードに該当しない場合は、カラーパレットからランダムで選択して多様性を出す
             const ORCHESTRA_COLORS = ['#ffffff', '#ffb834', '#ff3b5c', '#00d4ff', '#00ffb0', '#d95bff'];
             nextColorHex = ORCHESTRA_COLORS[Math.floor(Math.random() * ORCHESTRA_COLORS.length)];
-            console.log(`[ORCHESTRA] No semantic color match. Random fallback: "${text}" -> ${nextColorHex}`);
         }
         
         this.currentColor = nextColorHex;
@@ -2623,7 +2603,6 @@ export class SongOrchestra extends BaseSong {
                     const activeLower = isLeft ? leftLowerArm : rightLowerArm;
 
                     if (activeUpper) {
-                        const shoulderPos = activeUpper.getWorldPosition(new THREE.Vector3());
                         // 歌詞の世界座標ではなく「ミクの正面(顔の向き)」方向へ腕を伸ばす。
                         // 背面時は画面奥(=ミクの前)へ、正面(サビ)時は客席側(=ミクの前)へ、常にミクの正面側へ手が出る。
                         // (歌詞へ正対させると、サビは歌詞がミクの背側に来るため腕が背面へ回ってしまう)
@@ -2893,7 +2872,7 @@ export class SongOrchestra extends BaseSong {
         // Cleanup VRM Avatar
         if (this.currentVRM) {
             this.scene.remove(this.currentVRM.scene);
-            this.disposeVRM(this.currentVRM);
+            disposeVRM(this.currentVRM);
             this.currentVRM = null;
         }
 
@@ -2971,8 +2950,6 @@ export class SongOrchestra extends BaseSong {
         if (this.starGeometry) this.starGeometry.dispose();
         if (this.starMaterial) this.starMaterial.dispose();
         if (this.renderer) { this.renderer.dispose(); this.renderer.forceContextLoss?.(); }
-        
-        this.container.removeEventListener('mousemove', this._boundOnMouseMove);
 
         if (this.constellationLineMesh) {
             this.scene.remove(this.constellationLineMesh);
@@ -3155,24 +3132,4 @@ export class SongOrchestra extends BaseSong {
         this.fireworks.push(particles);
     }
 
-    // Comprehensive hierarchical resource clean-up to prevent memory leaks
-    disposeVRM(vrm) {
-        if (!vrm) return;
-        vrm.scene.traverse((obj) => {
-            if (obj.geometry) {
-                obj.geometry.dispose();
-            }
-            if (obj.material) {
-                if (Array.isArray(obj.material)) {
-                    obj.material.forEach((m) => {
-                        if (m.map) m.map.dispose();
-                        m.dispose();
-                    });
-                } else {
-                    if (obj.material.map) obj.material.map.dispose();
-                    obj.material.dispose();
-                }
-            }
-        });
-    }
 }

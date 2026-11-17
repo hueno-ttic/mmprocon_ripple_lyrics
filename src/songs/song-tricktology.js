@@ -3,7 +3,7 @@ import { sfx } from '../core/sfx.js';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
-import { settleSpringBones } from '../utils/vrm.js';
+import { settleSpringBones, disposeVRM } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 
@@ -23,8 +23,7 @@ import { playerManager } from '../core/player.js';
  *   世界が「本物」として残り、もう一方の自分は輪郭が揺れて曖昧に薄くなり、
  *   光の粒へと溶けて消える。プレイヤーの積み重ねが本物の世界を決める。
  *
- * 旧リズムゲーム版は song-tricktology.legacy.js に保存。
- * main.js の TRICKTOLOGY_LEGACY=true で即座に戻せる。
+ * 旧リズムゲーム版（song-tricktology.legacy.js）は削除済み。必要ならgit履歴から参照できる。
  */
 
 const MAX_RIPPLES = 10;
@@ -417,7 +416,7 @@ export class SongTricktology extends BaseSong {
 
         // 地上のリン（水面ラインに立つ）
         loadOne((vrm) => {
-            if (!this.isActive) { this.disposeVRM(vrm); return; }
+            if (!this.isActive) { disposeVRM(vrm, { skipMaterials: [this.mirrorSilhouetteMat] }); return; }
             this.realVRM = vrm;
             vrm.scene.position.set(0, 0, this.mikuZ);
             vrm.scene.rotation.y = 0;
@@ -426,13 +425,12 @@ export class SongTricktology extends BaseSong {
             settleSpringBones(vrm);
             this.cacheMaterials(vrm, this.realMatCache);
             this.upperGroup.add(vrm.scene);
-            console.log('[TRICKTOLOGY] Ground Rin loaded.');
         });
 
         // 水面のリン（逆さま・薄暗い・呼吸位相ズレ）。
         // スマホでも本物の水鏡リンを映すため2体目のVRMを必ずロードする。
         loadOne((vrm) => {
-            if (!this.isActive) { this.disposeVRM(vrm); return; }
+            if (!this.isActive) { disposeVRM(vrm, { skipMaterials: [this.mirrorSilhouetteMat] }); return; }
             this.mirrorVRM = vrm;
             vrm.scene.position.set(0, 0, this.mikuZ);
             vrm.scene.rotation.y = 0;
@@ -442,7 +440,6 @@ export class SongTricktology extends BaseSong {
             settleSpringBones(vrm);
             this.applyMirrorSilhouette(vrm);
             this.lowerGroup.add(vrm.scene);
-            console.log('[TRICKTOLOGY] Water Rin loaded.');
         });
     }
 
@@ -456,13 +453,6 @@ export class SongTricktology extends BaseSong {
                 }
             });
         });
-    }
-
-    setBrightness(cache, factor) {
-        for (let i = 0; i < cache.length; i++) {
-            const e = cache[i];
-            e.material.color.copy(e.baseColor).multiplyScalar(factor);
-        }
     }
 
     // 虚像（水面）のリンを Takeover 流のシルエットに置き換える。
@@ -1006,8 +996,6 @@ export class SongTricktology extends BaseSong {
 
     spawnLightMotes(worldPos, world) {
         let n = this.isMobile ? 9 : 14;
-        const m = world === 'ground' ? this.moonGround : this.moonWater;
-        const target = m.root.position;
         const start = worldPos.clone();
         const positions = new Float32Array(n * 3);
         const starts = [];
@@ -1743,27 +1731,6 @@ export class SongTricktology extends BaseSong {
 
     // ───────────────────────── 破棄 ─────────────────────────
 
-    disposeVRM(vrm) {
-        if (!vrm) return;
-        vrm.scene.traverse((obj) => {
-            if (obj.geometry) obj.geometry.dispose();
-            const mats = [];
-            // シルエット差し替えで退避した元マテリアルも解放する
-            if (obj.userData && obj.userData._origMat !== undefined) {
-                const om = obj.userData._origMat;
-                mats.push(...(Array.isArray(om) ? om : [om]));
-            }
-            if (obj.material) {
-                mats.push(...(Array.isArray(obj.material) ? obj.material : [obj.material]));
-            }
-            mats.forEach((m) => {
-                if (!m || m === this.mirrorSilhouetteMat) return; // 共有材質は destroy 側で一度だけ解放
-                if (m.map) m.map.dispose();
-                m.dispose();
-            });
-        });
-    }
-
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
         this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
@@ -1837,12 +1804,12 @@ export class SongTricktology extends BaseSong {
 
         if (this.realVRM) {
             if (this.realVRM.scene.parent) this.realVRM.scene.parent.remove(this.realVRM.scene);
-            this.disposeVRM(this.realVRM);
+            disposeVRM(this.realVRM, { skipMaterials: [this.mirrorSilhouetteMat] });
             this.realVRM = null;
         }
         if (this.mirrorVRM) {
             if (this.mirrorVRM.scene.parent) this.mirrorVRM.scene.parent.remove(this.mirrorVRM.scene);
-            this.disposeVRM(this.mirrorVRM);
+            disposeVRM(this.mirrorVRM, { skipMaterials: [this.mirrorSilhouetteMat] });
             this.mirrorVRM = null;
         }
         this.realMatCache = [];

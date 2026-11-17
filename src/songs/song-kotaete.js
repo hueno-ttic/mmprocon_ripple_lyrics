@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { quality } from '../core/quality.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin } from '@pixiv/three-vrm';
-import { settleSpringBones } from '../utils/vrm.js';
+import { settleSpringBones, disposeVRM } from '../utils/vrm.js';
 import { BaseSong } from './BaseSong.js';
 import { playerManager } from '../core/player.js';
 import { eventBus } from '../core/eventBus.js';
@@ -33,8 +33,6 @@ const LEAF_X = 1.5;           // 茎からの左右オフセット
 const STEM_R = 0.16;          // 茎の半径
 const JUMP_DUR = 0.62;        // 1ジャンプの所要(秒)
 const JUMP_MIN_INTERVAL = 0.12; // 連続ジャンプの最小間隔(=葉に追従しやすく)
-const LEAF_SPAWN_INTERVAL = 1200; // 葉の生成間隔(ms)。総数を抑え登攀が追いつくように
-const MAX_BACKLOG_LEAVES = 4;     // ミクがこれ以上遅れていたら新しい葉を生やさない
 const CAM_Z = 9.0;
 const CAM_Y_OFF = 2.6;        // ミクより少し上を見る
 const LOOK_Y_OFF = 2.4;
@@ -107,14 +105,12 @@ export class SongKotaete extends BaseSong {
         this.goalPending = false;
         this.goalReached = false;
         this.bloom = null;
-        this._perchLeaf = null;        // フィナーレ: 大輪の“下の葉”=ミクの最終待機場所
 
         // ---- 進行/補助 ----
         this.answeredCount = 0;        // タッチで確定した葉の数
         this.builtCount = 0;           // プレイヤーが生やした葉の数
         this._landingPoints = 0;       // 金の葉(歌詞葉)にうまく着地できた回数=着地ポイント
         this._lastWordStart = -1;
-        this._lastLeafAt = -Infinity;  // 葉の生成レート制限(実時間ms)
         this._lastLyricLeaf = null;    // 直近の歌詞葉(助詞・助動詞はここへ追記=文節結合)
         this._lastLyricAt = -Infinity; // 直近の歌詞発火時刻(古すぎる結合を防ぐ)
         this._lastFrameReal = performance.now();
@@ -124,14 +120,12 @@ export class SongKotaete extends BaseSong {
         this._lastClickAt = -Infinity; // 連打加速の計測
         this._clickStreak = 0;         // 連続クリック数(暴走の段階)
         this._hudEl = null;            // 高度HUD
-        this._finaleEl = null;         // 締め字幕
         this._overflowFired = false;   // オチの空フラッシュ発火済み
 
         // ---- 雲(高度に応じて横の空きに湧く / 歌詞を乗せる / 衝突で霧散) ----
         this._clouds = [];
         this._cloudPuffs = [];         // 衝突の霧散パーティクル
         this._lastCloudAt = -Infinity; // 雲の生成レート(実時間ms)
-        this._lyricCloudAt = -Infinity;// 歌詞雲のレート
         this._cloudSide = 1;           // 左右交互
 
         // ---- レイキャスト ----
@@ -139,7 +133,6 @@ export class SongKotaete extends BaseSong {
         this._ndc = new THREE.Vector2();
         this._climbPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0); // z=0平面
         this._hit = new THREE.Vector3();
-        this._white = new THREE.Color(0xffffff);
 
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnPointerDown = this.onPointerDown.bind(this);
@@ -474,7 +467,7 @@ export class SongKotaete extends BaseSong {
         loader.register((p) => new VRMLoaderPlugin(p));
         loader.load(import.meta.env.BASE_URL + 'assets/models/model_miku.vrm',
             (gltf) => {
-                if (!this.isActive) { this._disposeVRM(gltf.userData.vrm); return; }
+                if (!this.isActive) { disposeVRM(gltf.userData.vrm); return; }
                 const vrm = gltf.userData.vrm;
                 this.currentVRM = vrm;
                 this.scene.add(vrm.scene);
@@ -595,7 +588,6 @@ export class SongKotaete extends BaseSong {
     _spawnLyricLeaf(text, w) {
         const highestY = this.leaves.length ? this.leaves[this.leaves.length - 1].y : FIRST_LEAF_Y;
         const y = Math.max(highestY + LEAF_SPACING, this.climbY + LEAF_SPACING);
-        this._lastLeafAt = performance.now();
         const leaf = this.spawnLeaf(text, { lyric: true, y });
         this._registerLyricSegment(leaf, text, w);
         return leaf;
@@ -931,24 +923,13 @@ export class SongKotaete extends BaseSong {
     }
 
     // =====================================================================
-    // まだ行けるよモード UI(#119): 導入・高度HUD・超ジャンプラベル・オチ
+    // まだ行けるよモード UI(#119): 高度HUD・超ジャンプラベル・オチ
     // =====================================================================
     _ensureModeStyles() {
         if (document.getElementById('kotaete-mada-styles')) return;
         const s = document.createElement('style');
         s.id = 'kotaete-mada-styles';
         s.textContent = `
-            .mada-intro {
-                position:absolute; left:50%; top:22%; transform:translate(-50%,-50%);
-                z-index:60; pointer-events:none; text-align:center;
-                font-family:"Noto Sans JP",sans-serif; color:#fff;
-                opacity:0; transition:opacity .5s ease, transform .5s ease;
-                text-shadow:0 2px 10px rgba(0,0,0,.45);
-            }
-            .mada-intro.show { opacity:1; transform:translate(-50%,-50%) scale(1.0); }
-            .mada-intro .t { font-size:clamp(22px,6vw,40px); font-weight:800; letter-spacing:2px;
-                color:#FFD54A; text-shadow:0 0 16px rgba(255,213,74,.7),0 2px 8px rgba(0,0,0,.5); }
-            .mada-intro .s { margin-top:10px; font-size:clamp(12px,3.2vw,16px); line-height:1.7; font-weight:600; }
             .mada-hud {
                 /* 右上の「← 湖面へ戻る」ボタンの真下へ。ノッチ/セーフエリアぶん下げて重なりを回避。 */
                 position:absolute;
@@ -983,36 +964,12 @@ export class SongKotaete extends BaseSong {
                 text-shadow:0 3px 14px rgba(0,0,0,.45),0 0 30px rgba(255,213,74,.85); }
             .mada-finalscore .fs-break { margin-top:10px; font-size:clamp(12px,3vw,17px); font-weight:600;
                 letter-spacing:1px; color:#fff; text-shadow:0 2px 8px rgba(0,0,0,.5); }
-            .mada-finale {
-                position:absolute; inset:0; z-index:62; pointer-events:none;
-                display:flex; flex-direction:column; align-items:center; justify-content:center;
-                font-family:"Noto Sans JP",sans-serif; color:#fff; text-align:center;
-                opacity:0; transition:opacity 1.0s ease;
-            }
-            .mada-finale.show { opacity:1; }
-            .mada-finale .cap { font-size:clamp(15px,4vw,24px); font-weight:700; letter-spacing:2px;
-                text-shadow:0 2px 12px rgba(0,0,0,.55); }
             .mada-flash { position:absolute; inset:0; z-index:61; pointer-events:none;
                 background:#fff; opacity:0; }
             .mada-flash.fire { animation:madaFlash .9s ease-out forwards; }
             @keyframes madaFlash { 0%{opacity:0;} 12%{opacity:.85;} 100%{opacity:0;} }
         `;
         document.head.appendChild(s);
-    }
-
-    // 開始時: これは「ネタ寄りの暴走モード」だと伝える短い導入
-    _showModeIntro() {
-        this._ensureModeStyles();
-        const el = document.createElement('div');
-        el.className = 'mada-intro';
-        el.innerHTML = `
-            <div class="t">まだ行けるよモード</div>
-            <div class="s">クリック連打で答えの葉を伸ばそう。<br>伸ばしすぎると、ミクが空へ飛びます。</div>
-        `;
-        this.songWrapper.appendChild(el);
-        requestAnimationFrame(() => el.classList.add('show'));
-        setTimeout(() => { if (el.parentNode) el.classList.remove('show'); }, 4200);
-        setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 4900);
     }
 
     _ensureHud() {
@@ -1095,17 +1052,6 @@ export class SongKotaete extends BaseSong {
         this.songWrapper.appendChild(flash);
         requestAnimationFrame(() => flash.classList.add('fire'));
         setTimeout(() => { if (flash.parentNode) flash.parentNode.removeChild(flash); }, 950);
-    }
-
-    // 着地後のオチ字幕(真顔で一行だけ。テーマへ軽く戻す)
-    _finaleCaption() {
-        this._ensureModeStyles();
-        const el = document.createElement('div');
-        el.className = 'mada-finale';
-        el.innerHTML = `<div class="cap">こたえは、まだ空の上。</div>`;
-        this.songWrapper.appendChild(el);
-        this._finaleEl = el;
-        requestAnimationFrame(() => el.classList.add('show'));
     }
 
     // =====================================================================
@@ -1259,7 +1205,6 @@ export class SongKotaete extends BaseSong {
         perch.confirmed = true;
         perch.landed = false; // ← ミクの登攀ターゲットにする
         perch.isPerch = true;
-        this._perchLeaf = perch;
 
         // 大輪はミクの頭上に咲く(ミクは花の後ろへ回らず、下の葉で待つ)。
         // perch から十分上に置き、前へ膨らむ花盤がミクに重ならないようにする。
@@ -1280,7 +1225,6 @@ export class SongKotaete extends BaseSong {
         const root = new THREE.Group();
         root.scale.setScalar(BLOOM_SCALE);
         parent.add(root);
-        this._bloomRoot = root;
 
         // --- 中心(花盤): 手前へ膨らむ茶色のドーム + 外周のディスク・フローレット環 ---
         const centerMat = new THREE.MeshStandardMaterial({ color: 0x4f2e14, roughness: 0.96 });
@@ -1288,13 +1232,11 @@ export class SongKotaete extends BaseSong {
         center.scale.set(1, 1, 0.42);
         center.position.set(0, 0, 0.12);
         root.add(center);
-        this._bloomCenterMat = centerMat;
         // 花盤と花弁の境目の黄褐色リング(本物のひまわりの“縁取り”)
         const rimMat = new THREE.MeshStandardMaterial({ color: 0x8a5a1c, roughness: 0.8 });
         const rim = new THREE.Mesh(new THREE.TorusGeometry(0.86, 0.1, 12, 48), rimMat);
         rim.position.set(0, 0, 0.16);
         root.add(rim);
-        this._bloomRimMat = rimMat;
 
         // --- 種(phyllotaxis 螺旋に並ぶ): InstancedMesh で大量配置。大輪ぶん数も半径も増やす ---
         const seedCount = this.isMobile ? 240 : 460;
@@ -1316,7 +1258,6 @@ export class SongKotaete extends BaseSong {
         }
         seeds.instanceMatrix.needsUpdate = true;
         root.add(seeds);
-        this._bloomSeeds = seeds;
 
         // --- 花びら: 3重リングの尖った花弁(頂点カラーで二色グラデ)。閉→開アニメ ---
         this.bloomPetals = [];
@@ -1325,7 +1266,6 @@ export class SongKotaete extends BaseSong {
             vertexColors: true, roughness: 0.5, side: THREE.DoubleSide,
             emissive: 0x4a3500, emissiveIntensity: 0.16,
         });
-        this._bloomPetalMat = petalMat;
         // 内側=短く立ち気味、外側=長く寝かせて大輪のシルエットを作る
         const rings = [
             { n: 18, r: 0.92, len: 1.05, tilt: 0.34 },
@@ -1357,7 +1297,7 @@ export class SongKotaete extends BaseSong {
         this._victoryPose = true;
         sfx.play('complete');
         this._overflowFinale(); // 太陽へ着いた瞬間、空が一瞬だけ白む(過露光)
-        // フィナーレは大輪を見せ続け、締めの一行(_finaleCaption)は出さない。
+        // フィナーレは大輪を見せ続け、締めの一行(字幕)は出さない。
         // 代わりに「最終スコア = m × 着地ポイント」を大きく出す。
         this._showFinalScore();
         const peak = this._metersValue();
@@ -1411,7 +1351,7 @@ export class SongKotaete extends BaseSong {
 
         if (!this.isTutorialActive) this._trackLyrics();
 
-        // 説明ポップアップ(_showModeIntro)はチュートリアルと重なるため廃止。
+        // 開始時の説明ポップアップはチュートリアルと重なるため廃止。
         // 操作説明はBaseSongのチュートリアルに一本化する。
 
         this.updateStem(dt);
@@ -1441,14 +1381,6 @@ export class SongKotaete extends BaseSong {
             this._lastWordStart = w.startTime;
             if (w.text) this._onLyricWord(w); // 歌詞は葉に記載(文節結合)。雲は装飾のみ。
         }
-    }
-
-    _currentLyricText() {
-        const p = playerManager.player;
-        if (!p || !p.video) return null;
-        const pos = p.timer ? p.timer.position : this.currentTime;
-        const w = p.video.findWord(pos) || p.video.findChar(pos);
-        return (w && w.text) ? w.text : null;
     }
 
     _applyVictoryPose(dt) {
@@ -1501,15 +1433,6 @@ export class SongKotaete extends BaseSong {
         this.renderer.setPixelRatio(quality.effectivePixelRatio());
     }
 
-    _disposeVRM(vrm) {
-        try {
-            vrm?.scene?.traverse((o) => {
-                if (o.geometry) o.geometry.dispose();
-                if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose());
-            });
-        } catch (_) { /* noop */ }
-    }
-
     destroy() {
         window.removeEventListener('resize', this.boundOnResize);
         this.songWrapper.removeEventListener('pointerdown', this.boundOnPointerDown);
@@ -1518,10 +1441,10 @@ export class SongKotaete extends BaseSong {
         eventBus.off('songEnd', this.boundOnSongEnd);
 
         // まだ行けるよモードの後始末(DOMオーバーレイ)
-        [this._hudEl, this._finaleEl, this._finalScoreEl].forEach(el => {
+        [this._hudEl, this._finalScoreEl].forEach(el => {
             if (el && el.parentNode) el.parentNode.removeChild(el);
         });
-        this._hudEl = this._finaleEl = this._finalScoreEl = null;
+        this._hudEl = this._finalScoreEl = null;
 
         // 雲・霧散パーティクルの破棄(共有テクスチャ _cloudTex は最後に1回)
         this._clouds.slice().forEach(c => this._disposeCloud(c));
@@ -1550,7 +1473,7 @@ export class SongKotaete extends BaseSong {
         this._leafGoldTex && this._leafGoldTex.dispose();
         this._stemTex && this._stemTex.dispose();
 
-        if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); this._disposeVRM(this.currentVRM); this.currentVRM = null; }
+        if (this.currentVRM) { this.scene.remove(this.currentVRM.scene); disposeVRM(this.currentVRM); this.currentVRM = null; }
         [this.stem, this.ground, this.sky].forEach(m => {
             if (!m) return; this.scene.remove(m);
             if (m.geometry) m.geometry.dispose();

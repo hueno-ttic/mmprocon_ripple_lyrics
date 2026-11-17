@@ -62,10 +62,6 @@ class AppState {
     getPhaseName() {
         return PHASES[this.getPhase()].name;
     }
-
-    getPreviousPhase() {
-        return this._previousPhase;
-    }
 }
 
 export const appState = new AppState();

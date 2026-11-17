@@ -31,7 +31,6 @@ const FILES = {
     complete: 'assets/sfx/ui_complete.mp3',
     // 曲別(各曲シーンが sfx.play(key) で鳴らす。欠損は無音)
     kotaete_resonance: 'assets/sfx/kotaete_resonance.mp3',
-    kotaete_choice: 'assets/sfx/kotaete_choice.mp3',
     after_ignite: 'assets/sfx/after_ignite.mp3',
     after_petal: 'assets/sfx/after_petal.mp3',
     orchestra_firework: 'assets/sfx/orchestra_firework.mp3',
@@ -41,8 +40,8 @@ const FILES = {
     trick_choose: 'assets/sfx/trick_choose.mp3',
     takeover_decode: 'assets/sfx/takeover_decode.mp3',
     takeover_reclaim: 'assets/sfx/takeover_reclaim.mp3',
-    // takeover_warning / takeover_fail は音源ファイル未収録のため読込対象から外す
-    // (毎回の404を避ける。play() は buffers 未登録で無音になる)。音源を追加したら戻す。
+    // takeover_warning / takeover_fail は音源ファイル未収録のため登録しない(毎回の404を避ける)。
+    // 未登録キーを play() しても buffers に無いので無音になる。音源を追加する場合はここに足す。
 };
 const SFX_MASTER = 0.5; // 音楽より一段下げる
 

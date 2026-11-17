@@ -51,7 +51,6 @@ export class BaseSong {
         this.isActive = true;
         eventBus.on('timeUpdate', this.boundOnTimeUpdate);
         this.animationId = requestAnimationFrame(this.boundAnimate);
-        console.log(`Initialized song scene: ${this.songId}`);
 
         const showTutorialOrHint = () => {
             const songConfig = SONGS.find(s => s.id === this.songId);
@@ -719,12 +718,11 @@ export class BaseSong {
             this.lyricRenderer.destroy();
         }
         
-        // Subclasses should clear DOM elements, Three.js, PixiJS resources here
+        // Subclasses should clear DOM elements and Three.js resources here
         if (this.songWrapper && this.songWrapper.parentNode) {
             this.songWrapper.removeEventListener('click', this.boundOnClick);
             window.removeEventListener('mousemove', this.boundOnMouseMove);
             this.songWrapper.parentNode.removeChild(this.songWrapper);
         }
-        console.log(`Destroyed song scene: ${this.songId}`);
     }
 }

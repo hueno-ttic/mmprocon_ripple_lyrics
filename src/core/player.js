@@ -7,7 +7,6 @@ import { DEFAULT_VOLUME } from '../config/constants.js';
 class PlayerManager {
     constructor() {
         this.player = null;
-        this.isReady = false;
         this.isTimerReady = false;
         this.managed = false; // Set to true if running in TextAlive host
         this._loadTimeout = null;
@@ -63,17 +62,13 @@ class PlayerManager {
                 if (app.managed) {
                     this.managed = true;
                 }
-                this.isReady = true;
-                eventBus.emit('appReady', app);
                 appState.setLoading(false);
             },
 
-            onVideoReady: (video) => {
+            onVideoReady: () => {
                 if (this._isStaleLoadEvent()) {
                     console.warn('[Ripple Lyrics] 古い読込の onVideoReady を無視しました');
-                    return;
                 }
-                eventBus.emit('videoReady', video);
             },
 
             onTimerReady: () => {
@@ -192,10 +187,6 @@ class PlayerManager {
                 }
                 // Emit timeUpdate but avoid heavy operations here; rendering should be in requestAnimationFrame
                 eventBus.emit('timeUpdate', position);
-            },
-            
-            onThrottledTimeUpdate: (position) => {
-                eventBus.emit('throttledTimeUpdate', position);
             },
 
             // 読込/再生中の致命的エラー。読込中(またはタイマー未準備)なら

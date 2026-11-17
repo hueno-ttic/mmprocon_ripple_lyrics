@@ -23,7 +23,8 @@
 import { playerManager } from '../core/player.js';
 import { appState } from '../core/appState.js';
 
-export const USER_POSE_STORAGE_KEY = 'shutter_user_poses';
+const USER_POSE_STORAGE_KEY = 'shutter_user_poses';
+export const USER_POSE_MAX = 30; // 自作ポーズの保存上限(localStorage 肥大の保険。古いものから捨てる)
 
 const R = (min, max) => ({ min, max });
 
@@ -115,7 +116,12 @@ export function loadUserPoses() {
     const raw = localStorage.getItem(USER_POSE_STORAGE_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((p) => p && p.id && p.pose) : [];
+    // localStorage は同一オリジンの他ページからも書けるので、表示に使う文字列は型と長さを正す
+    return Array.isArray(arr)
+      ? arr.filter((p) => p && typeof p.id === 'string' && p.pose && typeof p.pose === 'object')
+          .map((p) => ({ ...p, label: String(p.label ?? '').slice(0, 12), emoji: '⭐' }))
+          .slice(-USER_POSE_MAX)
+      : [];
   } catch (e) {
     console.warn('[POSE-EDITOR] ユーザーポーズ読込失敗', e);
     return [];
@@ -318,9 +324,14 @@ export class ShutterPoseEditor {
 
     // 土台プリセット
     const baseSel = panel.querySelector('.spe-base');
-    baseSel.innerHTML = '<option value="">なし(立ち)</option>' +
-      (song.getAllCutePoses ? song.getAllCutePoses() : [])
-        .map((p) => `<option value="${p.id}">${(p.emoji || '⭐')} ${p.label}</option>`).join('');
+    // ポーズ名はユーザー入力(localStorage 由来)なので innerHTML に混ぜず DOM で組み立てる
+    baseSel.innerHTML = '<option value="">なし(立ち)</option>';
+    (song.getAllCutePoses ? song.getAllCutePoses() : []).forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.emoji || '⭐'} ${p.label}`;
+      baseSel.appendChild(opt);
+    });
     baseSel.addEventListener('change', () => {
       let base = clonePose(BASE_POSE);
       const p = (song.getAllCutePoses ? song.getAllCutePoses() : []).find((x) => x.id === baseSel.value);

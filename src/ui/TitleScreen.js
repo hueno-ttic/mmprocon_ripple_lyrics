@@ -54,7 +54,7 @@ export class TitleScreen {
                     anim: 'water-churn 13s ease-in-out infinite',
                 },
             ];
-            this.waterLayers = layerDefs.map(({ bg, anim }) => {
+            layerDefs.forEach(({ bg, anim }) => {
                 const layer = document.createElement('div');
                 layer.style.cssText = `
                     position: absolute; inset: -40%;
@@ -64,7 +64,6 @@ export class TitleScreen {
                     will-change: transform;
                 `;
                 this.container.appendChild(layer);
-                return layer;
             });
         }
 

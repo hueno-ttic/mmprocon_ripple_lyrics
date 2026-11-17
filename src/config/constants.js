@@ -1,8 +1,3 @@
-export const CONSTANTS = {
-    LAKE_RADIUS: 10,
-    RIPPLE_RADIUS: 3
-};
-
 // Accent colors follow the redesign art direction (Ripple Lyrics scene design)
 export const PHASES = [
     { id: 0, name: '晴れ',   nameEn: 'clear sky', color: '#6CB04A' },
@@ -13,8 +8,6 @@ export const PHASES = [
     // 「川」フェーズは構成変更で廃止。小川から直接「湖」へ遷移する。
     { id: 5, name: '湖',     nameEn: 'lake', color: '#39C5BB' },
 ];
-
-export const PHASE_TRANSITION_DURATION = 3000;
 
 // 音量の初期値(0..100)。VolumeControl のスライダーと、曲/BGM/効果音の実音量で共通にする。
 export const DEFAULT_VOLUME = 35;

@@ -135,7 +135,6 @@ export class PhaseStream extends PhaseBase {
         this.mists = []; for (let i = 0; i < 12; i++) { const t = 0.35 + Math.random() * 0.6; const p = this.mainCurve.getPoint(t); const m = new THREE.Sprite(mistMat.clone()); m.position.set(p.x + (Math.random() - 0.5) * 6, 0.8 + Math.random() * 1.2, p.z); const base = 6 + Math.random() * 6; m.scale.set(base * 2.1, base * 0.42, 1); m.userData = { spd: 0.6 + Math.random() * 1.0, z0: p.z }; g.add(m); this.mists.push(m); }
         this.motes = K.addSparkles(g, { count: 80, area: [110, 22, 150], zoff: -70, maxY: 24, size: 0.45, mix: 0.5, colorA: 0xBFF0D0, colorB: 0xFFE9B8 });
 
-        this._mainWidth = mainWidth; this._sideWidth = sideWidth;
         this._v = new THREE.Vector3(); this._t = new THREE.Vector3();
     }
 
