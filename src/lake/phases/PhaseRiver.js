@@ -50,7 +50,7 @@ export class PhaseRiver extends PhaseBase {
         const tm = K.treeMats({ a: 0x2E6B34, b: 0x357F39, c: 0x255A2C });
         this.trees = [];
         const plantBank = side => {
-            const n = window.innerWidth < 768 ? 34 : 56;
+            const n = K.isMobile() ? 34 : 56;
             for (let i = 0; i < n; i++) { const z = -100 + Math.random() * 138; const across = 18.5 + Math.pow(Math.random(), 0.62) * 38; const x = side * across + (Math.random() - 0.5) * 3; const edge = (across - 16) / 70; const gy = Math.pow(Math.max(edge, 0), 0.7) * 9.0 - 0.3 + Math.sin(z * 0.10) * 1.0; const near = Math.max(1 - (across - 18.5) / 30, 0); const s = 1.0 + Math.random() * 0.7 + near * 0.7; const t = (Math.random() < 0.55) ? K.pineTree(s, tm) : K.roundTree(s, tm); t.position.set(x, gy, z); t.rotation.y = Math.random() * 6.28; t.userData.ph = Math.random() * 6.28; g.add(t); this.trees.push(t); }
         };
         plantBank(-1); plantBank(+1);
@@ -69,7 +69,7 @@ export class PhaseRiver extends PhaseBase {
         // foam streaks: flat dashes flowing ON the water surface
         const streakMat = new THREE.MeshBasicMaterial({ map: K.streakTex(), color: 0xffffff, transparent: true, opacity: 0.0, depthWrite: false, fog: true, blending: THREE.NormalBlending, side: THREE.DoubleSide });
         const streakGeo = new THREE.PlaneGeometry(1, 1); streakGeo.rotateX(-Math.PI / 2);
-        this.streaks = []; const STREAKS = window.innerWidth < 768 ? 54 : 96;
+        this.streaks = []; const STREAKS = K.isMobile() ? 54 : 96;
         for (let i = 0; i < STREAKS; i++) { const m = new THREE.Mesh(streakGeo, streakMat.clone()); const lane = (Math.random() - 0.5) * 30; const len = 5 + Math.random() * 11; const wid = 0.45 + Math.random() * 0.7; m.scale.set(wid, 1, len); m.position.set(lane, 0.13, -90 + Math.random() * 132); m.userData = { lane, spd: 13 + Math.random() * 10, len, amp: 0.4 + Math.random() * 0.38 }; g.add(m); this.streaks.push(m); }
 
         // white-water foam crowns + downstream wakes around rocks

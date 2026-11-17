@@ -2,6 +2,7 @@ import { Player } from 'textalive-app-api';
 import { eventBus } from './eventBus.js';
 import { appState } from './appState.js';
 import { safeGet } from '../utils/storage.js';
+import { DEFAULT_VOLUME } from '../config/constants.js';
 
 class PlayerManager {
     constructor() {
@@ -106,8 +107,20 @@ class PlayerManager {
             },
 
             onPause: () => {
+                const wasPlaying = appState.isPlaying;
                 appState.isPlaying = false;
                 eventBus.emit('pause');
+                // 曲末で onStop/onEnd も末尾50ms以内の timeUpdate も来ず、pause だけで終わる回がある
+                // (リザルトが出ず完了登録もできないまま固まる)。再生中だった曲が終端1秒以内で
+                // pause したら自然終了として扱う(読込直後/チュートリアル中の pause は対象外)。
+                if (!wasPlaying) return;
+                if (window.app?.currentSongScene?.isTutorialActive) return;
+                const dur = this.player?.video?.duration;
+                if (!this._songEndEmitted && dur > 0 && appState.currentTime >= dur - 1000) {
+                    this._songEndEmitted = true;
+                    this._songEndLocked = true;
+                    eventBus.emit('songEnd');
+                }
             },
 
             onStop: () => {
@@ -164,6 +177,10 @@ class PlayerManager {
                     return;
                 }
 
+                // 湖へ戻った後/次曲の読込中に届く前曲タイマーの残りティックは捨てる。
+                // (曲末で止まらなかったタイマーが currentTime を前曲の末尾に書き戻し、ロック解除後の
+                //  新曲に対して前曲 duration で偽の songEnd を出していた)
+                if (!this.managed && (this._expectedSongUrl === null || !this.isTimerReady)) return;
                 appState.currentTime = position;
                 const dur = this.player?.video?.duration;
                 // TextAlive v0.4.x stops the timer at song end without firing onEnd or onStop.
@@ -197,6 +214,7 @@ class PlayerManager {
 
     loadSong(song) {
         this.isTimerReady = false;
+        appState.currentTime = 0; // 前曲の再生位置を持ち越すと、新曲の pause/stop を曲末と誤判定する
         this._userStop = false;
         this._songEndEmitted = false;
         this._songEndLocked = false;
@@ -218,7 +236,7 @@ class PlayerManager {
                     appState.setLoading(false);
                     eventBus.emit('songLoadError', { song: this._currentSong, reason: 'timeout' });
                 }
-            }, 15000);
+            }, 30000); // 実測で本番ビルドでも13〜15秒かかる回があり、15秒だと正常読込中に偽のエラーが出た
 
             const options = {};
             if (song.video) {
@@ -235,6 +253,8 @@ class PlayerManager {
     _startCreate(songUrl, options, seq) {
         const PREV_WAIT_MS = 3000;
         const RETRY_MS = 500;
+        const MAX_RETRIES = 240; // 最大~2分
+        let retries = 0;
         const prev = this._createPromise;
         const waitPrev = prev
             ? Promise.race([prev, new Promise(r => setTimeout(r, PREV_WAIT_MS))])
@@ -257,8 +277,10 @@ class PlayerManager {
                 const msg = (err && err.message) || String(err || '');
                 if (msg.includes('cannot run in parallel')) {
                     if (this._createPromise === settled) this._createPromise = null;
-                    // 読込待ち(タイムアウト前)で、まだ最新の要求なら再試行する
-                    if (seq === this._loadSeq && appState.isLoading && !this.isTimerReady) {
+                    // まだ最新の要求なら、先行の読込が終わるまで再試行する。タイムアウトで
+                    // isLoading が落ちても続ける(止めると先行=湖へ戻った前曲の完了後に
+                    // この曲が二度と要求されず、エラー画面のまま固まる)。
+                    if (seq === this._loadSeq && !this.isTimerReady && (++retries) <= MAX_RETRIES) {
                         setTimeout(attempt, RETRY_MS);
                     }
                     return;
@@ -275,6 +297,11 @@ class PlayerManager {
     releaseForLake() {
         // TextAlive ホスト管理下(managed)では曲の再読込が起きないため準備状態は保持する
         if (!this.managed) this.isTimerReady = false;
+        appState.currentTime = 0;
+        // 曲末(リザルト経由)で戻った場合はタイマーが止まっていないことがあるので明示的に止める
+        if (!this.managed && this.player && this.player.isPlaying) {
+            try { this.player.requestStop(); } catch (_) { /* 停止失敗は無害 */ }
+        }
         this._songEndEmitted = false;
         this._songEndLocked = false;
         this._loadSeq++;
@@ -285,6 +312,8 @@ class PlayerManager {
     play() {
         // 自然終了後は次の曲/湖へ戻るまで再生させない(songEnd 再発火の防止)
         if (this._songEndLocked) return;
+        // 湖へ戻った後(releaseForLake 済み)は、曲シーンの後始末などから呼ばれても鳴らさない
+        if (!this.managed && this._expectedSongUrl === null) return;
         this._songEndEmitted = false;
         if (this.player && this.player.isPlaying === false) {
             this.player.requestPlay();
@@ -306,8 +335,15 @@ class PlayerManager {
 
     seek(position) {
         if (this.player) {
+            this.lastSeekAt = performance.now();
             this.player.requestMediaSeek(position);
         }
+    }
+
+    // 直近にアプリから明示的なシーク(シークバー等)をしたか。タイマーの自然な揺れ(再同期で
+    // 数秒戻る等)を「巻き戻し」と誤認して曲側の状態を戻さないための判定に使う。
+    recentlySought(withinMs = 3000) {
+        return !!this.lastSeekAt && performance.now() - this.lastSeekAt < withinMs;
     }
 
     setVolume(value) {
@@ -321,7 +357,7 @@ class PlayerManager {
     _storedVolume() {
         if (safeGet('appMuted') === '1') return 0;
         const v = parseInt(safeGet('appVolume'), 10);
-        return Number.isFinite(v) ? v : 80;
+        return Number.isFinite(v) ? v : DEFAULT_VOLUME;
     }
 
     _clearFade() {

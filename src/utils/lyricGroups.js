@@ -58,9 +58,14 @@ export function findGroupForWord(groups, word) {
     // 境界の重なり（前の終了時間と次の開始時間が完全に等しい場合）による誤マッチを回避するため、
     // グループ終了時間の比較を「以下 (<=)」から「未満 (<)」へ変更。これで特定の単語（チャンス、だってなど）が
     // 前の単語グループへ誤って重複判定されスポーンがスキップされてしまう深刻なタイム境界バグを100%解決。
-    return groups.find(g => g.startTime <= word.startTime && word.startTime < g.endTime)
-        || groups.find(g => g.startTime <= word.startTime)
-        || null;
+    const hit = groups.find(g => g.startTime <= word.startTime && word.startTime < g.endTime);
+    if (hit) return hit;
+    // フォールバック: 単語より前に始まった「最後の」グループ(先頭グループを返さないよう末尾から探す。
+    // 旧iOS Safari 対応のため Array.prototype.findLast は使わない)
+    for (let i = groups.length - 1; i >= 0; i--) {
+        if (groups[i].startTime <= word.startTime) return groups[i];
+    }
+    return null;
 }
 
 /**

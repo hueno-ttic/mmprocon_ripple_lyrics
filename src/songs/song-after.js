@@ -1399,6 +1399,24 @@ export class SongAfter extends BaseSong {
         this._lastReal = rel;
 
         const dtMs = Math.max(0, Math.min(120, position - this.lastPosition));
+        // 後方シーク(シークバーで戻した等): 戻り先より後に出る予定だった歌詞は age=0 のまま
+        // 透明で居残り(除去条件 age > singHold が成立しない)、同じフレーズが来ると二重に出ていた。
+        // 戻り先より後に生まれる歌詞と、戻り先フレーズの歌詞を破棄し、フレーズを頭から出し直す。
+        if (position < this.lastPosition - 1000 && playerManager.recentlySought()) {
+            const seekPhrase = playerManager.player.video.findPhrase(position);
+            const phraseStart = seekPhrase ? seekPhrase.startTime : Infinity;
+            for (let i = this.activeSprites.length - 1; i >= 0; i--) {
+                const mesh = this.activeSprites[i];
+                if (mesh.userData.birth > position || mesh.userData.birth >= phraseStart) {
+                    this.scene.remove(mesh);
+                    mesh.material.map.dispose();
+                    mesh.material.dispose();
+                    mesh.geometry.dispose();
+                    this.activeSprites.splice(i, 1);
+                }
+            }
+            this.lastPhrase = null;
+        }
         this.lastPosition = position;
 
         const chorus = playerManager.player && typeof playerManager.player.findChorus === 'function'

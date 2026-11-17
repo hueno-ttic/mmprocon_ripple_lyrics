@@ -18,6 +18,7 @@
 import { eventBus } from './eventBus.js';
 import { appState } from './appState.js';
 import { safeGet } from '../utils/storage.js';
+import { DEFAULT_VOLUME } from '../config/constants.js';
 
 const BASE = (import.meta.env && import.meta.env.BASE_URL) || '/';
 
@@ -66,7 +67,7 @@ class Bgm {
     _userVol() {
         if (safeGet('appMuted') === '1') return 0;
         const v = parseInt(safeGet('appVolume'), 10);
-        return (Number.isFinite(v) ? v : 80) / 100;
+        return (Number.isFinite(v) ? v : DEFAULT_VOLUME) / 100;
     }
 
     // 指定フェーズの音源を取得(初回のみ fetch+decode、以降はキャッシュ)。

@@ -98,7 +98,8 @@ function recompute() {
         rotated = true;
         // ステージを画面(縦横入替)に内接させたときの「画面上の実寸」(横向き基準)
         let onW, onH;                     // onW=ステージ幅方向の実寸, onH=高さ方向の実寸
-        if (vh / vw > LANDSCAPE_RATIO) { onW = vw; onH = Math.round(vw / LANDSCAPE_RATIO); }
+        // 縦長(9:16より細長い)端末は画面幅が律速 → ステージの短辺(高さ方向)を画面幅に合わせる
+        if (vh / vw > LANDSCAPE_RATIO) { onH = vw; onW = Math.round(vw * LANDSCAPE_RATIO); }
         else { onW = vh; onH = Math.round(vh / LANDSCAPE_RATIO); }
         scale = onW / SW;                 // 論理幅 → 画面上の実寸
         dW = onH; dH = onW;               // デバイス空間でのフットプリント(回転後)

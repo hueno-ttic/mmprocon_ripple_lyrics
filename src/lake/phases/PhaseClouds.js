@@ -15,7 +15,7 @@ export class PhaseClouds extends PhaseBase {
         };
         // モバイルは雲スプライトの描画コール(全体で500超)が重いので、雲の数・
         // 1雲あたりのパフ数・きらめき粒子を削減してフィルレートを抑える。
-        this.isMobile = window.innerWidth < 768;
+        this.isMobile = K.isMobile();
         this._build();
     }
 

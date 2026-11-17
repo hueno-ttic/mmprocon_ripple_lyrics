@@ -14,6 +14,10 @@ import { addRipple } from '../lake/lakeMemory.js';
 // すべて初期化・更新・破棄ごと無効化され、従来の挙動に完全に戻る（即リバート用）。
 const SHUTTER_LAKE_ENABLED = true;
 
+// カメラズームの値域。スライダー(#shutter-zoom-slider の min/max)・キー・±ボタン・ホイール・ピンチで共通。
+const ZOOM_MIN = 1.2;
+const ZOOM_MAX = 3.2;
+
 const VRM_TO_MMD_BONES = {
     hips: '下半身',
     spine: '上半身',
@@ -410,15 +414,20 @@ export class SongShutter extends BaseSong {
         this.boundOnResize = this.onResize.bind(this);
         this.boundOnClick = this.takePhoto.bind(this);
         this.boundOnKeyDown = (e) => { 
-            if (e.code === 'Enter' || e.code === 'Space') {
+            // ポーズ名入力など編集中のフィールドではキー操作を奪わない(W/S/[ ]が打てなくなるため)
+            if (e.isComposing) return;
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+            // シャッターは Enter のみ(チュートリアル表記どおり)。Space は共通の再生/一時停止に任せ、二重動作を防ぐ。
+            if (e.code === 'Enter') {
                 if (playerManager.player && playerManager.player.isPlaying) {
                     this.takePhoto();
                 }
             } else if (e.code === 'KeyW' || e.code === 'ArrowUp') {
-                this.targetZoom = Math.min(3.2, this.targetZoom + 0.15);
+                this.targetZoom = Math.min(ZOOM_MAX, this.targetZoom + 0.15);
                 e.preventDefault();
             } else if (e.code === 'KeyS' || e.code === 'ArrowDown') {
-                this.targetZoom = Math.max(1.2, this.targetZoom - 0.15);
+                this.targetZoom = Math.max(ZOOM_MIN, this.targetZoom - 0.15);
                 e.preventDefault();
             } else if (e.code === 'BracketRight') {
                 this.cycleDancePreset(1);   // ] 次のダンス（ストックをブラウズ）
@@ -495,6 +504,12 @@ export class SongShutter extends BaseSong {
 
         // スマホ用タッチ首振りバインド
         this.boundOnTouchStartCam = (e) => {
+            // 2本指目が触れたらピンチ操作とみなし、全指が離れるまで撮影しない(ピンチで誤シャッター防止)
+            if (e.touches.length >= 2) {
+                this.isMultiTouch = true;
+                this.isDragging = false;
+                return;
+            }
             if (e.touches.length === 1) {
                 const touch = e.touches[0];
                 if (touch.target.id === 'shutter-zoom-slider' || touch.target.closest('#shutter-zoom-slider-container') || touch.target.closest('#shutter-pose-bar')) return;
@@ -520,6 +535,10 @@ export class SongShutter extends BaseSong {
         };
 
         this.boundOnTouchEndCam = (e) => {
+            if (this.isMultiTouch) {
+                if (e.touches.length === 0) this.isMultiTouch = false;
+                return;
+            }
             if (!this.isDragging) return;
             this.isDragging = false;
             
@@ -553,7 +572,7 @@ export class SongShutter extends BaseSong {
         // ズーム +/- トグルボタン。スライダー値域(1.2〜3.2)内で1タップ0.3刻み。
         // targetZoom はスライダーと双方向バインド済みなのでツマミも自動追随する。
         const stepZoom = (delta) => {
-            this.targetZoom = Math.min(3.2, Math.max(1.2, this.targetZoom + delta));
+            this.targetZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.targetZoom + delta));
         };
         const zoomInBtn = document.getElementById('shutter-zoom-in');
         const zoomOutBtn = document.getElementById('shutter-zoom-out');
@@ -1313,7 +1332,7 @@ export class SongShutter extends BaseSong {
         e.preventDefault();
         // スクリュー方向で拡大・縮小
         const delta = -e.deltaY * 0.0015;
-        this.targetZoom = Math.min(2.5, Math.max(0.6, this.targetZoom + delta));
+        this.targetZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.targetZoom + delta));
     }
 
     onTouchStart(e) {
@@ -1335,7 +1354,7 @@ export class SongShutter extends BaseSong {
             if (this.touchStartDist > 0) {
                 const ratio = dist / this.touchStartDist;
                 // ピンチ比率に基づいて目標ズームを変更
-                this.targetZoom = Math.min(2.5, Math.max(0.6, this.targetZoom * (ratio > 1 ? 1.03 : 0.97)));
+                this.targetZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, this.targetZoom * (ratio > 1 ? 1.03 : 0.97)));
                 this.touchStartDist = dist; // 次回更新用
             }
         }
@@ -2089,9 +2108,9 @@ export class SongShutter extends BaseSong {
             <div style="${bracketStyle}; bottom: 40px; left: 40px; border-right: none; border-top: none;"></div>
             <div style="${bracketStyle}; bottom: 40px; right: 40px; border-left: none; border-top: none;"></div>
 
-            <!-- CAMERA SETTINGS (Zoom & Aperture) -->
-            <div style="position: absolute; top: 50px; left: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-zoom-label">ZOOM 1.0x</div>
-            <div style="position: absolute; top: 50px; right: 80px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-aperture-label">F2.8 [OPEN]</div>
+            <!-- CAMERA SETTINGS (Zoom & Aperture) — 曲名/湖面へ戻るボタンの下へ(top:50px だと見出しに隠れて読めない) -->
+            <div style="position: absolute; top: 118px; left: 44px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-zoom-label">ZOOM 1.0x</div>
+            <div style="position: absolute; top: 118px; right: 44px; color: ${this.themeColor}; font-family: monospace; font-size: 11px; font-weight: bold; text-shadow: 0 0 5px ${this.themeColor}; transition: all 0.1s;" id="shutter-aperture-label">F2.8 [OPEN]</div>
 
             <!-- 中央のAFフォーカスマーク(クロスヘア＋AUTO FOCUS表示)は廃止。
                  画面中央に貼り付くだけで実際のピント合わせには連動しておらず、
@@ -2466,6 +2485,7 @@ export class SongShutter extends BaseSong {
                     if (frame.userData.fadeOpacity <= 0) {
                         const photo = frame.userData.photoMesh;
                         this.scene.remove(photo);
+                        if (photo.geometry) photo.geometry.dispose();
                         if (photo.material) {
                             if (photo.material.map) photo.material.map.dispose();
                             photo.material.dispose();
@@ -2536,12 +2556,25 @@ export class SongShutter extends BaseSong {
                     photo.position.copy(targetFrame.position);
                     photo.quaternion.copy(targetFrame.quaternion);
                     photo.scale.set(1, 1, 1);
+                    // 21枚目以降は最古(フェード中)の枠を再利用する。旧写真を確実に破棄し、
+                    // フェード完了処理が新しい写真を消さないよう hasPhoto を立て直す。
+                    const oldPhoto = targetFrame.userData.photoMesh;
+                    if (oldPhoto && oldPhoto !== photo) {
+                        this.scene.remove(oldPhoto);
+                        if (oldPhoto.geometry) oldPhoto.geometry.dispose();
+                        if (oldPhoto.material) {
+                            if (oldPhoto.material.map) oldPhoto.material.map.dispose();
+                            oldPhoto.material.dispose();
+                        }
+                    }
+                    targetFrame.userData.hasPhoto = true;
                     targetFrame.userData.photoMesh = photo;
                     targetFrame.userData.photoSpawnTime = Date.now(); // 写真登録時刻を記録
                     targetFrame.userData.fadeOpacity = 1.0;
                     targetFrame.userData.isFadingOut = false;
                 } else {
                     this.scene.remove(photo);
+                    if (photo.geometry) photo.geometry.dispose();
                     if (photo.material) {
                         if (photo.material.map) photo.material.map.dispose();
                         photo.material.dispose();
@@ -3677,7 +3710,10 @@ export class SongShutter extends BaseSong {
         const candidates = availableFrames.slice(0, Math.min(3, availableFrames.length));
         const targetFrame = candidates.length > 0 
             ? candidates[Math.floor(Math.random() * candidates.length)]
-            : this.frames.find(f => !f.userData.dropSpeed);
+            // 空き枠が無い(21枚目以降)ときは最古の写真枠(=フェード中の枠)を再利用する
+            : this.frames.filter(f => !f.userData.dropSpeed)
+                .sort((a, b) => (b.userData.isFadingOut ? 1 : 0) - (a.userData.isFadingOut ? 1 : 0)
+                    || (a.userData.photoSpawnTime || 0) - (b.userData.photoSpawnTime || 0))[0];
 
         if (!targetFrame) return; // 浮遊フレームが万が一見つからない場合は処理をスキップ
 
@@ -4446,8 +4482,16 @@ export class SongShutter extends BaseSong {
             s.material.dispose();
         });
         this.activeSprites = [];
+        // 事前生成した歌詞テクスチャ(表示中でないものも含む)を全て解放
+        // ※表示中スプライトは同じテクスチャを共有している場合があるが、dispose の重複呼び出しは無害
+        if (this.lyricTexturesCache) {
+            this.lyricTexturesCache.forEach(d => { if (d && d.texture) d.texture.dispose(); });
+            this.lyricTexturesCache.clear();
+            this.lyricTexturesCache = null;
+        }
         
         this.transitioningPhotos.forEach(photo => {
+            if (photo.geometry) photo.geometry.dispose();
             if (photo.material) {
                 if (photo.material.map) photo.material.map.dispose();
                 photo.material.dispose();
@@ -4460,6 +4504,7 @@ export class SongShutter extends BaseSong {
             // フレームにはめ込まれた写真がある場合は先にクリーンアップ
             if (frame.userData.photoMesh) {
                 const photo = frame.userData.photoMesh;
+                if (photo.geometry) photo.geometry.dispose();
                 if (photo.material) {
                     if (photo.material.map) photo.material.map.dispose();
                     photo.material.dispose();

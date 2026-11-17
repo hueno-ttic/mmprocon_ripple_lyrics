@@ -222,11 +222,13 @@ export class SongKotaete extends BaseSong {
         this.scene.add(this.ground);
         // 遠くの丘
         const hillMat = new THREE.MeshBasicMaterial({ color: 0x6fb84f });
+        this._hills = [];
         for (let i = 0; i < 5; i++) {
             const r = 6 + Math.random() * 6;
             const hill = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), hillMat);
             hill.position.set(-40 + i * 20 + (Math.random() - 0.5) * 8, GROUND_Y - r * 0.55, -30 - Math.random() * 10);
             this.scene.add(hill);
+            this._hills.push(hill);
         }
     }
 
@@ -249,6 +251,7 @@ export class SongKotaete extends BaseSong {
             f.position.set(sx * 0.32, 0.5, 0.05);
             f.rotation.z = sx * 0.5;
             this.scene.add(f);
+            (this._sprouts || (this._sprouts = [])).push(f);
         }
     }
 
@@ -483,7 +486,13 @@ export class SongKotaete extends BaseSong {
                 settleSpringBones(vrm);
                 this.mikuLoaded = true;
             }, undefined,
-            (e) => console.error('[HIMAWARI] VRM load failed', e));
+            (e) => {
+                console.error('[HIMAWARI] VRM load failed', e);
+                // ミク不在だと perch への着地(=開花)が起きずフィナーレが出ないため、
+                // 既にゴール待ちならその場で咲かせる(以降は reachGoal 側で直接咲かせる)。
+                this._mikuLoadFailed = true;
+                if (this.isActive && this.goalPending && !this.goalReached) this._onReachBloom();
+            });
     }
 
     setupStandPose(vrm) {
@@ -893,6 +902,8 @@ export class SongKotaete extends BaseSong {
                 // 上限は“生成を止める”のではなく“通過済みの葉を下から回収して席を空ける”で守る
                 // (生成を止めると、登り切った後に新しい足場が生えず操作不能になるため)。
                 if (this.leaves.length >= this._leafCap) this._recycleLeaves(true);
+                // 回収できる(通過済みの)葉が無い=ミクより上に足場は十分あるので、この連打分は打ち切る
+                if (this.leaves.length >= this._leafCap) break;
                 const side = (i === 0) ? (p.x >= 0 ? 1 : -1) : (Math.random() < 0.5 ? -1 : 1);
                 const yy = baseY + i * LEAF_SPACING * (0.7 + Math.random() * 0.4) + (Math.random() - 0.5) * 0.4;
                 // 量産する足場はラベル無し(歌詞は雲側)。大量でも軽い。
@@ -1259,6 +1270,8 @@ export class SongKotaete extends BaseSong {
         this.goalLeaf.group.position.x = 0; this.goalLeaf.x = 0;
         this._buildBloom(this.goalLeaf.group, topY);
         this.stemTopTarget = topY + 0.5;
+        // VRM が読めなかった回は登攀で perch に着けないので、すぐ開花させる
+        if (this._mikuLoadFailed) this._onReachBloom();
     }
 
     _buildBloom(parent, y) {
@@ -1544,8 +1557,27 @@ export class SongKotaete extends BaseSong {
             if (m.material) (Array.isArray(m.material) ? m.material : [m.material]).forEach(mm => mm.dispose && mm.dispose());
         });
 
+        // 遠景の丘(共有マテリアル)と芽の双葉。共有の葉ジオメトリ/テクスチャは上で破棄済み。
+        if (this._hills) {
+            this._hills.forEach(h => { this.scene.remove(h); h.geometry.dispose(); });
+            if (this._hills[0]) this._hills[0].material.dispose();
+            this._hills = null;
+        }
+        if (this._sprouts) {
+            this._sprouts.forEach(f => {
+                this.scene.remove(f);
+                f.traverse(o => {
+                    if (o.geometry && o.geometry !== this._leafGeo && o.geometry !== this._petalGeo) o.geometry.dispose();
+                    if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m.dispose && m.dispose());
+                });
+            });
+            this._sprouts = null;
+        }
+
         if (this.renderer) {
             this.renderer.dispose();
+            // 曲を出入りするたびに WebGL コンテキストが GC 待ちで溜まらないよう即解放(他曲と同じ)
+            if (this.renderer.forceContextLoss) this.renderer.forceContextLoss();
             if (this.renderer.domElement && this.renderer.domElement.parentNode) {
                 this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
             }

@@ -62,7 +62,12 @@ class ScreenFade {
     /** Cover → run swapFn (swap screens behind the curtain) → reveal. */
     async cover(swapFn, { out = 500, in: inMs = 600, hold = 0 } = {}) {
         await this.fadeOut(out);
-        if (swapFn) await swapFn();
+        // 差し替え処理が例外を投げても幕は必ず上げる(黒幕のまま操作不能にしない)
+        try {
+            if (swapFn) await swapFn();
+        } catch (e) {
+            console.error('[ScreenFade] swap failed:', e);
+        }
         if (hold) await new Promise(r => setTimeout(r, hold));
         await this.fadeIn(inMs);
     }

@@ -520,6 +520,11 @@ export class BaseSong {
         }
     }
 
+    // 自然終了(songEnd)時にクリア済みとして登録してよいか。勝敗のある曲が上書きする。
+    shouldMarkComplete() {
+        return true;
+    }
+
     /**
      * 曲のプレイ成果を登録する。曲終了オーバーレイ(main.js)に
      * 曲固有のサマリーとして表示される。何度呼んでも最新値で上書き。

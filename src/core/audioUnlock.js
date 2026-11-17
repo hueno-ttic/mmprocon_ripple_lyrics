@@ -12,7 +12,9 @@ export function unlockAudio() {
         if (AC && !sharedCtx) sharedCtx = new AC();
         if (sharedCtx && sharedCtx.state === 'suspended') {
             const p = sharedCtx.resume();
-            if (p && p.catch) p.catch(() => { /* ジェスチャ外などで失敗しても無害 */ });
+            // 解錠できたら止めておく(音を出さない文脈を鳴らしっぱなしにするとノイズフロアが残る。
+            // sfx/bgm が鳴っていない間 suspend しているのと同じ理由)
+            if (p && p.then) p.then(() => { sharedCtx.suspend().catch(() => {}); }, () => { /* ジェスチャ外などで失敗しても無害 */ });
         }
         const ctx = playerManager.player && playerManager.player.audioContext;
         if (ctx && ctx.state === 'suspended') {
