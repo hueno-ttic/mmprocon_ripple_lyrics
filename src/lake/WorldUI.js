@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { eventBus } from '../core/eventBus.js';
-import { NORMAL_SONGS, getSelectableSongs } from '../config/songs.js';
+import { SONGS, NORMAL_SONGS, getSelectableSongs } from '../config/songs.js';
 import { PHASES } from '../config/constants.js';
 import { appState } from '../core/appState.js';
 import { PHASE_CLASSES } from './phases/index.js';
@@ -53,7 +53,10 @@ export class WorldUI {
 
         // 選曲画面に並べる曲。通常曲5曲は常時表示し、シークレット曲(こたえて)は
         // 通常曲を全クリアした後にのみ末尾へ加わる。表示数が変わったら show() で作り直す。
-        this.songs = getSelectableSongs(appState.completedSongs);
+        // TextAlive ホスト上で開かれた場合は、ホストが選んだ曲だけを始められる(setHostSong)。
+        this.hostMode = false;
+        this.hostSongId = null;
+        this.songs = this._computeSongs();
         this.selectedIndex = 0;
         this.currentPhase = null;
         // 全曲解放後は、左上の背景セレクタで過去フェーズ(晴れ〜湖)の背景を自由に選べる。
@@ -139,6 +142,20 @@ export class WorldUI {
         .world-selection-start {
             position: relative;
             overflow: hidden;
+        }
+        .world-selection-start:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        /* TextAlive ホスト上で、ホストの選曲欄と違う曲を選んでいるときの案内 */
+        .world-host-note {
+            margin-top: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+            color: rgba(255,255,255,0.85);
+            text-align: center;
         }
         .world-selection-start:hover,
         .world-selection-start:focus-visible {
@@ -354,6 +371,7 @@ export class WorldUI {
                 <button class="world-nav-btn world-nav-next" aria-label="次の曲">&#9654;</button>
             </div>
             <button class="world-selection-start">この曲をはじめる&nbsp;▶</button>
+            <div class="world-host-note" hidden></div>
         `;
         this.container.appendChild(this.selectionPanel);
 
@@ -415,8 +433,20 @@ export class WorldUI {
             this.thumbCard.style.setProperty('--selection-color', song.color);
         }
 
-        // Draw the eye to the start button right after a new song is focused
+        // TextAlive ホスト上では、ホストの選曲欄で選ばれている曲だけを始められる
         const startBtn = this.selectionPanel.querySelector('.world-selection-start');
+        const note = this.selectionPanel.querySelector('.world-host-note');
+        const playable = this._isPlayableInHost(song);
+        startBtn.disabled = !playable;
+        if (note) {
+            note.hidden = playable;
+            note.textContent = !this.hostSongId
+                ? 'このアプリは課題6曲専用です。下の選曲欄から6曲のいずれかを選んでください'
+                : 'この曲を遊ぶには、下の選曲欄でこの曲を選んでください';
+        }
+        if (!playable) return;
+
+        // Draw the eye to the start button right after a new song is focused
         startBtn.classList.remove('world-selection-start--attention');
         // Force reflow so the animation can restart
         void startBtn.offsetWidth;
@@ -636,6 +666,7 @@ export class WorldUI {
 
     selectSong(song, index) {
         if (this.isTransitioning) return;
+        if (!this._isPlayableInHost(song)) return;
         this.isTransitioning = true;
 
         // 決定音は押下フィードバックなので、フェードを待たずこの瞬間に鳴らす。
@@ -709,11 +740,38 @@ export class WorldUI {
         this._maybeShowEnding();
     }
 
+    // 選曲画面に並べる曲。ホストがシークレット曲(こたえて)を選んでいる場合は、未解放でも
+    // その場だけ並べる(解放状態は保存しない)。
+    _computeSongs() {
+        const list = getSelectableSongs(appState.completedSongs);
+        if (this.hostSongId && !list.some(s => s.id === this.hostSongId)) {
+            const host = SONGS.find(s => s.id === this.hostSongId);
+            if (host) list.push(host);
+        }
+        return list;
+    }
+
+    _isPlayableInHost(song) {
+        return !this.hostMode || (!!song && song.id === this.hostSongId);
+    }
+
+    // TextAlive ホストの選曲(ta_song_url / 選曲欄の切替)を反映する。song は課題曲以外なら null。
+    setHostSong(song) {
+        this.hostMode = true;
+        this.hostSongId = song ? song.id : null;
+        if (this._refreshSongList() && this.currentPhase) {
+            this.currentPhase.createSongMarkers(this.songs);
+        }
+        const idx = song ? this.songs.findIndex(s => s.id === song.id) : -1;
+        if (idx >= 0) this._setSelected(idx);
+        else this._updateSelectionPanel();
+    }
+
     // 選曲リストを現在の解放状況に同期する。表示曲数が変わったらラベルを作り直し、
     // 選択位置を補正する(マーカーの再生成は呼び出し側 show() に委ねる)。
     // 表示曲数が変化したとき true を返す。
     _refreshSongList() {
-        const next = getSelectableSongs(appState.completedSongs);
+        const next = this._computeSongs();
         if (next.length === this.songs.length) return false;
 
         const hadSecret = this.songs.some(s => s.secret);
@@ -723,7 +781,8 @@ export class WorldUI {
 
         // 今まさにシークレット曲が加わったなら、湖に静かに告知する(一度だけ)。
         const hasSecret = this.songs.some(s => s.secret);
-        if (hasSecret && !hadSecret) this._maybeRevealSecret();
+        // (TextAlive ホストの選曲で一時的に並んだだけの場合は告知しない)
+        if (hasSecret && !hadSecret && appState.areAllSongsComplete()) this._maybeRevealSecret();
 
         return true;
     }
