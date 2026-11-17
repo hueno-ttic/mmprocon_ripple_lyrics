@@ -19,6 +19,20 @@
 
 ---
 
+## 📅 2026-11-18: [素材] アプリのサムネイル画像を外部参照用に配置
+
+### 変更内容
+* オーナー撮影のシャッターチャンス画面のスクリーンショット（2000×1100）を `public/assets/promo/` に配置（`app-thumbnail.webp` と、WebP 非対応先向けに変換した `app-thumbnail.jpg`）。
+* GitHub Pages から `https://hueno-ttic.github.io/mmprocon_ripple_lyrics/assets/promo/app-thumbnail.webp`（.jpg）で参照できる。アプリのコードからは参照しない。
+
+### 影響範囲
+* 配信物に約0.6MB追加のみ。アプリの動作は変更なし。
+
+### 確認結果
+* `npm run build` 成功、デプロイ後に公開URLで画像が取得できることを確認。
+
+---
+
 ## 📅 2026-11-18: [TextAlive連携] TextAlive ホスト上での再生に対応
 
 ### 変更内容
