@@ -202,6 +202,7 @@ class Application {
             // so the 3D scene cross-dissolves in instead of popping.
             screenFade.cover(() => {
                 this.lakeUI = new WorldUI(this.sceneContainer);
+                if (playerManager.managed) this.lakeUI.setHostSong(playerManager.hostSong(SONGS));
                 if (uiContainer) uiContainer.style.pointerEvents = 'none'; // Keep none so clicks pass through to canvas
                 this.lakeUI.container.style.pointerEvents = 'auto'; // allow canvas interaction
             }, { out: 500, in: 800 });
@@ -331,6 +332,17 @@ class Application {
             if (!this._loadTimeoutShown) return;
             this._loadTimeoutShown = false;
             this.errorScreen.hide();
+        });
+
+        // TextAlive ホスト上で再生曲が決まった/切り替わった。湖の選曲をその曲に合わせ、
+        // 別の曲のシーンを開いていたら湖へ戻す(演出と流れる曲が食い違わないように)。
+        eventBus.on('hostSongChange', () => {
+            const host = playerManager.hostSong(SONGS);
+            if (this.lakeUI) this.lakeUI.setHostSong(host);
+            const current = appState.currentSongId;
+            if (current !== null && (!host || host.id !== current)) {
+                eventBus.emit('backToLake', { markComplete: false });
+            }
         });
 
         eventBus.on('loadSong', (song) => {

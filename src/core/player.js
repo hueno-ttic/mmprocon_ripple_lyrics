@@ -9,6 +9,9 @@ class PlayerManager {
         this.player = null;
         this.isTimerReady = false;
         this.managed = false; // Set to true if running in TextAlive host
+        // TextAlive ホスト(TextAlive 本サイト / App Customizer)上では、再生する曲をホストが決める。
+        // その曲URL(ta_song_url / 選曲欄での切替)を保持し、アプリ側の選曲をそれに合わせる。
+        this.hostSongUrl = null;
         this._loadTimeout = null;
         this._userStop = false;    // true when stop() is called explicitly by user action
         this._songEndEmitted = false; // guard against double-emit from onEnd + onStop
@@ -28,6 +31,12 @@ class PlayerManager {
     // URL表記ゆれ(プロトコル/末尾スラッシュ/大文字小文字)を吸収して比較する
     _normSongUrl(url) {
         return String(url || '').trim().replace(/^[a-z]+:\/\//i, '').replace(/\/+$/, '').toLowerCase();
+    }
+
+    // ホストが選んでいる曲に対応するアプリ内の曲設定(課題6曲以外なら null)
+    hostSong(songs) {
+        if (!this.hostSongUrl) return null;
+        return songs.find(s => this._sameSong(s.songUrl, this.hostSongUrl)) || null;
     }
 
     // permalink 側が日付サフィックスを持たない等の表記差を許すため、前方一致でも同一とみなす
@@ -61,8 +70,18 @@ class PlayerManager {
             onAppReady: (app) => {
                 if (app.managed) {
                     this.managed = true;
+                    this.hostSongUrl = app.songUrl || null;
+                    eventBus.emit('hostSongChange', this.hostSongUrl);
                 }
                 appState.setLoading(false);
+            },
+
+            // ホストの選曲欄で曲が切り替わった。新しい曲の onTimerReady までは準備未完了。
+            onAppMediaChange: (mediaUrl) => {
+                if (!this.managed) return;
+                this.hostSongUrl = mediaUrl || null;
+                this.isTimerReady = false;
+                eventBus.emit('hostSongChange', this.hostSongUrl);
             },
 
             onVideoReady: () => {
@@ -204,7 +223,8 @@ class PlayerManager {
     }
 
     loadSong(song) {
-        this.isTimerReady = false;
+        // ホスト管理下では曲の読込はホストが行う(ここでは読み直さない)ので、準備状態は保持する
+        if (!this.managed) this.isTimerReady = false;
         appState.currentTime = 0; // 前曲の再生位置を持ち越すと、新曲の pause/stop を曲末と誤判定する
         this._userStop = false;
         this._songEndEmitted = false;
